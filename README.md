@@ -2,6 +2,8 @@
 
 # HydraSRT – An Open Source Alternative to Haivision SRT Gateway
 
+> ⚠️ **Pre-Alpha Status**: This project is in very early development stage. Features may be incomplete and breaking changes are expected.
+
 - [Overview](#overview)
 - [Motivation](#motivation)
 - [Architecture](#architecture)
