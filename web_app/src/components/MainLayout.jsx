@@ -168,11 +168,11 @@ const MainLayout = ({ children }) => {
       icon: <CompassOutlined />,
       label: 'Routes',
     },
-    {
-      key: ROUTES.SETTINGS,
-      icon: <SettingOutlined />,
-      label: 'Settings',
-    },
+    // {
+    //   key: ROUTES.SETTINGS,
+    //   icon: <SettingOutlined />,
+    //   label: 'Settings',
+    // },
     {
       key: ROUTES.SYSTEM_PIPELINES,
       icon: <CodeOutlined />,

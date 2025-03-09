@@ -40,10 +40,11 @@ clean:
 
 help:
 	@echo "Available targets:"
-	@echo "  make        - Build all targets"
-	@echo "  make clean  - Remove compiled files"
-	@echo "  make help   - Show this help message"
-	@echo "  make test   - Run tests"
+	@echo "  make              - Build all targets"
+	@echo "  make clean        - Remove compiled files"
+	@echo "  make help         - Show this help message"
+	@echo "  make test         - Run tests"
+	@echo "  make dummy_signal - Run dymmy_signal"
 
 test: $(TEST_EXEC)
 	./$(TEST_EXEC)

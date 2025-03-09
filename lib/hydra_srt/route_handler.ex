@@ -176,7 +176,7 @@ defmodule HydraSrt.RouteHandler do
     URI.to_string(%URI{
       scheme: "srt",
       host: localaddress,
-      port: String.to_integer(localport),
+      port: localport,
       query: URI.encode_query(query_params)
     })
   end

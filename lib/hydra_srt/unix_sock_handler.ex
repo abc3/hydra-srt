@@ -76,7 +76,7 @@ defmodule HydraSrt.UnixSockHandler do
 
   def handle_event(
         :info,
-        {:tcp, _port, "stats_json:" <> json},
+        {:tcp, _port, "{" <> _ = json},
         _,
         %{route_record: %{"exportStats" => true}} = data
       ) do
@@ -114,14 +114,14 @@ defmodule HydraSrt.UnixSockHandler do
       {"data", data}
     ]
 
-    Logger.error("ClientHandler: Undefined msg: #{inspect(msg, pretty: true)}")
+    Logger.error("SocketHandler: Undefined msg: #{inspect(msg, pretty: true)}")
 
     :keep_state_and_data
   end
 
   @impl true
   def terminate(reason, _state, _data) do
-    Logger.debug("ClientHandler: socket closed with reason #{inspect(reason)}")
+    Logger.debug("SocketHandler: socket closed with reason #{inspect(reason)}")
     :ok
   end
 

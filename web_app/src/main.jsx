@@ -132,13 +132,13 @@ const App = () => {
           </ProtectedRoute>
         } />
 
-        <Route path={ROUTES.SETTINGS} element={
+        {/* <Route path={ROUTES.SETTINGS} element={
           <ProtectedRoute>
             <MainLayout>
               <Settings />
             </MainLayout>
           </ProtectedRoute>
-        } />
+        } /> */}
 
         <Route path={ROUTES.SYSTEM_PIPELINES} element={
           <ProtectedRoute>
