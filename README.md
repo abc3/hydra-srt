@@ -13,7 +13,7 @@
 
 ## Overview
 
-![HydraSRT Overview](https://github.com/user-attachments/assets/8230f902-b037-424f-a337-a3828dac6a3c)
+https://github.com/user-attachments/assets/8230f902-b037-424f-a337-a3828dac6a3c
 
 HydraSRT is an open-source, high-performance alternative to the **Haivision SRT Gateway**. It is designed to provide a scalable and flexible solution for **Secure Reliable Transport (SRT)** video routing, with support for multiple streaming protocols.
 
