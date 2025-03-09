@@ -1,18 +1,25 @@
-# HydraSrt
+![HydraSRT](/web_app/public/logo.webp)
 
-To start your Phoenix server:
+# HydraSRT – An Open Source Alternative to Haivision SRT Gateway
 
-  * Run `mix setup` to install and setup dependencies
-  * Start Phoenix endpoint with `mix phx.server` or inside IEx with `iex -S mix phx.server`
+- [Overview](#overview)
+- [Motivation](#motivation)
+- [Architecture](#architecture)
+- [Docs](#docs)
+- [Features](#features)
+- [Inspiration](#inspiration)
 
-Now you can visit [`localhost:4000`](http://localhost:4000) from your browser.
+## Overview
 
-Ready to run in production? Please [check our deployment guides](https://hexdocs.pm/phoenix/deployment.html).
+## Motivation
 
-## Learn more
+## Architecture
 
-  * Official website: https://www.phoenixframework.org/
-  * Guides: https://hexdocs.pm/phoenix/overview.html
-  * Docs: https://hexdocs.pm/phoenix
-  * Forum: https://elixirforum.com/c/phoenix-forum
-  * Source: https://github.com/phoenixframework/phoenix
+## Docs
+
+## Features
+
+## Inspiration
+
+- [Secure Reliable Transport](https://en.wikipedia.org/wiki/Secure_Reliable_Transport)
+- [Haivision SRT Gateway](https://www.haivision.com/products/srt-gateway/)
