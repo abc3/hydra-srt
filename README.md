@@ -1,4 +1,4 @@
-![HydraSRT](/web_app/public/logo.webp)
+<img src="/web_app/public/logo.webp" alt="HydraSRT" width="400"/>
 
 # HydraSRT – An Open Source Alternative to Haivision SRT Gateway
 
