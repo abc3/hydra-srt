@@ -42,6 +42,15 @@ defmodule HydraSrt.MonitoringTest do
     end
   end
 
+  test "OsMon swap_usage returns valid percentage or nil" do
+    swap_usage = OsMon.swap_usage()
+    assert is_float(swap_usage) or is_nil(swap_usage)
+
+    if is_float(swap_usage) do
+      assert swap_usage >= 0 and swap_usage <= 100
+    end
+  end
+
   test "ProcessMonitor lists pipeline processes" do
     processes = ProcessMonitor.list_pipeline_processes()
     assert is_list(processes)
@@ -84,6 +93,24 @@ defmodule HydraSrt.MonitoringTest do
     end
   end
 
+  test "ProcessMonitor handles different operating systems" do
+    case :os.type() do
+      {:unix, :darwin} ->
+        assert is_list(ProcessMonitor.list_pipeline_processes())
+        assert is_list(ProcessMonitor.list_pipeline_processes_detailed())
+
+      {:unix, :linux} ->
+        assert is_list(ProcessMonitor.list_pipeline_processes())
+        assert is_list(ProcessMonitor.list_pipeline_processes_detailed())
+
+      _ ->
+        assert {:error, "Unsupported operating system"} = ProcessMonitor.list_pipeline_processes()
+
+        assert {:error, "Unsupported operating system"} =
+                 ProcessMonitor.list_pipeline_processes_detailed()
+    end
+  end
+
   test "SignalHandler initializes with empty state" do
     assert {:ok, %{}} = SignalHandler.init([])
   end
@@ -94,6 +121,16 @@ defmodule HydraSrt.MonitoringTest do
     assert {:ok, %{}} = SignalHandler.handle_event(signal, state)
   end
 
+  test "SignalHandler handles multiple signal types" do
+    signals = [:sigterm, :sigint, :sighup, :sigquit]
+    state = %{}
+
+    for signal_type <- signals do
+      signal = {:signal, signal_type}
+      assert {:ok, %{}} = SignalHandler.handle_event(signal, state)
+    end
+  end
+
   test "ErlSysMon initializes correctly" do
     assert {:ok, []} = ErlSysMon.init([])
   end
@@ -102,5 +139,20 @@ defmodule HydraSrt.MonitoringTest do
     msg = {:monitor, :test_pid, :test_event}
     state = []
     assert {:noreply, []} = ErlSysMon.handle_info(msg, state)
+  end
+
+  test "ErlSysMon handles various monitor messages" do
+    messages = [
+      {:monitor, :test_pid, :busy_port},
+      {:monitor, :test_pid, :busy_dist_port},
+      {:monitor, :test_pid, {:long_gc, 500}},
+      {:monitor, :test_pid, {:long_schedule, 200}}
+    ]
+
+    state = []
+
+    for msg <- messages do
+      assert {:noreply, []} = ErlSysMon.handle_info(msg, state)
+    end
   end
 end
