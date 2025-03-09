@@ -10,6 +10,7 @@
 - [Docs](#docs)
 - [Features](#features)
 - [Inspiration](#inspiration)
+- [Contact](#contact)
 
 ## Overview
 
@@ -101,3 +102,7 @@ cd web_app && yarn dev
 
 - [Secure Reliable Transport](https://en.wikipedia.org/wiki/Secure_Reliable_Transport)
 - [Haivision SRT Gateway](https://www.haivision.com/products/srt-gateway/)
+
+## Contact
+
+For support or inquiries, please contact me at [hydrasrt@abc3.dev](mailto:hydrasrt@abc3.dev).
