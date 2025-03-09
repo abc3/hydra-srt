@@ -162,7 +162,7 @@ const Login = () => {
           
           <div style={styles.footer}>
             <Text type="secondary">
-              Don't have an account? <Link>Contact administrator</Link>
+              Don't have an account? Contact administrator
             </Text>
           </div>
         </Form>

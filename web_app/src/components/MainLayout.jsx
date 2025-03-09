@@ -236,8 +236,8 @@ const MainLayout = ({ children }) => {
             }}
             onClick={() => navigate('/')}
           >
-            <span style={{ marginRight: '8px', color: '#1677ff' }}>◼</span>
-            {!collapsed && 'HYDRA'}
+            <img src="/logo2.webp" alt="HydraSRT Logo" style={{ width: '20px', height: '20px', marginRight: '8px' }} />
+            {!collapsed && 'HydraSRT'}
           </div>
           {!screens.xs && (
             <Button
