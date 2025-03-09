@@ -45,8 +45,9 @@ Coming soon...
 ### **3. User Interface Layer (Vite + React + Ant Design)**
 
 - **Communicates with the backend via REST API** for real-time control.
-- **Displays live stream statistics, logs, and route management tools**.
-- **Supports dynamic updates** for seamless operation.
+- **Provides a dashboard and route management tools** for users to interact with the system.
+- **Supports user authentication and session management** to ensure secure access.
+- **Displays route status and allows for route configuration** through a user-friendly interface.
 
 ## Docs
 
