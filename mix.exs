@@ -112,12 +112,22 @@ defmodule HydraSrt.MixProject do
   end
 
   defp copy_web_app(release) do
-    IO.puts("Copying web app to release...")
+    IO.puts("Building and copying web app to release...")
 
-    web_app_source = Path.join(["web_app", "dist"])
+    web_app_dir = "web_app"
+    IO.puts("Building web app with npm run build...")
+
+    {build_result, build_exit_code} = System.cmd("npm", ["run", "build"], cd: web_app_dir)
+    IO.puts(build_result)
+
+    if build_exit_code != 0 do
+      raise "Failed to build web app with npm run build"
+    end
+
+    web_app_source = Path.join([web_app_dir, "dist"])
 
     unless File.dir?(web_app_source) do
-      raise "Web app dist directory not found at #{web_app_source}. Make sure it exists before running this task."
+      raise "Web app dist directory not found at #{web_app_source} after build. Build may have failed."
     end
 
     app_dir = Path.join([release.path, "lib", "hydra_srt-#{release.version}"])
@@ -138,7 +148,7 @@ defmodule HydraSrt.MixProject do
       end
     end)
 
-    IO.puts("Web app copied successfully to #{web_app_dest}")
+    IO.puts("Web app built and copied successfully to #{web_app_dest}")
 
     release
   end
