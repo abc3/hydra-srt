@@ -9,8 +9,10 @@
 - [Architecture](#architecture)
 - [Docs](#docs)
 - [Features](#features)
-- [Development](#development)
 - [Deployment](#deployment)
+  - [Prerequisites](#prerequisites)
+- [Development](#development)
+- [Building for Production](#building-for-production)
 - [Inspiration](#inspiration)
 - [Contact](#contact)
 
@@ -82,24 +84,6 @@ Coming soon.
 
 [Missed something? Add a request!](https://github.com/abc3/hydra-srt/issues/new)
 
-## Development
-
-To run HydraSRT locally, you'll need to start both the Elixir backend and the web UI.
-
-### Backend
-
-```bash
-# Start the Elixir node
-make dev
-```
-
-### Frontend
-
-```bash
-# Start the web UI
-cd web_app && yarn dev
-```
-
 ## Deployment
 
 ### Prerequisites
@@ -138,7 +122,27 @@ Before deploying HydraSRT, ensure your system has the following dependencies ins
    ```
    This command should output the linking flags without errors. If you see errors, ensure all required packages are installed.
 
-### Building for Production
+## Development
+
+To run HydraSRT locally, you'll need to start both the Elixir backend and the web UI.
+
+### Backend
+
+```bash
+# Start the Elixir node
+make dev
+```
+
+### Frontend
+
+```bash
+# Start the web UI
+cd web_app && yarn dev
+```
+
+## Building for Production
+
+> ⚠️ **Pre-Alpha Warning**: As HydraSRT is in pre-alpha stage, production builds may have unexpected behaviors, bugs, or breaking changes. Use in production environments at your own risk and be prepared to troubleshoot issues.
 
 1. **Clone the repository**:
 
@@ -171,6 +175,8 @@ Before deploying HydraSRT, ensure your system has the following dependencies ins
    - Package everything into a self-contained release
 
 ### Running in Production
+
+> ⚠️ **Pre-Alpha Stability Notice**: During this early development phase, the interactive shell mode (`start_iex`) is strongly recommended as it allows you to monitor and debug issues in real-time. Expect frequent updates and potential breaking changes.
 
 1. **Start the application**:
 
