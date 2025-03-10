@@ -9,7 +9,8 @@ defmodule HydraSrt.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
-      deps: deps()
+      deps: deps(),
+      releases: releases()
     ]
   end
 
@@ -71,5 +72,74 @@ defmodule HydraSrt.MixProject do
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"]
     ]
+  end
+
+  defp releases do
+    [
+      hydra_srt: [
+        steps: [:assemble, &copy_c_app/1, &copy_web_app/1],
+        cookie: System.get_env("RELEASE_COOKIE", Base.url_encode64(:crypto.strong_rand_bytes(30)))
+      ]
+    ]
+  end
+
+  defp copy_c_app(release) do
+    IO.puts("Copying C application to release...")
+
+    {result, exit_code} = System.cmd("make", ["-C", "native"])
+    IO.puts(result)
+
+    if exit_code != 0 do
+      raise "Failed to compile C application"
+    end
+
+    source_path = Path.join(["native", "build", "hydra_srt_pipeline"])
+
+    unless File.exists?(source_path) do
+      raise "C application binary was not created at #{source_path}"
+    end
+
+    dest_dir = Path.join([release.path, "native", "build"])
+    File.mkdir_p!(dest_dir)
+
+    dest_path = Path.join(dest_dir, "hydra_srt_pipeline")
+    File.cp!(source_path, dest_path)
+    File.chmod!(dest_path, 0o755)
+
+    IO.puts("C application copied successfully to #{dest_path}")
+
+    release
+  end
+
+  defp copy_web_app(release) do
+    IO.puts("Copying web app to release...")
+
+    web_app_source = Path.join(["web_app", "dist"])
+
+    unless File.dir?(web_app_source) do
+      raise "Web app dist directory not found at #{web_app_source}. Make sure it exists before running this task."
+    end
+
+    app_dir = Path.join([release.path, "lib", "hydra_srt-#{release.version}"])
+    web_app_dest = Path.join(app_dir, "priv/static")
+
+    File.mkdir_p!(web_app_dest)
+
+    web_app_source
+    |> File.ls!()
+    |> Enum.each(fn file ->
+      source_file = Path.join(web_app_source, file)
+      dest_file = Path.join(web_app_dest, file)
+
+      if File.dir?(source_file) do
+        File.cp_r!(source_file, dest_file)
+      else
+        File.cp!(source_file, dest_file)
+      end
+    end)
+
+    IO.puts("Web app copied successfully to #{web_app_dest}")
+
+    release
   end
 end

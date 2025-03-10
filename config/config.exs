@@ -20,7 +20,8 @@ config :hydra_srt, HydraSrtWeb.Endpoint,
     layout: false
   ],
   pubsub_server: HydraSrt.PubSub,
-  live_view: [signing_salt: "+CT93K1p"]
+  live_view: [signing_salt: "+CT93K1p"],
+  server: true
 
 # Configures Elixir's Logger
 config :logger, :console,

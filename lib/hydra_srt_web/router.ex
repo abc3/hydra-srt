@@ -1,6 +1,10 @@
 defmodule HydraSrtWeb.Router do
   use HydraSrtWeb, :router
 
+  pipeline :browser do
+    plug(:accepts, ["html"])
+  end
+
   pipeline :api do
     plug :accepts, ["json"]
   end
@@ -37,6 +41,13 @@ defmodule HydraSrtWeb.Router do
 
     get "/nodes", NodeController, :index
     get "/nodes/:id", NodeController, :show
+  end
+
+  scope "/", HydraSrtWeb do
+    pipe_through(:browser)
+
+    get "/", PageController, :index
+    get "/*path", PageController, :index
   end
 
   defp check_auth(conn, _opts) do

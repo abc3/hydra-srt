@@ -23,7 +23,8 @@ defmodule HydraSrtWeb.Endpoint do
     at: "/",
     from: :hydra_srt,
     gzip: false,
-    only: HydraSrtWeb.static_paths()
+    only: HydraSrtWeb.static_paths(),
+    index: "index.html"
 
   # Code reloading can be explicitly enabled under the
   # :code_reloader configuration of your endpoint.
