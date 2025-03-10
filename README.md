@@ -92,9 +92,9 @@ Coming soon.
 
 Before deploying HydraSRT, ensure your system has the following dependencies installed:
 
-1. **Elixir** (version 1.14 or later)
-2. **Erlang/OTP** (compatible with your Elixir version)
-3. **Node.js** and npm (for building the web application)
+1. **Elixir** (version 1.17.1 or later)
+2. **Erlang/OTP** (version 27.0 or later)
+3. **Node.js** and npm (version 18.13.0 or later, for building the web ui)
 
    > **Recommended**: Use [asdf](https://asdf-vm.com/) for managing Elixir, Erlang, and Node.js versions.
    > The project includes a `.tool-versions` file with the following versions:
