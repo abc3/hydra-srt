@@ -230,6 +230,7 @@ Configure HydraSRT using the following environment variables:
 | `API_AUTH_PASSWORD`    | Password for API authentication         | (required)       |
 | `PORT`                 | HTTP port for the API server            | 4000             |
 | `RELEASE_COOKIE`       | Erlang distribution cookie              | (auto-generated) |
+| `DATABASE_DATA_DIR`    | Directory for Khepri database storage   | ./khepri#node()  |
 | `VICTORIAMETRICS_HOST` | Host for VictoriaMetrics metrics export | (optional)       |
 | `VICTORIAMETRICS_PORT` | Port for VictoriaMetrics metrics export | (optional)       |
 

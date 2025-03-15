@@ -12,7 +12,10 @@ defmodule HydraSrt.Application do
         {HydraSrt.SignalHandler, []}
       )
 
-    Logger.info("Starting database: #{inspect(:khepri.start())}")
+    khepri_data_dir = System.get_env("DATABASE_DATA_DIR", "#{File.cwd!()}/khepri##{node()}")
+    Logger.notice("Database directory: #{khepri_data_dir}")
+    Logger.notice("Starting database: #{inspect(:khepri.start(khepri_data_dir))}")
+
     :syn.add_node_to_scopes([:routes])
     runtime_schedulers = System.schedulers_online()
     Logger.info("Runtime schedulers: #{runtime_schedulers}")
