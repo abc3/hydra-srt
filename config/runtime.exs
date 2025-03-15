@@ -7,6 +7,16 @@ import Config
 # any compile-time configuration in here, as it won't be applied.
 # The block below contains prod specific runtime configuration.
 
+# Environment variables:
+# - PHX_SERVER: Set to true to enable the server
+# - API_AUTH_USERNAME: Username for API authentication
+# - API_AUTH_PASSWORD: Password for API authentication
+# - DATABASE_DATA_DIR: Directory for Khepri database storage
+# - VICTORIAMETRICS_HOST: Host for VictoriaMetrics metrics export
+# - VICTORIAMETRICS_PORT: Port for VictoriaMetrics metrics export
+# - PORT: HTTP port for the API server
+# - PHX_HOST: Host for the Phoenix endpoint
+
 # ## Using releases
 #
 # If you use `mix release`, you need to explicitly enable the server
