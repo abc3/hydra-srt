@@ -128,14 +128,33 @@ defmodule HydraSrt.Db do
     :khepri.delete(["routes", route_id, "destinations", id])
   end
 
-  @spec get_all_routes(binary) :: {:ok, list(map)} | {:error, any}
-  def get_all_routes(sort_by \\ "created_at") do
+  @spec get_all_routes(boolean, binary) :: {:ok, list(map)} | {:error, any}
+  def get_all_routes(with_destinations \\ false, sort_by \\ "created_at") do
     case :khepri.get_many("routes/*") do
       {:ok, routes} ->
         routes =
           routes
           |> Enum.map(fn {_path, route} -> route end)
           |> Enum.filter(&is_map/1)
+          |> Enum.map(fn route ->
+            if with_destinations do
+              route_id = route["id"]
+
+              destinations_list =
+                :khepri.get_many!("routes/#{route_id}/destinations/*")
+                |> Enum.reduce([], fn
+                  {["routes", _, "destinations", _dest_id], dest}, acc when is_map(dest) ->
+                    [dest | acc]
+
+                  _, acc ->
+                    acc
+                end)
+
+              Map.put(route, "destinations", destinations_list)
+            else
+              route
+            end
+          end)
           |> Enum.sort_by(fn route -> route[sort_by] end, DateTime)
           |> Enum.reverse()
 
@@ -149,6 +168,40 @@ defmodule HydraSrt.Db do
 
   def get_all_destinations(route_id) when is_binary(route_id) do
     :khepri.get_many("routes/#{route_id}/destinations/*")
+  end
+
+  @spec backup() :: {:ok, binary} | {:error, any}
+  def backup() do
+    case :khepri.get_many("**") do
+      {:ok, data} ->
+        binary_data = :erlang.term_to_binary(data)
+        {:ok, binary_data}
+
+      error ->
+        Logger.error("Failed to create backup: #{inspect(error)}")
+        {:error, error}
+    end
+  end
+
+  @spec restore_backup(binary) :: :ok | {:error, any}
+  def restore_backup(binary_data) when is_binary(binary_data) do
+    Logger.warning("Restoring backup")
+
+    try do
+      data = :erlang.binary_to_term(binary_data)
+
+      :khepri.delete_many("**")
+
+      Enum.each(data, fn {path, value} ->
+        :khepri.put(path, value)
+      end)
+
+      :ok
+    rescue
+      e ->
+        Logger.error("Failed to restore backup: #{inspect(e)}")
+        {:error, e}
+    end
   end
 
   defp now, do: DateTime.utc_now()
