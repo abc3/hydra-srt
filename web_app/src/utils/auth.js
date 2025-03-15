@@ -48,10 +48,16 @@ export const authHeader = () => {
 // Create an authenticated fetch function
 export const authFetch = async (url, options = {}) => {
   const headers = {
-    'Content-Type': 'application/json',
     ...authHeader(),
     ...options.headers,
   };
+
+  // Only set Content-Type to application/json if:
+  // 1. The body is not FormData
+  // 2. Content-Type is not already set in options.headers
+  if (!(options.body instanceof FormData) && !options.headers?.['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
 
   const config = {
     ...options,

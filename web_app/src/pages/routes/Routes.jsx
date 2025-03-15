@@ -199,13 +199,15 @@ const Routes = () => {
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
           <Title level={3} style={{ margin: 0, fontSize: '2rem', fontWeight: 600 }}>Routes</Title>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => navigate('/routes/new/edit')}
-          >
-            Add Route
-          </Button>
+          <Space>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => navigate('/routes/new/edit')}
+            >
+              Add Route
+            </Button>
+          </Space>
         </Space>
 
         <Card>

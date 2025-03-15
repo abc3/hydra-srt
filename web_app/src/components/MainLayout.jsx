@@ -168,11 +168,6 @@ const MainLayout = ({ children }) => {
       icon: <CompassOutlined />,
       label: 'Routes',
     },
-    // {
-    //   key: ROUTES.SETTINGS,
-    //   icon: <SettingOutlined />,
-    //   label: 'Settings',
-    // },
     {
       key: ROUTES.SYSTEM_PIPELINES,
       icon: <CodeOutlined />,
@@ -182,6 +177,11 @@ const MainLayout = ({ children }) => {
       key: ROUTES.SYSTEM_NODES,
       icon: <ApiOutlined />,
       label: 'Nodes',
+    },
+    {
+      key: ROUTES.SETTINGS,
+      icon: <SettingOutlined />,
+      label: 'Settings',
     },
   ];
 

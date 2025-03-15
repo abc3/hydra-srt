@@ -101,6 +101,76 @@ export const routesApi = {
   },
 };
 
+export const backupApi = {
+  export: async () => {
+    const response = await authFetch('/api/backup/export');
+    return response.json();
+  },
+  
+  getDownloadLink: async () => {
+    const response = await authFetch('/api/backup/create-download-link');
+    return response.json();
+  },
+  
+  getBackupDownloadLink: async () => {
+    const response = await authFetch('/api/backup/create-backup-download-link');
+    return response.json();
+  },
+  
+  download: async () => {
+    try {
+      const { download_link } = await backupApi.getDownloadLink();
+      
+      window.open(`${API_BASE_URL}${download_link}`, '_blank');
+      return true;
+    } catch (error) {
+      console.error('Error downloading backup:', error);
+      throw error;
+    }
+  },
+  
+  downloadBackup: async () => {
+    try {
+      const { download_link } = await backupApi.getBackupDownloadLink();
+      
+      window.open(`${API_BASE_URL}${download_link}`, '_blank');
+      return true;
+    } catch (error) {
+      console.error('Error downloading backup:', error);
+      throw error;
+    }
+  },
+  
+  restore: async (file) => {
+    try {
+      // Read the file as an ArrayBuffer
+      const arrayBuffer = await file.arrayBuffer();
+      
+      // Convert ArrayBuffer to Blob with the correct MIME type
+      const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
+      
+      console.log('Sending file as binary data with Content-Type: application/octet-stream');
+      const response = await authFetch('/api/restore', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+        },
+        body: blob,
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to restore backup');
+      }
+      
+      return response.json();
+    } catch (error) {
+      console.error('Error in restore API call:', error);
+      throw error;
+    }
+  },
+};
+
 // Destinations API
 export const destinationsApi = {
   // Get all destinations for a route

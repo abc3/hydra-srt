@@ -9,6 +9,11 @@ defmodule HydraSrtWeb.Router do
     plug :accepts, ["json"]
   end
 
+  pipeline :api_no_parse do
+    plug :accepts, ["*/*"]
+    plug :check_auth
+  end
+
   pipeline :auth do
     plug :check_auth
   end
@@ -35,12 +40,27 @@ defmodule HydraSrtWeb.Router do
     put "/routes/:route_id/destinations/:dest_id", DestinationController, :update
     delete "/routes/:route_id/destinations/:dest_id", DestinationController, :delete
 
+    get "/backup/export", BackupController, :export
+    get "/backup/create-download-link", BackupController, :create_download_link
+    get "/backup/create-backup-download-link", BackupController, :create_backup_download_link
+
     get "/system/pipelines", SystemController, :list_pipelines
     get "/system/pipelines/detailed", SystemController, :list_pipelines_detailed
     post "/system/pipelines/:pid/kill", SystemController, :kill_pipeline
 
     get "/nodes", NodeController, :index
     get "/nodes/:id", NodeController, :show
+  end
+
+  # TODO: improve this
+  scope "/api", HydraSrtWeb do
+    pipe_through [:api_no_parse]
+    post "/restore", BackupController, :restore
+  end
+
+  scope "/backup", HydraSrtWeb do
+    get "/:session_id/download", BackupController, :download
+    get "/:session_id/download_backup", BackupController, :download_backup
   end
 
   scope "/", HydraSrtWeb do
