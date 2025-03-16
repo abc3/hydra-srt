@@ -122,9 +122,6 @@ RUN mkdir -p /app/khepri /app/backup && \
 
 # Copy the release from the builder stage
 COPY --from=builder /app/_build/prod/rel/hydra_srt ./
-# Copy the native binary from the builder stage to the correct location
-COPY --from=builder /app/native/build/hydra_srt_pipeline ./native/build/
-RUN chmod +x ./native/build/hydra_srt_pipeline
 
 COPY run.sh run.sh
 RUN chmod +x run.sh

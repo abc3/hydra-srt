@@ -17,9 +17,12 @@ defmodule HydraSrt.RouteHandler do
     Process.flag(:trap_exit, true)
     Logger.info("RouteHandler: init: #{inspect(args)}")
 
+    {:ok, route} = Db.get_route(args.id, true)
+
     data = %{
       id: args.id,
-      port: nil
+      port: nil,
+      route: route
     }
 
     {:ok, :start, data, {:next_event, :internal, :start}}
@@ -27,7 +30,7 @@ defmodule HydraSrt.RouteHandler do
 
   @impl true
   def handle_event(:internal, :start, _state, data) do
-    port = start_native_pipeline(data.id)
+    port = start_native_pipeline(data.route)
     Logger.info("RouteHandler: Started port: #{inspect(port)}")
 
     case send_initial_command(port, data.id) do
@@ -73,8 +76,9 @@ defmodule HydraSrt.RouteHandler do
     :ok
   end
 
-  defp start_native_pipeline(route_id, gst_debug \\ "3") do
-    cmd = "./native/build/hydra_srt_pipeline #{route_id}"
+  defp start_native_pipeline(route) do
+    binary_path = get_binary_path()
+    cmd = "#{binary_path} #{route["id"]}"
 
     opts = [
       :stderr_to_stdout,
@@ -85,15 +89,23 @@ defmodule HydraSrt.RouteHandler do
     ]
 
     opts =
-      if gst_debug != "0" do
-        opts ++ [env: [{~c"GST_DEBUG", ~c"#{gst_debug}"}]]
+      if is_binary(route["gstDebug"]) do
+        opts ++ [env: [{~c"GST_DEBUG", ~c"#{route["gstDebug"]}"}]]
       else
         opts
       end
 
-    Logger.debug("RouteHandler: start_native_pipeline: #{cmd} #{inspect(gst_debug)}")
+    Logger.info("RouteHandler: start_native_pipeline: #{cmd}: #{inspect(route["gstDebug"])}")
 
     Port.open({:spawn, cmd}, opts)
+  end
+
+  defp get_binary_path do
+    if System.get_env("MIX_ENV", "dev") == "dev" do
+      "./native/build/hydra_srt_pipeline"
+    else
+      "#{:code.priv_dir(:hydra_srt)}/native/build/hydra_srt_pipeline"
+    end
   end
 
   defp send_initial_command(port, route_id) do

@@ -99,14 +99,15 @@ defmodule HydraSrt.MixProject do
       raise "C application binary was not created at #{source_path}"
     end
 
-    dest_dir = Path.join([release.path, "native", "build"])
-    File.mkdir_p!(dest_dir)
+    app_dir = Path.join([release.path, "lib", "hydra_srt-#{release.version}"])
+    priv_dest_dir = Path.join(app_dir, "priv/native/build")
+    File.mkdir_p!(priv_dest_dir)
 
-    dest_path = Path.join(dest_dir, "hydra_srt_pipeline")
-    File.cp!(source_path, dest_path)
-    File.chmod!(dest_path, 0o755)
+    priv_dest_path = Path.join(priv_dest_dir, "hydra_srt_pipeline")
+    File.cp!(source_path, priv_dest_path)
+    File.chmod!(priv_dest_path, 0o755)
 
-    IO.puts("C application copied successfully to #{dest_path}")
+    IO.puts("C application copied to priv directory at #{priv_dest_path}")
 
     release
   end
