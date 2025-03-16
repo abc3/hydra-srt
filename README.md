@@ -263,4 +263,54 @@ Configure HydraSRT using the following environment variables:
 
 ## Contact
 
-For support or inquiries, please contact me at [hydrasrt@abc3.dev](mailto:hydrasrt@abc3.dev).
+For support or inquiries, create an issue here: [https://github.com/abc3/hydra-srt/issues](https://github.com/abc3/hydra-srt/issues).
+
+## Running with Docker
+
+To run HydraSRT using Docker and Docker Compose, follow these steps:
+
+1. **Build the Docker image**:
+
+   ```bash
+   docker-compose build
+   ```
+
+2. **Start the application**:
+
+   ```bash
+   docker-compose up
+   ```
+
+   This will start the application and all its dependencies in Docker containers.
+
+3. **Access the Web UI**:
+
+   After starting the application, the web interface will be available at:
+
+   ```
+   http://127.0.0.1:4000
+   ```
+
+   Use the credentials specified in `API_AUTH_USERNAME` and `API_AUTH_PASSWORD` to log in.
+
+4. **Stop the application**:
+
+   To stop the application and remove the containers, run:
+
+   ```bash
+   docker-compose down
+   ```
+
+### Network Mode: Host
+
+When using Docker Compose, setting `network_mode: "host"` allows the container to share the host's networking namespace. This means:
+
+- The container will use the host's IP address and network interfaces.
+- Ports exposed by the container will be accessible on the host's network interfaces.
+- This mode is useful for applications that require high network performance or need to access services running on the host.
+
+**Implications:**
+
+- **Performance**: Network performance can be improved since there is no network translation between the host and the container.
+- **Security**: The container has access to the host's network, which can pose security risks if not managed properly.
+- **Port Conflicts**: Since the container shares the host's network, ensure that there are no port conflicts with other services running on the host.
