@@ -256,15 +256,6 @@ Configure HydraSRT using the following environment variables:
    - Example: `VICTORIAMETRICS_HOST=localhost VICTORIAMETRICS_PORT=8428 API_AUTH_USERNAME=admin API_AUTH_PASSWORD=password _build/prod/rel/hydra_srt/bin/hydra_srt start_iex`
    - You can visualize these metrics using Grafana or any other compatible dashboard tool
 
-## Inspiration
-
-- [Secure Reliable Transport](https://en.wikipedia.org/wiki/Secure_Reliable_Transport)
-- [Haivision SRT Gateway](https://www.haivision.com/products/srt-gateway/)
-
-## Contact
-
-For support or inquiries, create an issue here: [https://github.com/abc3/hydra-srt/issues](https://github.com/abc3/hydra-srt/issues).
-
 ## Running with Docker
 
 To run HydraSRT using Docker and Docker Compose, follow these steps:
@@ -314,3 +305,12 @@ When using Docker Compose, setting `network_mode: "host"` allows the container t
 - **Performance**: Network performance can be improved since there is no network translation between the host and the container.
 - **Security**: The container has access to the host's network, which can pose security risks if not managed properly.
 - **Port Conflicts**: Since the container shares the host's network, ensure that there are no port conflicts with other services running on the host.
+
+## Inspiration
+
+- [Secure Reliable Transport](https://en.wikipedia.org/wiki/Secure_Reliable_Transport)
+- [Haivision SRT Gateway](https://www.haivision.com/products/srt-gateway/)
+
+## Contact
+
+For support or inquiries, create an issue here: [https://github.com/abc3/hydra-srt/issues](https://github.com/abc3/hydra-srt/issues).
