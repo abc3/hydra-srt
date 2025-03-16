@@ -123,20 +123,20 @@ const Routes = () => {
     {
       title: 'Authentication',
       key: 'authentication',
-      filters: [
-        { text: 'Enabled', value: true },
-        { text: 'Disabled', value: false }
-      ],
-      onFilter: (value, record) => {
-        if (record.schema !== 'SRT') return !value;
-        return (record.schema_options && record.schema_options.authentication) === value;
-      },
+      // filters: [
+      //   { text: 'Enabled', value: true },
+      //   { text: 'Disabled', value: false }
+      // ],
+      // onFilter: (value, record) => {
+      //   if (record.schema !== 'SRT') return !value;
+      //   return (record.schema_options && record.schema_options.authentication) === value;
+      // },
       render: (_, record) => {
         if (record.schema !== 'SRT') return <Tag color="default">N/A</Tag>;
         return record.schema_options && record.schema_options.authentication ? (
-          <Tag color="green">Enabled</Tag>
+          <Tag color="green">yes</Tag>
         ) : (
-          <Tag color="red">Disabled</Tag>
+          <Tag color="gray">no</Tag>
         );
       },
     },
@@ -147,7 +147,7 @@ const Routes = () => {
       render: (text, record) => {
         switch (record.schema) {
           case 'SRT':
-            return (`${record.schema}:${record.srtMode}:${record.port}`);
+            return (`${record.schema}:${record.srtMode}:${record?.schema_options?.localport}`);
           default:
             return ('Unknown');
         }

@@ -79,7 +79,12 @@ export const routesApi = {
     const response = await authFetch(`/api/routes/${id}`, {
       method: 'DELETE',
     });
-    return response.json();
+    // Check if response has content before parsing as JSON
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      return response.json();
+    }
+    return { success: true };
   },
 
   // Start a route
@@ -208,6 +213,11 @@ export const destinationsApi = {
     const response = await authFetch(`/api/routes/${routeId}/destinations/${destId}`, {
       method: 'DELETE',
     });
-    return response.json();
+    // Check if response has content before parsing as JSON
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      return response.json();
+    }
+    return { success: true };
   },
 }; 
