@@ -1,25 +1,25 @@
-import React, { useEffect, useState } from 'react';
-import { 
-  Card, 
-  Typography, 
-  Space, 
-  Tag, 
-  Row, 
-  Col, 
-  Button, 
-  Table, 
-  Modal, 
+import { useEffect, useState } from 'react';
+import {
+  Card,
+  Typography,
+  Space,
+  Tag,
+  Row,
+  Col,
+  Button,
+  Table,
+  Modal,
   Descriptions,
   Collapse,
   message,
   Input
 } from 'antd';
-import { 
-  PlayCircleOutlined, 
-  PauseCircleOutlined, 
-  EditOutlined, 
-  DeleteOutlined, 
-  PlusOutlined, 
+import {
+  PlayCircleOutlined,
+  PauseCircleOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  PlusOutlined,
   ExclamationCircleFilled,
   HomeOutlined,
   LoadingOutlined,
@@ -68,6 +68,7 @@ const RouteItem = () => {
     try {
       const result = await routesApi.getById(id);
       setRouteData(result.data);
+      console.log("Route data:", result.data);
     } catch (error) {
       messageApi.error(`Failed to fetch route data: ${error.message}`);
       console.error('Error:', error);
@@ -88,23 +89,23 @@ const RouteItem = () => {
         buttonType: 'default'
       };
     }
-    
+
     // Check if status field exists and use it as the primary indicator
     if (routeData.status) {
       const isStarted = routeData.status.toLowerCase() === 'started';
-      
+
       if (isStarted) {
-        return { 
-          color: 'success', 
-          buttonColor: 'default', 
+        return {
+          color: 'success',
+          buttonColor: 'default',
           buttonIcon: <PauseCircleOutlined />,
           buttonText: 'Stop',
           buttonType: 'default'
         };
       } else {
-        return { 
-          color: 'error', 
-          buttonColor: 'primary', 
+        return {
+          color: 'error',
+          buttonColor: 'primary',
           buttonIcon: <PlayCircleOutlined />,
           buttonText: 'Start',
           buttonType: 'primary'
@@ -112,9 +113,9 @@ const RouteItem = () => {
       }
     } else {
       // Fallback if status field is not available (should not happen)
-      return { 
-        color: 'warning', 
-        buttonColor: 'primary', 
+      return {
+        color: 'warning',
+        buttonColor: 'primary',
         buttonIcon: <PlayCircleOutlined />,
         buttonText: 'Start',
         buttonType: 'primary'
@@ -131,10 +132,12 @@ const RouteItem = () => {
       sorter: (a, b) => a.name.localeCompare(b.name),
       render: (text, record) => (
         <Space>
-          {text}
-          <Tag color={record.enabled ? 'green' : 'red'}>
+          <a href={`#/routes/${id}/destinations/${record.id}/edit`}>
+            {text}
+          </a>
+          {/* <Tag color={record.enabled ? 'green' : 'red'}>
             {record.enabled ? 'Active' : 'Inactive'}
-          </Tag>
+          </Tag> */}
         </Space>
       ),
     },
@@ -153,30 +156,40 @@ const RouteItem = () => {
         </Tag>
       ),
     },
+    // {
+    //   title: 'Authentication',
+    //   key: 'authentication',
+    //   filters: [
+    //     { text: 'Enabled', value: true },
+    //     { text: 'Disabled', value: false }
+    //   ],
+    //   onFilter: (value, record) => {
+    //     if (record.schema !== 'SRT') return !value;
+    //     return (record.schema_options && record.schema_options.authentication) === value;
+    //   },
+    //   render: (_, record) => {
+    //     if (record.schema !== 'SRT') return <Tag color="default">N/A</Tag>;
+    //     return record.schema_options && record.schema_options.authentication ? (
+    //       <Tag color="green">Enabled</Tag>
+    //     ) : (
+    //       <Tag color="red">Disabled</Tag>
+    //     );
+    //   },
+    // },
     {
-      title: 'Authentication',
-      key: 'authentication',
-      filters: [
-        { text: 'Enabled', value: true },
-        { text: 'Disabled', value: false }
-      ],
-      onFilter: (value, record) => {
-        if (record.schema !== 'SRT') return !value;
-        return (record.schema_options && record.schema_options.authentication) === value;
-      },
-      render: (_, record) => {
-        if (record.schema !== 'SRT') return <Tag color="default">N/A</Tag>;
-        return record.schema_options && record.schema_options.authentication ? (
-          <Tag color="green">Enabled</Tag>
-        ) : (
-          <Tag color="red">Disabled</Tag>
-        );
-      },
-    },
-    {
-      title: 'Host:Port',
+      title: 'Destination',
       key: 'host_port',
-      render: (_, record) => record.host ? `${record.host}:${record.port}` : `Port: ${record.port}`,
+      render: (_, record) => {
+        console.log(record);
+        switch (record.schema) {
+          case 'SRT':
+            return (`${record.schema_options?.localaddress}:${record.schema_options?.localport}:${record.schema_options?.mode}`)
+          case 'UDP':
+            return (`${record.schema_options?.host}:${record.schema_options?.port}`)
+          default:
+            return 'N/A'
+        }
+      },
       sorter: (a, b) => a.port - b.port,
     },
     {
@@ -202,16 +215,16 @@ const RouteItem = () => {
       key: 'actions',
       render: (_, record) => (
         <Space>
-          <Button 
-            type="link" 
+          <Button
+            type="link"
             icon={<EditOutlined />}
             aria-label={`Edit destination ${record.name}`}
             onClick={() => navigate(`/routes/${id}/destinations/${record.id}/edit`)}
           >
             Edit
           </Button>
-          <Button 
-            type="link" 
+          <Button
+            type="link"
             danger
             icon={<DeleteOutlined />}
             aria-label={`Delete destination ${record.name}`}
@@ -272,7 +285,7 @@ const RouteItem = () => {
       if (routeData.status && routeData.status.toLowerCase() === 'started') {
         // If the route is started, stop it
         result = await routesApi.stop(id);
-        
+
         // Only update if result has data
         if (result && result.data) {
           setRouteData(prev => ({
@@ -286,12 +299,12 @@ const RouteItem = () => {
             status: 'stopped'
           }));
         }
-        
+
         messageApi.success('Route stopped successfully');
       } else {
         // If the route is not started, start it
         result = await routesApi.start(id);
-        
+
         // Only update if result has data
         if (result && result.data) {
           setRouteData(prev => ({
@@ -305,14 +318,14 @@ const RouteItem = () => {
             status: 'started'
           }));
         }
-        
+
         messageApi.success('Route started successfully');
       }
     } catch (error) {
       // Handle specific error cases
       if (error.message && error.message.includes('already_started')) {
         messageApi.info('Route is already started');
-        
+
         // Update the UI to reflect that the route is started
         setRouteData(prev => ({
           ...prev,
@@ -320,7 +333,7 @@ const RouteItem = () => {
         }));
       } else if (error.message && error.message.includes('not_found')) {
         messageApi.info('Route process not found. It may have already been stopped.');
-        
+
         // Update the UI to reflect that the route is stopped
         setRouteData(prev => ({
           ...prev,
@@ -329,7 +342,7 @@ const RouteItem = () => {
       } else if (error.response && error.response.status === 422) {
         // Handle 422 Unprocessable Entity error
         messageApi.error('Invalid request. The server could not process the request.');
-        
+
         // Keep the current state
         console.error('422 Error:', error);
       } else {
@@ -368,17 +381,17 @@ const RouteItem = () => {
   };
 
   // Filter destinations
-  const filteredDestinations = routeData?.destinations.filter(dest => 
+  const filteredDestinations = routeData?.destinations.filter(dest =>
     dest.name.toLowerCase().includes(destinationFilter.toLowerCase()) ||
     (dest.host && dest.host.toLowerCase().includes(destinationFilter.toLowerCase()))
   ) || [];
 
   return (
-    <Space 
-      direction="vertical" 
-      size="large" 
-      style={{ 
-        width: '100%', 
+    <Space
+      direction="vertical"
+      size="large"
+      style={{
+        width: '100%',
         padding: '0 24px',
         '@media(maxWidth: 768px)': {
           padding: '0 12px'
@@ -419,8 +432,8 @@ const RouteItem = () => {
               >
                 {statusDetails.buttonText}
               </Button>
-              <Button 
-                danger 
+              <Button
+                danger
                 type="primary"
                 icon={<DeleteOutlined />}
                 onClick={handleRouteDelete}
@@ -439,89 +452,94 @@ const RouteItem = () => {
       </Card>
 
       {/* Source Details */}
-      <Card 
-        title="Source Configuration" 
+      <Card
+        title="Source Configuration"
         style={{ marginBottom: 24 }}
         extra={
-          <Button 
-            onClick={() => navigate(`/routes/${id}/edit`)} 
+          <Button
+            onClick={() => navigate(`/routes/${id}/edit`)}
             icon={<EditOutlined />}
           >
             Edit
           </Button>
         }
       >
-        <Descriptions 
-          column={2} 
-          bordered 
+        <Descriptions
+          column={2}
+          bordered
           styles={{ content: { textAlign: 'left' } }}
         >
-          <Descriptions.Item label="Schema">
+          <Descriptions.Item label="Source">
             <Tag color={routeData.schema === 'SRT' ? 'blue' : 'orange'}>
               {routeData.schema}
             </Tag>
+            {' '}
+            {routeData.schema === 'SRT' ? 
+              `${routeData.schema_options?.localaddress || 'N/A'}:${routeData.schema_options?.localport || 'N/A'}:${routeData.schema_options?.mode || 'N/A'}` :
+              routeData.schema === 'UDP' ?
+              `${routeData.schema_options?.address || 'N/A'}:${routeData.schema_options?.port || 'N/A'}` :
+              'N/A'
+            }
           </Descriptions.Item>
           <Descriptions.Item label="Node">{routeData.node}</Descriptions.Item>
-          <Descriptions.Item label="Port">{routeData.port}</Descriptions.Item>
-          <Descriptions.Item label="SRT Mode">{routeData.srtMode}</Descriptions.Item>
-          <Descriptions.Item label="Auto Reconnect">
-            {routeData["auto-reconnect"] ? 'Yes' : 'No'}
+          
+          {routeData.schema === 'SRT' && (
+            <>
+              <Descriptions.Item label="Latency">{routeData.schema_options?.latency ? `${routeData.schema_options.latency}ms` : 'Default (125ms)'}</Descriptions.Item>
+              <Descriptions.Item label="Auto Reconnect">
+                <Tag color={routeData.schema_options?.['auto-reconnect'] ? 'green' : 'red'}>
+                  {routeData.schema_options?.['auto-reconnect'] ? 'Enabled' : 'Disabled'}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="Keep Listening">
+                <Tag color={routeData.schema_options?.['keep-listening'] ? 'green' : 'red'}>
+                  {routeData.schema_options?.['keep-listening'] ? 'Enabled' : 'Disabled'}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="Authentication">
+                <Tag color={routeData.schema_options?.authentication ? 'green' : 'red'}>
+                  {routeData.schema_options?.authentication ? 'Enabled' : 'Disabled'}
+                </Tag>
+              </Descriptions.Item>
+              {routeData.schema_options?.authentication && (
+                <Descriptions.Item label="Key Length">
+                  {routeData.schema_options?.pbkeylen !== undefined ? routeData.schema_options.pbkeylen : '0 (Default)'}
+                </Descriptions.Item>
+              )}
+            </>
+          )}
+          
+          {routeData.schema === 'UDP' && (
+            <>
+              <Descriptions.Item label="Address">{routeData.schema_options?.address || '0.0.0.0 (Default)'}</Descriptions.Item>
+              <Descriptions.Item label="Port">{routeData.schema_options?.port || 'N/A'}</Descriptions.Item>
+              <Descriptions.Item label="Buffer Size">{routeData.schema_options?.['buffer-size'] ? `${routeData.schema_options['buffer-size']} bytes` : '0 bytes (Default)'}</Descriptions.Item>
+              <Descriptions.Item label="MTU">{routeData.schema_options?.mtu || '1492 (Default)'}</Descriptions.Item>
+            </>
+          )}
+          
+          <Descriptions.Item label="Enabled">
+            <Tag color={routeData.enabled ? 'green' : 'red'}>
+              {routeData.enabled ? 'Yes' : 'No'}
+            </Tag>
           </Descriptions.Item>
-          <Descriptions.Item label="Authentication">
-            {routeData.schema === 'SRT' && routeData.schema_options && routeData.schema_options.authentication ? (
-              <Tag color="green">Enabled</Tag>
-            ) : (
-              <Tag color="red">Disabled</Tag>
-            )}
+          <Descriptions.Item label="Export Stats">
+            <Tag color={(routeData.exportStats || routeData.export_stats) ? 'green' : 'red'}>
+              {(routeData.exportStats || routeData.export_stats) ? 'Yes' : 'No'}
+            </Tag>
+            {(routeData.exportStats || routeData.export_stats) && <span style={{marginLeft: '8px'}}></span>}
           </Descriptions.Item>
-          {routeData.schema === 'SRT' && routeData.schema_options && routeData.schema_options.authentication && (
-            <Descriptions.Item label="Key Length">
-              {routeData.schema_options.pbkeylen || '0 (Default)'}
+          {routeData.gstDebug && (
+            <Descriptions.Item label="GST_DEBUG" span={2}>
+              {routeData.gstDebug}
             </Descriptions.Item>
           )}
         </Descriptions>
       </Card>
 
-      {/* Advanced Settings */}
-      <Collapse 
-        ghost 
-        defaultActiveKey={[]} 
-        style={{ marginBottom: 24 }}
-        items={[
-          {
-            key: 'advanced',
-            label: 'Advanced Settings',
-            children: (
-              <Descriptions 
-                column={2} 
-                bordered 
-                styles={{ content: { textAlign: 'left' } }}
-              >
-                <Descriptions.Item label="Export Stats">
-                  {routeData.exportStats ? 'Yes' : 'No'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Keep Listening">
-                  {routeData["keep-listening"] ? 'Yes' : 'No'}
-                </Descriptions.Item>
-                {routeData.schema === 'SRT' && routeData.schema_options && routeData.schema_options.authentication && (
-                  <>
-                    <Descriptions.Item label="Authentication" span={2}>
-                      <Space direction="vertical">
-                        <Tag color="green">Enabled</Tag>
-                        <Text>Key Length: {routeData.schema_options.pbkeylen || '0 (Default)'}</Text>
-                      </Space>
-                    </Descriptions.Item>
-                  </>
-                )}
-              </Descriptions>
-            )
-          }
-        ]}
-      />
-
       {/* Destinations Table */}
-      <Card 
-        title="Destinations" 
+      <Card
+        title="Destinations"
         extra={
           <Button
             type="primary"
@@ -532,7 +550,7 @@ const RouteItem = () => {
           </Button>
         }
       >
-        <Input 
+        <Input
           prefix={<SearchOutlined />}
           placeholder="Filter destinations by name or host"
           style={{ marginBottom: 16, width: '100%' }}
@@ -554,7 +572,7 @@ const RouteItem = () => {
               if (record.schema !== 'SRT' || !record.schema_options || !record.schema_options.authentication) {
                 return null;
               }
-              
+
               return (
                 <Card size="small" title="Authentication Details" style={{ margin: '0 16px' }}>
                   <Descriptions column={2} size="small">

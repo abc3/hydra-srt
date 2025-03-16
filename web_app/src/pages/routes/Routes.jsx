@@ -136,7 +136,7 @@ const Routes = () => {
         return record.schema_options && record.schema_options.authentication ? (
           <Tag color="green">yes</Tag>
         ) : (
-          <Tag color="gray">no</Tag>
+          <Tag color="default">no</Tag>
         );
       },
     },
