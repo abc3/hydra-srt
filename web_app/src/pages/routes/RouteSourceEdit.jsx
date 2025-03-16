@@ -189,6 +189,16 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                   </Form.Item>
 
                   <Form.Item
+                    label="GST_DEBUG"
+                    name="gstDebug"
+                    tooltip="Set GStreamer debug level (e.g., GST_AUTOPLUG:6,GST_ELEMENT_*:4)"
+                    extra="Configure GStreamer debug levels for detailed pipeline logging"
+                    style={{ maxWidth: '450px' }}
+                  >
+                    <Input placeholder="Enter GStreamer debug configuration" />
+                  </Form.Item>
+
+                  <Form.Item
                     label="Node"
                     name="node"
                     required

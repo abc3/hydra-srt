@@ -96,7 +96,7 @@ defmodule HydraSrt.UnixSockHandler do
     :keep_state_and_data
   end
 
-  def handle_event(:info, {:tcp, _port, "stats_json:" <> _}, _, _) do
+  def handle_event(:info, {:tcp, _port, "{" <> _}, _, _) do
     # ignore stats
     :keep_state_and_data
   end

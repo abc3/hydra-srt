@@ -30,3 +30,8 @@ hydra_srt-*.tar
 *.db-*
 
 /khepri#*
+
+/data/backup/*
+!/data/backup/.gitkeep
+/data/khepri/*
+!/data/khepri/.gitkeep

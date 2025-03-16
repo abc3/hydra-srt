@@ -70,13 +70,10 @@ if config_env() != :test do
   # config :hydra_srt, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :hydra_srt, HydraSrtWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
+    url: [host: host, port: port, scheme: "http"],
     http: [
-      # Enable IPv6 and bind on all interfaces.
-      # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
-      # See the documentation on https://hexdocs.pm/plug_cowboy/Plug.Cowboy.html
-      # for details about using IPv6 vs IPv4 and loopback vs public addresses.
-      ip: {0, 0, 0, 0, 0, 0, 0, 0},
+      # Always bind to all IPv4 interfaces (0.0.0.0) in Docker
+      ip: {0, 0, 0, 0},
       port: port
     ],
     secret_key_base: nil
