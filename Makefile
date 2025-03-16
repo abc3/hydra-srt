@@ -35,3 +35,21 @@ dev_play1:
 
 dev_udp1:
 	ffmpeg -i "srt://127.0.0.1:4201?mode=caller" -f mpegts udp://239.0.0.1:1234?pkt_size=1316		
+
+docker_restart:
+	docker-compose down && docker-compose up -d
+
+docker_ssh:
+	docker compose exec hydra_srt bash
+
+docker_logs:
+	docker compose logs -f
+
+docker_stop:
+	docker compose down
+
+docker_start:
+	docker compose up -d
+
+docker_clean:
+	docker compose down && docker compose rm -f hydra_srt

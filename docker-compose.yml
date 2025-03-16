@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  hydra_srt:
+    network_mode: "host"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_IP=127.0.0.1
+      - RELEASE_COOKIE="Vt8gXnEI2zRH4l3eqUEBrcGQ22mHSj73CgkYm02u"
+      - PHX_SERVER=true
+      - PORT=4000
+      - PHX_HOST=0.0.0.0
+      - API_AUTH_USERNAME=admin
+      - API_AUTH_PASSWORD=password123
+      - DATABASE_DATA_DIR=/app/khepri
+      - RLIMIT_NOFILE=65536
+    volumes:
+      - ./data/khepri:/app/khepri
+      - ./data/backup:/app/backup
