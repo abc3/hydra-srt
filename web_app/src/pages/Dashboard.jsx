@@ -63,7 +63,7 @@ const Dashboard = () => {
 
   return (
     <div>
-      <Title level={3} style={{ margin: 0, fontSize: '2rem', fontWeight: 600 }}>Dashboard</Title>
+      <Title level={3} style={{ margin: 0, fontSize: '2rem', fontWeight: 600 }}>Dashboard (DEMO VIEW)</Title>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={8}>
