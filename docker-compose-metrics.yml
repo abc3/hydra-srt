@@ -33,9 +33,24 @@ services:
     networks:
       - monitoring-network
 
+  victorialogs:
+    image: victoriametrics/victoria-logs:latest
+    container_name: victorialogs
+    ports:
+      - "9428:9428"
+    volumes:
+      - vl-data:/victoria-logs-data
+    command:
+      - "--httpListenAddr=:9428"
+      - "--storageDataPath=/victoria-logs-data"
+    restart: unless-stopped
+    networks:
+      - monitoring-network
+
 volumes:
   vm-data:
   grafana-data:
+  vl-data:
 
 networks:
   monitoring-network:
