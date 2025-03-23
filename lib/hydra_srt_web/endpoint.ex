@@ -46,9 +46,9 @@ defmodule HydraSrtWeb.Endpoint do
   plug Plug.Session, @session_options
 
   plug CORSPlug,
-    origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    headers: ["Authorization", "Content-Type", "Accept", "Origin", "User-Agent"],
+    origin: ["*"],
+    methods: ["*"],
+    headers: ["*"],
     credentials: true,
     max_age: 86400
 
