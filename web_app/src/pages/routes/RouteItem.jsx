@@ -27,8 +27,30 @@ import {
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { routesApi, destinationsApi } from '../../utils/api';
+import { Socket } from "phoenix";
+import { API_BASE_URL } from "../../utils/constants";
+import { getToken } from "../../utils/auth";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  AreaChart,
+  Area
+} from 'recharts';
 
 const { Title, Text } = Typography;
+
+// Create socket instance
+const socket = new Socket(`${API_BASE_URL}/socket`, {
+  params: { token: getToken()?.replace('Bearer ', '') }
+});
+
+// Connect to the socket
+socket.connect();
 
 const RouteItem = () => {
   const navigate = useNavigate();
@@ -38,6 +60,41 @@ const RouteItem = () => {
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
   const [destinationFilter, setDestinationFilter] = useState('');
+  const [stats, setStats] = useState(null);
+  const [statsHistory, setStatsHistory] = useState([]);
+
+  // Phoenix Channel connection
+  useEffect(() => {
+    if (!id) return;
+
+    // Join the channel for this specific route
+    const channel = socket.channel(`live:${id}`);
+    
+    channel.join()
+      .receive("ok", resp => {
+        console.log("Successfully joined channel", resp);
+      })
+      .receive("error", resp => {
+        console.error("Unable to join channel", resp);
+        messageApi.error("Failed to connect to live updates");
+      });
+
+    // Listen for stats updates
+    channel.on("stats", stats => {
+      console.log("Received stats:", stats);
+      setStats(stats);
+      // Add timestamp to stats for charts
+      const timestamp = new Date().toLocaleTimeString();
+      setStatsHistory(prev => [...prev, { ...stats, timestamp }]);
+    });
+
+    // Cleanup on component unmount
+    return () => {
+      channel.off("stats");
+      channel.leave();
+      console.log("Channel cleanup completed");
+    };
+  }, [id, messageApi]);
 
   // Breadcrumb setup
   useEffect(() => {
@@ -264,6 +321,106 @@ const RouteItem = () => {
     }
   };
 
+  const SrtSourceStats = () => {
+    if (!stats || !statsHistory.length) {
+      return (
+        <Card title="SRT Source Statistics" style={{ marginBottom: 24 }}>
+          <div style={{ textAlign: 'center', padding: '20px' }}>
+            <Text type="secondary">Waiting for statistics...</Text>
+          </div>
+        </Card>
+      );
+    }
+
+    const formatBytes = (bytes) => {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    };
+
+    return (
+      <Card title="SRT Source Statistics" style={{ marginBottom: 24 }}>
+        <Row gutter={[16, 16]}>
+          {/* <Col span={24}>
+            <Card type="inner" title="Connected Callers">
+              <Row justify="space-between" align="middle">
+                <Col>
+                  <Title level={3} style={{ margin: 0 }}>
+                    {stats['connected-callers']}
+                  </Title>
+                  <Text type="secondary">Current Connections</Text>
+                </Col>
+              </Row>
+            </Card>
+          </Col> */}
+          
+          <Col span={12}>
+            <Card type="inner" title="Total Bytes Received">
+              <ResponsiveContainer width="100%" height={250}>
+                <AreaChart data={statsHistory}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis 
+                    dataKey="timestamp"
+                    interval="preserveStartEnd"
+                    minTickGap={50}
+                  />
+                  <YAxis 
+                    tickFormatter={(value) => formatBytes(value)}
+                    domain={['auto', 'auto']}
+                    padding={{ top: 20 }}
+                  />
+                  <Tooltip 
+                    formatter={(value) => formatBytes(value)}
+                  />
+                  <Area 
+                    type="monotone" 
+                    dataKey="total-bytes-received" 
+                    stroke="#8884d8" 
+                    fill="#8884d8" 
+                    name="Bytes Received"
+                    isAnimationActive={false}
+                    dot={false}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </Card>
+          </Col>
+
+          <Col span={12}>
+            <Card type="inner" title="Connected Callers">
+              <ResponsiveContainer width="100%" height={250}>
+                <AreaChart data={statsHistory}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis 
+                    dataKey="timestamp"
+                    interval="preserveStartEnd"
+                    minTickGap={50}
+                  />
+                  <YAxis 
+                    domain={['auto', 'auto']}
+                    padding={{ top: 20 }}
+                  />
+                  <Tooltip />
+                  <Area 
+                    type="monotone" 
+                    dataKey="connected-callers" 
+                    stroke="#82ca9d" 
+                    fill="#82ca9d" 
+                    name="Connected Callers"
+                    isAnimationActive={false}
+                    dot={false}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </Card>
+          </Col>
+        </Row>
+      </Card>
+    );
+  };
+
   if (loading || !routeData) {
     return (
       <div style={{ padding: '24px' }}>
@@ -450,6 +607,9 @@ const RouteItem = () => {
           </Col>
         </Row>
       </Card>
+
+      {/* SRT Statistics */}
+      <SrtSourceStats />
 
       {/* Source Details */}
       <Card

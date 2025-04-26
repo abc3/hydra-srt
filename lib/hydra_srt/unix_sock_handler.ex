@@ -78,12 +78,19 @@ defmodule HydraSrt.UnixSockHandler do
         :info,
         {:tcp, _port, "{" <> _ = json},
         _,
-        %{route_record: %{"exportStats" => true}} = data
+        %{route_record: %{"exportStats" => exportStats?}} = data
       ) do
     case Jason.decode(json) do
       {:ok, stats} ->
         try do
-          stats_to_metrics(stats, data)
+          Phoenix.PubSub.broadcast(
+            HydraSrt.PubSub,
+            "stats:#{data.route_id}",
+            {:stats, stats}
+          )
+
+          export = exportStats? and Application.get_env(:hydra_srt, :export_metrics?)
+          stats_to_metrics(stats, data, export)
         rescue
           error ->
             Logger.error("Error processing stats: #{inspect(error)} #{inspect(json)}")
@@ -125,18 +132,20 @@ defmodule HydraSrt.UnixSockHandler do
     :ok
   end
 
-  def stats_to_metrics(stats, data) do
+  def stats_to_metrics(_, _, false), do: nil
+
+  def stats_to_metrics(stats, data, _) do
     stats
     |> Map.keys()
     |> Enum.map(fn key ->
       cond do
         is_list(stats[key]) ->
           Enum.each(stats[key], fn item ->
-            stats_to_metrics(item, data)
+            stats_to_metrics(item, data, true)
           end)
 
         is_map(stats[key]) ->
-          stats_to_metrics(stats[key], data)
+          stats_to_metrics(stats[key], data, true)
 
         true ->
           tags = %{
