@@ -1,7 +1,7 @@
 #ifndef GST_PIPELINE_H
 #define GST_PIPELINE_H
 
-#include <cJSON.h>
+#include <cjson/cJSON.h>
 #include <gst/gst.h>
 #include <pthread.h>
 #include <unistd.h>

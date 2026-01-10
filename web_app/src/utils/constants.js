@@ -3,7 +3,11 @@
  */
 
 // API base URL
-export const API_BASE_URL = 'http://127.0.0.1:4000';
+// Prefer Vite env override, then same-origin (Phoenix serving the UI), then dev default.
+export const API_BASE_URL =
+  (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE_URL) ||
+  (typeof window !== 'undefined' && window.location && window.location.origin) ||
+  'http://127.0.0.1:4000';
 
 // Authentication
 export const AUTH_TOKEN_KEY = 'token';

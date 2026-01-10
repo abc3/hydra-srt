@@ -17,6 +17,12 @@ config :hydra_srt, HydraSrtWeb.Endpoint,
   secret_key_base: "o4JBd+wOK5JJIHHOZ/WMk00xrG9dN0//FF1MIBkDPzM+nRTN+5+L9hvMVX+805L0",
   server: false
 
+# Defaults for automated UI/E2E tests (Playwright, ExUnit E2E helpers)
+config :hydra_srt,
+  api_auth_username: "admin",
+  api_auth_password: "password123",
+  export_metrics?: false
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

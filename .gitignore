@@ -37,3 +37,6 @@ hydra_srt-*.tar
 !/data/khepri/.gitkeep
 
 tmp-*
+
+web_app/test-results
+

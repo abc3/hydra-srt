@@ -12,9 +12,11 @@ defmodule HydraSrt.ApiFixtures do
       attrs
       |> Enum.into(%{
         alias: "some alias",
-        destinations: %{},
+        destinations: [],
         enabled: true,
         name: "some name",
+        schema: "UDP",
+        schema_options: %{},
         source: %{},
         started_at: ~U[2025-02-18 14:51:00Z],
         status: "some status",
@@ -35,6 +37,8 @@ defmodule HydraSrt.ApiFixtures do
         alias: "some alias",
         enabled: true,
         name: "some name",
+        schema: "UDP",
+        schema_options: %{host: "127.0.0.1", port: 5000},
         started_at: ~U[2025-02-19 16:24:00Z],
         status: "some status",
         stopped_at: ~U[2025-02-19 16:24:00Z]

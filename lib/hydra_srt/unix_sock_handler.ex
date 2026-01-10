@@ -42,6 +42,7 @@ defmodule HydraSrt.UnixSockHandler do
         # keepalive: true,
         # nodelay: true,
         # nopush: true,
+        packet: 4,
         active: true
       )
 
@@ -93,7 +94,9 @@ defmodule HydraSrt.UnixSockHandler do
           stats_to_metrics(stats, data, export)
         rescue
           error ->
-            Logger.error("Error processing stats: #{inspect(error)} #{inspect(json)}")
+            Logger.error(
+              "Error processing stats: #{inspect(error)} route_id=#{inspect(data.route_id)} source_stream_id=#{inspect(data.source_stream_id)}"
+            )
         end
 
       {error, _} ->
@@ -111,6 +114,10 @@ defmodule HydraSrt.UnixSockHandler do
   def handle_event(:info, {:tcp, _port, "stats_source_stream_id:" <> stream_id}, _state, data) do
     Logger.info("stats_source_stream_id: #{stream_id}")
     {:keep_state, %{data | source_stream_id: stream_id}}
+  end
+
+  def handle_event(:info, {:tcp_closed, _socket}, _state, _data) do
+    {:stop, :normal}
   end
 
   def handle_event(type, content, state, data) do
@@ -135,29 +142,42 @@ defmodule HydraSrt.UnixSockHandler do
   def stats_to_metrics(_, _, false), do: nil
 
   def stats_to_metrics(stats, data, _) do
-    stats
-    |> Map.keys()
-    |> Enum.map(fn key ->
-      cond do
-        is_list(stats[key]) ->
-          Enum.each(stats[key], fn item ->
-            stats_to_metrics(item, data, true)
+    tags = %{
+      type: "source",
+      route_id: data.route_id,
+      route_name: data.route_record["name"],
+      source_stream_id: data.source_stream_id
+    }
+
+    cond do
+      is_list(stats) ->
+        # Some keys (like destinations/callers) are lists of maps; recurse per element.
+        Enum.each(stats, fn item -> stats_to_metrics(item, data, true) end)
+
+      is_map(stats) ->
+        {fields, nested} =
+          Enum.reduce(stats, {%{}, []}, fn {key, value}, {fields, nested} ->
+            cond do
+              is_list(value) ->
+                {fields, Enum.reverse(value, nested)}
+
+              is_map(value) ->
+                {fields, [value | nested]}
+
+              true ->
+                {Map.put(fields, norm_names(key), value), nested}
+            end
           end)
 
-        is_map(stats[key]) ->
-          stats_to_metrics(stats[key], data, true)
+        Metrics.event_fields(fields, tags)
 
-        true ->
-          tags = %{
-            type: "source",
-            route_id: data.route_id,
-            route_name: data.route_record["name"],
-            source_stream_id: data.source_stream_id
-          }
+        Enum.each(nested, fn item ->
+          stats_to_metrics(item, data, true)
+        end)
 
-          Metrics.event(norm_names(key), stats[key], tags)
-      end
-    end)
+      true ->
+        :ok
+    end
   end
 
   def norm_names(name) do

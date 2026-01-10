@@ -21,4 +21,11 @@ defmodule HydraSrtWeb.FallbackController do
     |> put_view(html: HydraSrtWeb.ErrorHTML, json: HydraSrtWeb.ErrorJSON)
     |> render(:"404")
   end
+
+  # Catch-all for non-Ecto errors to avoid crashing controller actions that use `with`.
+  def call(conn, {:error, reason}) do
+    conn
+    |> put_status(:internal_server_error)
+    |> json(%{error: inspect(reason)})
+  end
 end

@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  native_test:
+    name: Native Tests (C)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y pkg-config libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libcjson-dev libcmocka-dev libsrt-openssl-dev
+    - name: Run tests
+      run: make test -C native
+
+  js_unit_test:
+    name: JS Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web_app
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: web_app/package-lock.json
+    - run: npm ci
+    - run: npm run test:unit
+
+  js_e2e_test:
+    name: JS E2E Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install system dependencies (ffmpeg)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+    - name: Set up Elixir
+      uses: erlef/setup-beam@v1
+      with:
+        elixir-version: '1.18.4'
+        otp-version: '27.3'
+    - name: Restore dependencies cache
+      uses: actions/cache@v3
+      with:
+        path: deps
+        key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+        restore-keys: ${{ runner.os }}-mix-
+    - name: Install dependencies
+      run: mix deps.get
+    - name: Compile dependencies
+      run: mix deps.compile
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: web_app/package-lock.json
+    - run: npm ci
+      working-directory: web_app
+    - name: Install Playwright Browsers
+      run: npx playwright install --with-deps
+      working-directory: web_app
+    - run: npm run test:e2e
+      working-directory: web_app
+
+  elixir_test:
+    name: Elixir Unit Tests
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Elixir
+      uses: erlef/setup-beam@v1
+      with:
+        elixir-version: '1.18.4'
+        otp-version: '27.3'
+    - name: Restore dependencies cache
+      uses: actions/cache@v3
+      with:
+        path: deps
+        key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+        restore-keys: ${{ runner.os }}-mix-
+    - name: Install dependencies
+      run: mix deps.get
+    - name: Compile dependencies
+      run: mix deps.compile
+    - name: Compile project
+      run: mix compile --warnings-as-errors
+    - name: Check Formatting
+      run: mix format --check-formatted
+    - name: Run Tests
+      run: mix test
+
+  elixir_e2e_test:
+    name: Elixir E2E Tests
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+      E2E: true
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Native Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y pkg-config \
+          ffmpeg srt-tools \
+          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+          gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+          libcjson-dev libsrt-openssl-dev
+    - name: Set up Elixir
+      uses: erlef/setup-beam@v1
+      with:
+        elixir-version: '1.18.4'
+        otp-version: '27.3'
+    - name: Restore dependencies cache
+      uses: actions/cache@v3
+      with:
+        path: deps
+        key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+        restore-keys: ${{ runner.os }}-mix-
+    - name: Install dependencies
+      run: mix deps.get
+    - name: Build Native App
+      run: make -C native
+    - name: Prepare Native Binary
+      run: |
+        mkdir -p priv/native/build
+        cp native/build/hydra_srt_pipeline priv/native/build/
+    - name: Run E2E Tests
+      run: mix test --only e2e

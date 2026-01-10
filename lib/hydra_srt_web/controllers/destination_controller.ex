@@ -25,8 +25,9 @@ defmodule HydraSrtWeb.DestinationController do
   end
 
   def show(conn, %{"dest_id" => id, "route_id" => route_id}) do
-    {:ok, route} = Db.get_destination(route_id, id)
-    data(conn, route)
+    with {:ok, route} <- Db.get_destination(route_id, id) do
+      data(conn, route)
+    end
   end
 
   def update(conn, %{"dest_id" => id, "route_id" => route_id, "destination" => dest_params}) do

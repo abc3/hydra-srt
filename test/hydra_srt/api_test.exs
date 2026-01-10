@@ -8,7 +8,16 @@ defmodule HydraSrt.ApiTest do
 
     import HydraSrt.ApiFixtures
 
-    @invalid_attrs %{alias: nil, enabled: nil, name: nil, status: nil, started_at: nil, source: nil, destinations: nil, stopped_at: nil}
+    @invalid_attrs %{
+      alias: nil,
+      enabled: nil,
+      name: nil,
+      status: nil,
+      started_at: nil,
+      source: nil,
+      destinations: nil,
+      stopped_at: nil
+    }
 
     test "list_routes/0 returns all routes" do
       route = route_fixture()
@@ -21,7 +30,16 @@ defmodule HydraSrt.ApiTest do
     end
 
     test "create_route/1 with valid data creates a route" do
-      valid_attrs = %{alias: "some alias", enabled: true, name: "some name", status: "some status", started_at: ~U[2025-02-18 14:51:00Z], source: %{}, destinations: %{}, stopped_at: ~U[2025-02-18 14:51:00Z]}
+      valid_attrs = %{
+        alias: "some alias",
+        enabled: true,
+        name: "some name",
+        status: "some status",
+        started_at: ~U[2025-02-18 14:51:00Z],
+        source: %{},
+        destinations: %{},
+        stopped_at: ~U[2025-02-18 14:51:00Z]
+      }
 
       assert {:ok, %Route{} = route} = Api.create_route(valid_attrs)
       assert route.alias == "some alias"
@@ -40,7 +58,17 @@ defmodule HydraSrt.ApiTest do
 
     test "update_route/2 with valid data updates the route" do
       route = route_fixture()
-      update_attrs = %{alias: "some updated alias", enabled: false, name: "some updated name", status: "some updated status", started_at: ~U[2025-02-19 14:51:00Z], source: %{}, destinations: %{}, stopped_at: ~U[2025-02-19 14:51:00Z]}
+
+      update_attrs = %{
+        alias: "some updated alias",
+        enabled: false,
+        name: "some updated name",
+        status: "some updated status",
+        started_at: ~U[2025-02-19 14:51:00Z],
+        source: %{},
+        destinations: %{},
+        stopped_at: ~U[2025-02-19 14:51:00Z]
+      }
 
       assert {:ok, %Route{} = route} = Api.update_route(route, update_attrs)
       assert route.alias == "some updated alias"
@@ -76,7 +104,14 @@ defmodule HydraSrt.ApiTest do
 
     import HydraSrt.ApiFixtures
 
-    @invalid_attrs %{alias: nil, enabled: nil, name: nil, status: nil, started_at: nil, stopped_at: nil}
+    @invalid_attrs %{
+      alias: nil,
+      enabled: nil,
+      name: nil,
+      status: nil,
+      started_at: nil,
+      stopped_at: nil
+    }
 
     test "list_destinations/0 returns all destinations" do
       destination = destination_fixture()
@@ -89,7 +124,14 @@ defmodule HydraSrt.ApiTest do
     end
 
     test "create_destination/1 with valid data creates a destination" do
-      valid_attrs = %{alias: "some alias", enabled: true, name: "some name", status: "some status", started_at: ~U[2025-02-19 16:24:00Z], stopped_at: ~U[2025-02-19 16:24:00Z]}
+      valid_attrs = %{
+        alias: "some alias",
+        enabled: true,
+        name: "some name",
+        status: "some status",
+        started_at: ~U[2025-02-19 16:24:00Z],
+        stopped_at: ~U[2025-02-19 16:24:00Z]
+      }
 
       assert {:ok, %Destination{} = destination} = Api.create_destination(valid_attrs)
       assert destination.alias == "some alias"
@@ -106,9 +148,19 @@ defmodule HydraSrt.ApiTest do
 
     test "update_destination/2 with valid data updates the destination" do
       destination = destination_fixture()
-      update_attrs = %{alias: "some updated alias", enabled: false, name: "some updated name", status: "some updated status", started_at: ~U[2025-02-20 16:24:00Z], stopped_at: ~U[2025-02-20 16:24:00Z]}
 
-      assert {:ok, %Destination{} = destination} = Api.update_destination(destination, update_attrs)
+      update_attrs = %{
+        alias: "some updated alias",
+        enabled: false,
+        name: "some updated name",
+        status: "some updated status",
+        started_at: ~U[2025-02-20 16:24:00Z],
+        stopped_at: ~U[2025-02-20 16:24:00Z]
+      }
+
+      assert {:ok, %Destination{} = destination} =
+               Api.update_destination(destination, update_attrs)
+
       assert destination.alias == "some updated alias"
       assert destination.enabled == false
       assert destination.name == "some updated name"

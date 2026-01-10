@@ -1,6 +1,9 @@
 CC := gcc
-CFLAGS := -Wall -Wextra -g `pkg-config --cflags gstreamer-1.0 libcjson cmocka srt`
-LDFLAGS := `pkg-config --libs gstreamer-1.0 libcjson cmocka gio-2.0 srt`
+# NOTE:
+# - We only require cmocka when building native tests (make test), not for the main binary.
+# - cJSON comes from libcjson-dev on CI.
+CFLAGS := -Wall -Wextra -g `pkg-config --cflags gstreamer-1.0 gio-2.0 srt libcjson`
+LDFLAGS := `pkg-config --libs gstreamer-1.0 gio-2.0 srt libcjson`
 
 SRC_DIR := src
 BUILD_DIR := build
@@ -24,13 +27,13 @@ $(MAIN_EXEC): $(OBJS)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 $(TEST_EXEC): $(TEST_OBJS) $(OBJS_NO_MAIN)
-	$(CC) -o $@ $^ $(LDFLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS) `pkg-config --libs cmocka`
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -I$(INCLUDE_DIR) -c $< -o $@
 
 $(BUILD_DIR)/%.o: $(TEST_DIR)/%.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -I$(INCLUDE_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) `pkg-config --cflags cmocka` -I$(INCLUDE_DIR) -c $< -o $@
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)

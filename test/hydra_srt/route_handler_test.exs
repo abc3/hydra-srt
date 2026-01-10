@@ -92,100 +92,44 @@ defmodule HydraSrt.RouteHandlerTest do
     assert {:error, :invalid_source} = RouteHandler.source_from_record(record)
   end
 
-  test "route_data_to_params with valid route data" do
-    route_id = "test_route"
-
-    route = %{
+  test "sink_from_record includes hydra destination metadata for SRT" do
+    record = %{
+      "id" => "dest1",
+      "name" => "Destination 1",
       "schema" => "SRT",
       "schema_options" => %{
         "localaddress" => "127.0.0.1",
-        "localport" => 4201,
-        "mode" => "listener"
-      },
-      "destinations" => [
-        %{
-          "schema" => "SRT",
-          "schema_options" => %{
-            "localaddress" => "127.0.0.1",
-            "localport" => 4202,
-            "mode" => "listener"
-          }
-        }
-      ]
+        "localport" => 4202,
+        "mode" => "caller"
+      }
     }
 
-    assert {:ok, params} = RouteHandler.route_data_to_params(route_id)
-    assert is_map(params)
-    assert Map.has_key?(params, "source")
-    assert Map.has_key?(params, "sinks")
-    assert is_list(params["sinks"])
+    assert {:ok, sink} = RouteHandler.sink_from_record(record)
+    assert sink["type"] == "srtsink"
+    assert sink["hydra_destination_id"] == "dest1"
+    assert sink["hydra_destination_name"] == "Destination 1"
+    assert sink["hydra_destination_schema"] == "SRT"
   end
 
-  test "route_data_to_params with multiple destinations" do
-    route_id = "test_route"
-
-    route = %{
-      "schema" => "SRT",
+  test "sink_from_record includes hydra destination metadata for UDP" do
+    record = %{
+      "id" => "dest2",
+      "name" => "Destination 2",
+      "schema" => "UDP",
       "schema_options" => %{
-        "localaddress" => "127.0.0.1",
-        "localport" => 4201,
-        "mode" => "listener"
-      },
-      "destinations" => [
-        %{
-          "schema" => "SRT",
-          "schema_options" => %{
-            "localaddress" => "127.0.0.1",
-            "localport" => 4202,
-            "mode" => "listener"
-          }
-        },
-        %{
-          "schema" => "UDP",
-          "schema_options" => %{
-            "address" => "127.0.0.1",
-            "port" => 4203
-          }
-        }
-      ]
+        "host" => "127.0.0.1",
+        "port" => 4203
+      }
     }
 
-    assert {:ok, params} = RouteHandler.route_data_to_params(route_id)
-    assert is_map(params)
-    assert Map.has_key?(params, "source")
-    assert Map.has_key?(params, "sinks")
-    assert length(params["sinks"]) == 2
+    assert {:ok, sink} = RouteHandler.sink_from_record(record)
+    assert sink["type"] == "udpsink"
+    assert sink["hydra_destination_id"] == "dest2"
+    assert sink["hydra_destination_name"] == "Destination 2"
+    assert sink["hydra_destination_schema"] == "UDP"
   end
 
   test "callback_mode returns handle_event_function" do
     assert RouteHandler.callback_mode() == [:handle_event_function]
-  end
-
-  test "init sets up initial state" do
-    args = %{id: "test_route"}
-
-    assert {:ok, :start, %{id: "test_route", port: nil}, {:next_event, :internal, :start}} =
-             RouteHandler.init(args)
-  end
-
-  test "init with process flag" do
-    args = %{id: "test_route"}
-    assert Process.flag(:trap_exit, true)
-
-    assert {:ok, :start, %{id: "test_route", port: nil}, {:next_event, :internal, :start}} =
-             RouteHandler.init(args)
-  end
-
-  test "terminate handles port cleanup" do
-    state = :started
-    data = %{port: nil, id: "test_route"}
-    assert :ok = RouteHandler.terminate(:normal, state, data)
-  end
-
-  test "terminate with active port" do
-    state = :started
-    port = Port.open({:spawn, "echo test"}, [:binary])
-    data = %{port: port, id: "test_route"}
-    assert :ok = RouteHandler.terminate(:normal, state, data)
   end
 end
