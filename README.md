@@ -56,7 +56,7 @@ Coming soon...
 
 ## Docs
 
-Coming soon.
+- [Backend API Documentation](docs/api.md)
 
 ## Features
 
