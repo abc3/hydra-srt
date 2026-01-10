@@ -28,7 +28,7 @@ dev_udp:
 	-f mpegts "srt://127.0.0.1:4201?mode=listener"	
 
 dev_play:
-	ffplay udp://224.0.0.3:1234
+	ffplay udp://127.0.0.1:1234
 
 dev_play1:
 	srt-live-transmit "srt://127.0.0.1:4201?mode=listener" udp://:1234 -v -statspf default -stats 1000
@@ -61,3 +61,40 @@ test_e2e:
 .PHONY: test_e2e_encrypted
 test_e2e_encrypted:
 	E2E=true mix test --only encrypted
+
+.PHONY: test_backend
+test_backend:
+	mix test
+
+.PHONY: test_backend_e2e
+test_backend_e2e:
+	E2E=true mix test --only e2e
+
+.PHONY: test_backend_e2e_encrypted
+test_backend_e2e_encrypted:
+	E2E=true mix test --only encrypted
+
+.PHONY: test_native
+test_native:
+	make -C native test
+
+.PHONY: test_web_unit
+test_web_unit:
+	cd web_app && npm run test:unit
+
+.PHONY: test_web_e2e
+test_web_e2e:
+	cd web_app && npm run test:e2e
+
+.PHONY: test_all
+test_all:
+	@echo "Running: backend unit tests"
+	@$(MAKE) test_backend
+	@echo "Running: backend e2e tests"
+	@$(MAKE) test_backend_e2e
+	@echo "Running: native cmocka tests"
+	@$(MAKE) test_native
+	@echo "Running: web unit tests (vitest)"
+	@$(MAKE) test_web_unit
+	@echo "Running: web e2e tests (playwright)"
+	@$(MAKE) test_web_e2e

@@ -1,11 +1,14 @@
 #include "unix_socket.h"
 
+#include <arpa/inet.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
-int sock;
+int sock = -1;
 
 void init_unix_socket(const char* socket_path)
 {
@@ -31,9 +34,23 @@ void init_unix_socket(const char* socket_path)
 
 void send_message_to_unix_socket(const char* message)
 {
-    if (send(sock, message, strlen(message), 0) < 0) {
+    uint32_t len = strlen(message);
+    uint32_t net_len = htonl(len);
+
+    char* buf = malloc(sizeof(uint32_t) + len);
+    if (!buf) {
+        perror("malloc");
+        return;
+    }
+
+    memcpy(buf, &net_len, sizeof(uint32_t));
+    memcpy(buf + sizeof(uint32_t), message, len);
+
+    if (send(sock, buf, sizeof(uint32_t) + len, 0) < 0) {
         perror("send");
     }
+
+    free(buf);
 }
 
 void cleanup_socket()

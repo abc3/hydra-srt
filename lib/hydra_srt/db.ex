@@ -4,46 +4,63 @@ defmodule HydraSrt.Db do
 
   @spec create_route(map, binary | nil) :: {:ok, map} | {:error, any}
   def create_route(data, id \\ nil) when is_map(data) do
-    id = if id, do: id, else: UUID.uuid1()
+    changeset = HydraSrt.Api.Route.changeset(%HydraSrt.Api.Route{}, data)
 
-    update = %{
-      "id" => id,
-      "created_at" => now(),
-      "updated_at" => now()
-    }
+    if changeset.valid? do
+      id = if id, do: id, else: UUID.uuid1()
+      # Extract plain map from changeset changes or merge data?
+      # Since field types are simple, we can use the data but it's safer to use changes/params or just validate.
+      # For now, proceeding with original data merge if valid, or we could apply changes.
+      # Khepri stores plain maps, not structs usually, based on previous code.
 
-    with :ok <- :khepri.put(["routes", id], Map.merge(data, update)),
-         {:ok, result} <- get_route(id) do
-      {:ok, result}
+      update = %{
+        "id" => id,
+        "created_at" => now(),
+        "updated_at" => now()
+      }
+
+      # Use Map.merge to keep original behavior of storing what passed, but arguably should store validated data.
+      # Given existing tests expect camelCase/string keys likely, stick to Map.merge(data...)
+
+      with :ok <- :khepri.put(["routes", id], Map.merge(data, update)),
+           {:ok, result} <- get_route(id) do
+        {:ok, result}
+      else
+        other ->
+          Logger.error("Failed to create route: #{inspect(other)}")
+          {:error, other}
+      end
     else
-      other ->
-        Logger.error("Failed to create route: #{inspect(other)}")
-        {:error, other}
+      {:error, changeset}
     end
   end
 
   @spec get_route(String.t(), boolean) :: {:ok, map} | {:error, any}
   def get_route(id, include_dest? \\ false) when is_binary(id) do
-    route = :khepri.get!(["routes", id])
+    case :khepri.get(["routes", id]) do
+      {:ok, route} ->
+        route =
+          if include_dest? do
+            destinations_list =
+              :khepri.get_many!("routes/#{id}/destinations/*")
+              |> Enum.reduce([], fn
+                {["routes", _, "destinations", _dest_id], dest}, acc when is_map(dest) ->
+                  [dest | acc]
 
-    route =
-      if include_dest? do
-        destinations_list =
-          :khepri.get_many!("routes/#{id}/destinations/*")
-          |> Enum.reduce([], fn
-            {["routes", _, "destinations", _dest_id], dest}, acc when is_map(dest) ->
-              [dest | acc]
+                _, acc ->
+                  acc
+              end)
 
-            _, acc ->
-              acc
-          end)
+            Map.put(route, "destinations", destinations_list)
+          else
+            route
+          end
 
-        Map.put(route, "destinations", destinations_list)
-      else
-        route
-      end
+        {:ok, route}
 
-    {:ok, route}
+      _ ->
+        {:error, :not_found}
+    end
   end
 
   @spec update_route(String.t(), map) :: {:ok, map} | {:error, any}
@@ -51,16 +68,23 @@ defmodule HydraSrt.Db do
     path = ["routes", id]
     now = now()
 
+    # Validate against the merged record so partial updates (e.g. status-only) work.
     :khepri.transaction(fn ->
       case :khepri_tx.get(path) do
         {:ok, route} ->
-          new_route = Map.merge(route, Map.put(data, "updated_at", now))
+          merged = Map.merge(route, data)
+          changeset = HydraSrt.Api.Route.changeset(%HydraSrt.Api.Route{}, merged)
 
-          :ok = :khepri_tx.put(path, new_route)
-          :khepri_tx.get(path)
+          if changeset.valid? do
+            new_route = Map.merge(route, Map.put(data, "updated_at", now))
+            :ok = :khepri_tx.put(path, new_route)
+            :khepri_tx.get(path)
+          else
+            {:error, changeset}
+          end
 
         _ ->
-          {:error, :route_not_found}
+          {:error, :not_found}
       end
     end)
     |> case do
@@ -76,29 +100,38 @@ defmodule HydraSrt.Db do
 
   @spec create_destination(String.t(), map, binary | nil) :: {:ok, map} | {:error, any}
   def create_destination(route_id, data, id \\ nil) do
-    id = if id, do: id, else: UUID.uuid1()
+    changeset = HydraSrt.Api.Destination.changeset(%HydraSrt.Api.Destination{}, data)
 
-    data =
-      Map.merge(data, %{
-        "id" => id,
-        "route_id" => route_id,
-        "created_at" => now(),
-        "updated_at" => now()
-      })
+    if changeset.valid? do
+      id = if id, do: id, else: UUID.uuid1()
 
-    with :ok <- :khepri.put(["routes", route_id, "destinations", id], data),
-         {:ok, result} <- get_destination(route_id, id) do
-      {:ok, result}
+      data =
+        Map.merge(data, %{
+          "id" => id,
+          "route_id" => route_id,
+          "created_at" => now(),
+          "updated_at" => now()
+        })
+
+      with :ok <- :khepri.put(["routes", route_id, "destinations", id], data),
+           {:ok, result} <- get_destination(route_id, id) do
+        {:ok, result}
+      else
+        other ->
+          Logger.error("Failed to create destination: #{inspect(other)}")
+          {:error, other}
+      end
     else
-      other ->
-        Logger.error("Failed to create route: #{inspect(other)}")
-        {:error, other}
+      {:error, changeset}
     end
   end
 
   @spec get_destination(String.t(), String.t()) :: {:ok, map} | {:error, any}
   def get_destination(route_id, id) when is_binary(route_id) and is_binary(id) do
-    :khepri.get(["routes", route_id, "destinations", id])
+    case :khepri.get(["routes", route_id, "destinations", id]) do
+      {:ok, val} -> {:ok, val}
+      _ -> {:error, :not_found}
+    end
   end
 
   @spec update_destination(String.t(), String.t(), map) :: {:ok, map} | {:error, any}
@@ -106,16 +139,23 @@ defmodule HydraSrt.Db do
     path = ["routes", route_id, "destinations", id]
     now = now()
 
+    # Validate against the merged record so partial updates work.
     :khepri.transaction(fn ->
       case :khepri_tx.get(path) do
         {:ok, destination} ->
-          new_destination = Map.merge(destination, Map.put(data, "updated_at", now))
+          merged = Map.merge(destination, data)
+          changeset = HydraSrt.Api.Destination.changeset(%HydraSrt.Api.Destination{}, merged)
 
-          :ok = :khepri_tx.put(path, new_destination)
-          :khepri_tx.get(path)
+          if changeset.valid? do
+            new_destination = Map.merge(destination, Map.put(data, "updated_at", now))
+            :ok = :khepri_tx.put(path, new_destination)
+            :khepri_tx.get(path)
+          else
+            {:error, changeset}
+          end
 
         _ ->
-          {:error, :destination_not_found}
+          {:error, :not_found}
       end
     end)
     |> case do

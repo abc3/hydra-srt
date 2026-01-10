@@ -13,8 +13,11 @@ defmodule HydraSrt.Application do
       )
 
     khepri_data_dir = System.get_env("DATABASE_DATA_DIR", "#{File.cwd!()}/khepri##{node()}")
+    IO.puts("DEBUG: Khepri data dir: #{khepri_data_dir}")
+    start_result = :khepri.start(khepri_data_dir)
+    IO.puts("DEBUG: Khepri start result: #{inspect(start_result)}")
     Logger.notice("Database directory: #{khepri_data_dir}")
-    Logger.notice("Starting database: #{inspect(:khepri.start(khepri_data_dir))}")
+    Logger.notice("Starting database: #{inspect(start_result)}")
 
     :syn.add_node_to_scopes([:routes])
     runtime_schedulers = System.schedulers_online()
@@ -46,21 +49,22 @@ defmodule HydraSrt.Application do
       {Registry,
        keys: :unique, name: HydraSrt.Registry.MsgHandlers, partitions: runtime_schedulers},
       HydraSrtWeb.Telemetry,
-      # HydraSrt.Repo,
+      HydraSrt.Repo,
       # {Ecto.Migrator,
       #  repos: Application.fetch_env!(:hydra_srt, :ecto_repos), skip: skip_migrations?()},
       {Phoenix.PubSub, name: HydraSrt.PubSub, partitions: runtime_schedulers},
-      HydraSrtWeb.Endpoint,
-      HydraSrt.Metrics.Connection
+      HydraSrtWeb.Endpoint
     ]
 
-    # start Cachex only if the node uses names, this is necessary for test setup
     children =
-      if node() != :nonode@nohost do
-        [{Cachex, name: HydraSrt.Cache} | children]
+      if Application.get_env(:hydra_srt, :export_metrics?, true) do
+        children ++ [HydraSrt.Metrics.Connection]
       else
         children
       end
+
+    # Cachex is used by API auth and websocket auth; keep it always available.
+    children = [{Cachex, name: HydraSrt.Cache} | children]
 
     opts = [strategy: :one_for_one, name: HydraSrt.Supervisor]
     Supervisor.start_link(children, opts)

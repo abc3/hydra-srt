@@ -81,7 +81,15 @@ if config_env() != :test do
   if export_metrics? do
     config :hydra_srt, HydraSrt.Metrics.Connection,
       host: System.get_env("VICTORIOMETRICS_HOST"),
-      port: System.get_env("VICTORIOMETRICS_PORT"),
+      port: String.to_integer(System.get_env("VICTORIOMETRICS_PORT")),
       version: :v2
   end
+end
+
+if config_env() == :test and System.get_env("E2E_UI") == "true" do
+  port = String.to_integer(System.get_env("E2E_PORT") || "4000")
+
+  config :hydra_srt, HydraSrtWeb.Endpoint,
+    server: true,
+    http: [ip: {127, 0, 0, 1}, port: port]
 end

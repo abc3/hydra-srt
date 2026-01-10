@@ -29,6 +29,7 @@ defmodule HydraSrt.DataCase do
 
   setup tags do
     HydraSrt.DataCase.setup_sandbox(tags)
+    :khepri.delete_many("**")
     :ok
   end
 

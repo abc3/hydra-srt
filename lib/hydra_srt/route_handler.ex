@@ -78,31 +78,36 @@ defmodule HydraSrt.RouteHandler do
 
   defp start_native_pipeline(route) do
     binary_path = get_binary_path()
-    cmd = "#{binary_path} #{route["id"]}"
+    args = [to_string(route["id"])]
 
-    opts = [
+    base_opts = [
       :stderr_to_stdout,
       :use_stdio,
       :binary,
       :exit_status,
-      :stream
+      :stream,
+      args: Enum.map(args, &String.to_charlist/1)
     ]
 
-    opts =
-      if is_binary(route["gstDebug"]) do
-        opts ++ [env: [{~c"GST_DEBUG", ~c"#{route["gstDebug"]}"}]]
-      else
-        opts
+    env_opts =
+      case route["gstDebug"] do
+        debug when is_binary(debug) and debug != "" ->
+          [env: [{~c"GST_DEBUG", String.to_charlist(debug)}]]
+
+        _ ->
+          []
       end
 
-    Logger.info("RouteHandler: start_native_pipeline: #{cmd}: #{inspect(route["gstDebug"])}")
+    Logger.info(
+      "RouteHandler: start_native_pipeline: #{binary_path} #{Enum.join(args, " ")}: #{inspect(route["gstDebug"])}"
+    )
 
-    Port.open({:spawn, cmd}, opts)
+    Port.open({:spawn_executable, String.to_charlist(binary_path)}, base_opts ++ env_opts)
   end
 
   defp get_binary_path do
-    if System.get_env("MIX_ENV", "dev") == "dev" do
-      "./native/build/hydra_srt_pipeline"
+    if Mix.env() in [:dev, :test] do
+      Path.expand("./native/build/hydra_srt_pipeline")
     else
       "#{:code.priv_dir(:hydra_srt)}/native/build/hydra_srt_pipeline"
     end
@@ -201,10 +206,15 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  def sink_from_record(%{"schema" => "SRT", "schema_options" => opts}) do
+  def sink_from_record(%{"id" => id, "schema" => "SRT", "schema_options" => opts} = destination) do
+    name = Map.get(destination, "name", id)
+
     props = %{
       "type" => "srtsink",
-      "uri" => build_srt_uri(opts)
+      "uri" => build_srt_uri(opts),
+      "hydra_destination_id" => id,
+      "hydra_destination_name" => name,
+      "hydra_destination_schema" => "SRT"
     }
 
     remaining_props =
@@ -225,11 +235,21 @@ defmodule HydraSrt.RouteHandler do
     {:ok, Map.merge(props, remaining_props)}
   end
 
-  def sink_from_record(%{"schema" => "UDP", "schema_options" => opts}) do
-    create_sink("udpsink", opts, [
-      "host",
-      "port"
-    ])
+  def sink_from_record(%{"id" => id, "schema" => "UDP", "schema_options" => opts} = destination) do
+    name = Map.get(destination, "name", id)
+
+    {:ok, sink} =
+      create_sink("udpsink", opts, [
+        "host",
+        "port"
+      ])
+
+    {:ok,
+     Map.merge(sink, %{
+       "hydra_destination_id" => id,
+       "hydra_destination_name" => name,
+       "hydra_destination_schema" => "UDP"
+     })}
   end
 
   def sink_from_record(_), do: {:error, :invalid_destination}

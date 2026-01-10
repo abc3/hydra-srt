@@ -1,6 +1,17 @@
 defmodule HydraSrt.UnixSockHandlerTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: false
   alias HydraSrt.UnixSockHandler
+
+  setup_all do
+    :meck.new(HydraSrt.Db, [:non_strict, :no_link])
+
+    :meck.expect(HydraSrt.Db, :get_route, fn _route_id, _include_dest? ->
+      {:ok, %{"name" => "test", "exportStats" => false}}
+    end)
+
+    on_exit(fn -> :meck.unload(HydraSrt.Db) end)
+    :ok
+  end
 
   test "callback_mode returns handle_event_function" do
     assert UnixSockHandler.callback_mode() == [:handle_event_function]
@@ -31,7 +42,7 @@ defmodule HydraSrt.UnixSockHandlerTest do
 
   test "handle_event with stats_json message and exportStats true" do
     json = ~s({"bytes_sent": 1000, "bytes_received": 2000})
-    message = {:tcp, nil, "stats_json:" <> json}
+    message = {:tcp, nil, json}
     state = :exchange
 
     data = %{
@@ -47,7 +58,7 @@ defmodule HydraSrt.UnixSockHandlerTest do
 
   test "handle_event with invalid stats_json message" do
     json = ~s({invalid_json)
-    message = {:tcp, nil, "stats_json:" <> json}
+    message = {:tcp, nil, json}
     state = :exchange
 
     data = %{
@@ -63,7 +74,7 @@ defmodule HydraSrt.UnixSockHandlerTest do
 
   test "handle_event with stats_json message and exportStats false" do
     json = ~s({"bytes_sent": 1000, "bytes_received": 2000})
-    message = {:tcp, nil, "stats_json:" <> json}
+    message = {:tcp, nil, json}
     state = :exchange
 
     data = %{
@@ -79,7 +90,7 @@ defmodule HydraSrt.UnixSockHandlerTest do
 
   test "handle_event with stats_json message and missing route_record" do
     json = ~s({"bytes_sent": 1000, "bytes_received": 2000})
-    message = {:tcp, nil, "stats_json:" <> json}
+    message = {:tcp, nil, json}
     state = :exchange
 
     data = %{
@@ -155,7 +166,7 @@ defmodule HydraSrt.UnixSockHandlerTest do
       source_stream_id: "test_stream"
     }
 
-    UnixSockHandler.stats_to_metrics(stats, data)
+    UnixSockHandler.stats_to_metrics(stats, data, true)
   end
 
   test "stats_to_metrics with deeply nested data" do
@@ -175,7 +186,26 @@ defmodule HydraSrt.UnixSockHandlerTest do
       source_stream_id: "test_stream"
     }
 
-    UnixSockHandler.stats_to_metrics(stats, data)
+    UnixSockHandler.stats_to_metrics(stats, data, true)
+  end
+
+  test "stats_to_metrics accepts new payload shape (source + destinations list)" do
+    stats = %{
+      "source" => %{"bytes_in_per_sec" => 1234, "bytes_in_total" => 5678},
+      "destinations" => [
+        %{"id" => "d1", "name" => "dest1", "schema" => "UDP", "bytes_out_per_sec" => 10},
+        %{"id" => "d2", "name" => "dest2", "schema" => "SRT", "bytes_out_per_sec" => 20}
+      ],
+      "connected-callers" => 1
+    }
+
+    data = %{
+      route_id: "test_route",
+      route_record: %{"name" => "test"},
+      source_stream_id: "test_stream"
+    }
+
+    UnixSockHandler.stats_to_metrics(stats, data, true)
   end
 
   test "norm_names normalizes metric names" do
@@ -184,10 +214,10 @@ defmodule HydraSrt.UnixSockHandlerTest do
     assert "test_metric" = UnixSockHandler.norm_names("Test-Metric")
   end
 
-  test "norm_names with various special characters" do
+  test "norm_names keeps non-dash separators and normalizes case" do
     assert "test_metric_name" = UnixSockHandler.norm_names("test-metric-name")
-    assert "test_metric_name" = UnixSockHandler.norm_names("test.metric.name")
-    assert "test_metric_name" = UnixSockHandler.norm_names("test/metric/name")
-    assert "test_metric_name" = UnixSockHandler.norm_names("test:metric:name")
+    assert "test.metric.name" = UnixSockHandler.norm_names("test.metric.name")
+    assert "test/metric/name" = UnixSockHandler.norm_names("test/metric/name")
+    assert "test:metric:name" = UnixSockHandler.norm_names("test:metric:name")
   end
 end

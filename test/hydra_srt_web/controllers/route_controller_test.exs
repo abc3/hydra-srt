@@ -1,34 +1,46 @@
 defmodule HydraSrtWeb.RouteControllerTest do
   use HydraSrtWeb.ConnCase
 
-  import HydraSrt.ApiFixtures
-
-  alias HydraSrt.Api.Route
+  import HydraSrt.DbFixtures
 
   @create_attrs %{
-    alias: "some alias",
-    enabled: true,
-    name: "some name",
-    status: "some status",
-    started_at: ~U[2025-02-18 14:51:00Z],
-    source: %{},
-    destinations: %{},
-    stopped_at: ~U[2025-02-18 14:51:00Z]
+    "alias" => "some alias",
+    "enabled" => true,
+    "name" => "some name",
+    "status" => "some status",
+    "started_at" => ~U[2025-02-18 14:51:00Z],
+    "source" => %{},
+    "stopped_at" => ~U[2025-02-18 14:51:00Z]
   }
   @update_attrs %{
-    alias: "some updated alias",
-    enabled: false,
-    name: "some updated name",
-    status: "some updated status",
-    started_at: ~U[2025-02-19 14:51:00Z],
-    source: %{},
-    destinations: %{},
-    stopped_at: ~U[2025-02-19 14:51:00Z]
+    "alias" => "some updated alias",
+    "enabled" => false,
+    "name" => "some updated name",
+    "status" => "some updated status",
+    "started_at" => ~U[2025-02-19 14:51:00Z],
+    "source" => %{},
+    "stopped_at" => ~U[2025-02-19 14:51:00Z]
   }
-  @invalid_attrs %{alias: nil, enabled: nil, name: nil, status: nil, started_at: nil, source: nil, destinations: nil, stopped_at: nil}
+  @invalid_attrs %{
+    "alias" => nil,
+    "enabled" => nil,
+    "name" => nil,
+    "status" => nil,
+    "started_at" => nil,
+    "source" => nil,
+    "stopped_at" => nil
+  }
 
   setup %{conn: conn} do
-    {:ok, conn: put_req_header(conn, "accept", "application/json")}
+    # Ensure clean slate for sequential tests if global cleanup fails
+    :khepri.delete_many("**")
+
+    conn =
+      conn
+      |> put_req_header("accept", "application/json")
+      |> log_in_user()
+
+    {:ok, conn: conn}
   end
 
   describe "index" do
@@ -48,7 +60,7 @@ defmodule HydraSrtWeb.RouteControllerTest do
       assert %{
                "id" => ^id,
                "alias" => "some alias",
-               "destinations" => %{},
+               "destinations" => [],
                "enabled" => true,
                "name" => "some name",
                "source" => %{},
@@ -67,8 +79,8 @@ defmodule HydraSrtWeb.RouteControllerTest do
   describe "update route" do
     setup [:create_route]
 
-    test "renders route when data is valid", %{conn: conn, route: %Route{id: id} = route} do
-      conn = put(conn, ~p"/api/routes/#{route}", route: @update_attrs)
+    test "renders route when data is valid", %{conn: conn, route: %{"id" => id}} do
+      conn = put(conn, ~p"/api/routes/#{id}", route: @update_attrs)
       assert %{"id" => ^id} = json_response(conn, 200)["data"]
 
       conn = get(conn, ~p"/api/routes/#{id}")
@@ -76,7 +88,7 @@ defmodule HydraSrtWeb.RouteControllerTest do
       assert %{
                "id" => ^id,
                "alias" => "some updated alias",
-               "destinations" => %{},
+               "destinations" => [],
                "enabled" => false,
                "name" => "some updated name",
                "source" => %{},
@@ -86,8 +98,8 @@ defmodule HydraSrtWeb.RouteControllerTest do
              } = json_response(conn, 200)["data"]
     end
 
-    test "renders errors when data is invalid", %{conn: conn, route: route} do
-      conn = put(conn, ~p"/api/routes/#{route}", route: @invalid_attrs)
+    test "renders errors when data is invalid", %{conn: conn, route: %{"id" => id}} do
+      conn = put(conn, ~p"/api/routes/#{id}", route: @invalid_attrs)
       assert json_response(conn, 422)["errors"] != %{}
     end
   end
@@ -95,13 +107,12 @@ defmodule HydraSrtWeb.RouteControllerTest do
   describe "delete route" do
     setup [:create_route]
 
-    test "deletes chosen route", %{conn: conn, route: route} do
-      conn = delete(conn, ~p"/api/routes/#{route}")
+    test "deletes chosen route", %{conn: conn, route: %{"id" => id}} do
+      conn = delete(conn, ~p"/api/routes/#{id}")
       assert response(conn, 204)
 
-      assert_error_sent 404, fn ->
-        get(conn, ~p"/api/routes/#{route}")
-      end
+      conn = get(conn, ~p"/api/routes/#{id}")
+      assert json_response(conn, 404)
     end
   end
 

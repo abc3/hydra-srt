@@ -26,8 +26,9 @@ defmodule HydraSrtWeb.RouteController do
 
   def show(conn, %{"id" => id}) do
     # :timer.sleep(1500)
-    {:ok, route} = Db.get_route(id, true)
-    data(conn, route)
+    with {:ok, route} <- Db.get_route(id, true) do
+      data(conn, route)
+    end
   end
 
   def update(conn, %{"id" => id, "route" => route_params}) do

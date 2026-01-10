@@ -7,13 +7,14 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
   @default_port 4002
 
   def ensure_e2e_prereqs! do
+    kill_all_pipelines!()
     ensure_executables!()
     ensure_native_built!()
     ensure_api_auth_config!()
     ensure_cachex_started!()
     ensure_khepri_started!()
     ensure_app_started!()
-    ensure_endpoint_server_started!()
+    ensure_app_started!()
     :ok
   end
 
@@ -71,6 +72,35 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     :ok
   end
 
+  def ffmpeg_supports_srt_encryption? do
+    port = tcp_free_port!()
+
+    proc =
+      start_port_logged!(
+        "ffmpeg",
+        [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-i",
+          "srt://:#{port}?mode=listener&passphrase=probe_pass&pbkeylen=16",
+          "-f",
+          "null",
+          "-"
+        ],
+        "ffmpeg_enc_probe"
+      )
+
+    case await_tag_exit_status("ffmpeg_enc_probe", 750) do
+      nil ->
+        kill_port(proc)
+        true
+
+      _status ->
+        false
+    end
+  end
+
   def ensure_native_built! do
     {output, exit_code} = System.cmd("make", ["-C", "native"], stderr_to_stdout: true)
 
@@ -79,7 +109,10 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     end
 
     binary = Path.expand("native/build/hydra_srt_pipeline")
-    if File.exists?(binary), do: :ok, else: raise("Native binary not found at #{binary} after build")
+
+    if File.exists?(binary),
+      do: :ok,
+      else: raise("Native binary not found at #{binary} after build")
   end
 
   def ensure_api_auth_config! do
@@ -104,6 +137,19 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     end
   end
 
+  def kill_all_pipelines! do
+    pipelines = HydraSrt.ProcessMonitor.list_pipeline_processes()
+
+    Enum.each(pipelines, fn %{pid: pid} ->
+      System.cmd("kill", ["-9", Integer.to_string(pid)])
+    end)
+
+    # Best-effort sweep in case ps parsing missed anything.
+    System.cmd("pkill", ["-9", "-f", "hydra_srt_pipeline"])
+
+    :ok
+  end
+
   def ensure_endpoint_server_started! do
     if System.get_env("E2E") == "true" do
       current = Application.get_env(:hydra_srt, HydraSrtWeb.Endpoint, [])
@@ -114,8 +160,9 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
 
       if is_pid(pid) do
         # Restart endpoint so it picks up server=true and boots Cowboy listener.
-        :ok = Supervisor.stop(pid)
-        wait_until(fn -> Process.whereis(HydraSrtWeb.Endpoint) == nil end, 5_000, 50)
+        # We must use the supervision tree to restart it properly.
+        Supervisor.terminate_child(HydraSrt.Supervisor, HydraSrtWeb.Endpoint)
+        {:ok, _} = Supervisor.restart_child(HydraSrt.Supervisor, HydraSrtWeb.Endpoint)
       end
 
       wait_until(fn -> is_pid(Process.whereis(HydraSrtWeb.Endpoint)) end, 5_000, 50)
@@ -170,7 +217,12 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     body = Jason.encode!(%{"destination" => dest_params})
 
     {:ok, 201, _headers, _resp} =
-      http_raw(:post, base_url <> "/api/routes/#{route_id}/destinations", auth_headers(token), body)
+      http_raw(
+        :post,
+        base_url <> "/api/routes/#{route_id}/destinations",
+        auth_headers(token),
+        body
+      )
 
     :ok
   end
@@ -236,7 +288,9 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
   end
 
   def tcp_free_port! do
-    {:ok, socket} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true])
+    {:ok, socket} =
+      :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true])
+
     {:ok, {_ip, port}} = :inet.sockname(socket)
     :ok = :gen_tcp.close(socket)
     port
@@ -249,6 +303,7 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
 
   def start_port!(exe, args) when is_binary(exe) and is_list(args) do
     exec = System.find_executable(exe) || raise "Executable not found: #{exe}"
+
     port =
       Port.open({:spawn_executable, String.to_charlist(exec)}, [
         :binary,
@@ -361,7 +416,8 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     end
   end
 
-  def await_exit_status!(%{port: port}, timeout_ms) when is_port(port) and is_integer(timeout_ms) do
+  def await_exit_status!(%{port: port}, timeout_ms)
+      when is_port(port) and is_integer(timeout_ms) do
     receive do
       {^port, {:exit_status, status}} -> status
     after
@@ -393,6 +449,7 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     {:ok, sock} = :gen_udp.open(port, [:binary, active: true, ip: {0, 0, 0, 0}])
     parent = self()
     pid = spawn_link(__MODULE__, :udp_counter_loop, [sock, 0, parent])
+    :ok = :gen_udp.controlling_process(sock, pid)
     %{pid: pid, sock: sock, port: port}
   end
 

@@ -1,4 +1,4 @@
-defmodule HydraSrt.E2E.SrtPipelineE2ETest do
+defmodule HydraSrt.E2E.StatsContractE2ETest do
   use ExUnit.Case, async: false
 
   alias HydraSrt.TestSupport.E2EHelpers
@@ -10,18 +10,18 @@ defmodule HydraSrt.E2E.SrtPipelineE2ETest do
     {:ok, base_url: E2EHelpers.base_url()}
   end
 
-  test "SRT basic: stream arrives at sink (validated via srt-live-transmit -> UDP forwarding)", %{
-    base_url: base_url
-  } do
+  test "stats payload contains fields required by graphs (source + per-destination throughput)",
+       %{
+         base_url: base_url
+       } do
     token = E2EHelpers.api_login!(base_url, "admin", "password123")
 
     source_port = E2EHelpers.tcp_free_port!()
-    sink_port = E2EHelpers.tcp_free_port!()
-    udp_dummy_port = E2EHelpers.udp_free_port!()
+    udp_dest_port = E2EHelpers.udp_free_port!()
 
     route_id =
       E2EHelpers.api_create_route!(base_url, token, %{
-        "name" => "e2e_srt_basic_ok",
+        "name" => "e2e_stats_contract",
         "exportStats" => false,
         "schema" => "SRT",
         "schema_options" => %{
@@ -38,28 +38,15 @@ defmodule HydraSrt.E2E.SrtPipelineE2ETest do
 
     :ok =
       E2EHelpers.api_create_destination!(base_url, token, route_id, %{
-        "schema" => "SRT",
+        "schema" => "UDP",
+        "name" => "udp_dest_e2e",
         "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => sink_port,
-          "mode" => "caller"
+          "host" => "127.0.0.1",
+          "port" => udp_dest_port
         }
       })
 
-    rx =
-      E2EHelpers.start_port_logged!(
-        "srt-live-transmit",
-        [
-          "-v",
-          "-stats",
-          "1000",
-          "-statspf",
-          "default",
-          "srt://:#{sink_port}?mode=listener",
-          "udp://127.0.0.1:#{udp_dummy_port}"
-        ],
-        "srt-live-transmit"
-      )
+    Phoenix.PubSub.subscribe(HydraSrt.PubSub, "stats:#{route_id}")
 
     :ok = E2EHelpers.api_start_route!(base_url, token, route_id)
     Process.sleep(750)
@@ -81,7 +68,7 @@ defmodule HydraSrt.E2E.SrtPipelineE2ETest do
           "-i",
           "sine=frequency=440:sample_rate=48000",
           "-t",
-          "6",
+          "5",
           "-c:v",
           "libx264",
           "-preset",
@@ -104,16 +91,25 @@ defmodule HydraSrt.E2E.SrtPipelineE2ETest do
           "mpegts",
           "srt://127.0.0.1:#{source_port}?mode=caller"
         ],
-        "ffmpeg"
+        "ffmpeg_stats_contract"
       )
 
-    on_exit(fn ->
-      E2EHelpers.kill_port(tx)
-      E2EHelpers.kill_port(rx)
-    end)
+    on_exit(fn -> E2EHelpers.kill_port(tx) end)
 
-    Process.sleep(6_000)
-    assert E2EHelpers.await_tag_exit_status("ffmpeg", 10_000) == 0
-    assert is_integer(E2EHelpers.await_srt_packets_received(100, 5_000))
+    # Wait for at least one stats frame, then assert required fields exist and have expected types.
+    assert_receive {:stats, stats}, 10_000
+
+    assert is_map(stats)
+    assert is_map(stats["source"])
+    assert is_number(stats["source"]["bytes_in_per_sec"])
+
+    assert is_list(stats["destinations"])
+    assert length(stats["destinations"]) >= 1
+
+    dest = hd(stats["destinations"])
+    assert is_binary(dest["id"])
+    assert is_binary(dest["schema"])
+    assert is_binary(dest["name"])
+    assert is_number(dest["bytes_out_per_sec"])
   end
 end

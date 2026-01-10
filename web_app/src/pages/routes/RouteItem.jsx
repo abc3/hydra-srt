@@ -12,7 +12,9 @@ import {
   Descriptions,
   Collapse,
   message,
-  Input
+  Input,
+  Tabs,
+  Statistic
 } from 'antd';
 import {
   PlayCircleOutlined,
@@ -44,14 +46,6 @@ import {
 
 const { Title, Text } = Typography;
 
-// Create socket instance
-const socket = new Socket(`${API_BASE_URL}/socket`, {
-  params: { token: getToken()?.replace('Bearer ', '') }
-});
-
-// Connect to the socket
-socket.connect();
-
 const RouteItem = () => {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -62,10 +56,19 @@ const RouteItem = () => {
   const [destinationFilter, setDestinationFilter] = useState('');
   const [stats, setStats] = useState(null);
   const [statsHistory, setStatsHistory] = useState([]);
+  const [activeStatsTab, setActiveStatsTab] = useState('overview');
 
   // Phoenix Channel connection
   useEffect(() => {
     if (!id) return;
+
+    // Create socket instance per-route to avoid module-level side effects (important for tests)
+    const socket = new Socket(`${API_BASE_URL}/socket`, {
+      params: { token: getToken()?.replace('Bearer ', '') }
+    });
+
+    // Connect to the socket
+    socket.connect();
 
     // Join the channel for this specific route
     const channel = socket.channel(`live:${id}`);
@@ -85,13 +88,18 @@ const RouteItem = () => {
       setStats(stats);
       // Add timestamp to stats for charts
       const timestamp = new Date().toLocaleTimeString();
-      setStatsHistory(prev => [...prev, { ...stats, timestamp }]);
+      setStatsHistory(prev => {
+        const next = [...prev, { ...stats, timestamp }];
+        const MAX_POINTS = 300;
+        return next.length > MAX_POINTS ? next.slice(next.length - MAX_POINTS) : next;
+      });
     });
 
     // Cleanup on component unmount
     return () => {
       channel.off("stats");
       channel.leave();
+      socket.disconnect();
       console.log("Channel cleanup completed");
     };
   }, [id, messageApi]);
@@ -324,7 +332,7 @@ const RouteItem = () => {
   const SrtSourceStats = () => {
     if (!stats || !statsHistory.length) {
       return (
-        <Card title="SRT Source Statistics" style={{ marginBottom: 24 }}>
+        <Card title="Route Statistics (Overview)" style={{ marginBottom: 24 }}>
           <div style={{ textAlign: 'center', padding: '20px' }}>
             <Text type="secondary">Waiting for statistics...</Text>
           </div>
@@ -340,8 +348,67 @@ const RouteItem = () => {
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
 
+    const getSourceBytesPerSec = (s) => {
+      const v = s?.source?.bytes_in_per_sec;
+      return typeof v === 'number' ? v : null;
+    };
+
+    const getDestinations = (s) => {
+      return Array.isArray(s?.destinations) ? s.destinations : [];
+    };
+
+    const getWorstDestBytesPerSec = (s) => {
+      const dests = getDestinations(s);
+      if (!dests.length) return null;
+
+      const rates = dests
+        .map(d => (typeof d?.bytes_out_per_sec === 'number' ? d.bytes_out_per_sec : null))
+        .filter(v => typeof v === 'number');
+      if (!rates.length) return null;
+
+      return Math.min(...rates);
+    };
+
+    const sourceBytesPerSec = getSourceBytesPerSec(stats);
+    const worstDestBytesPerSec = getWorstDestBytesPerSec(stats);
+
     return (
-      <Card title="SRT Source Statistics" style={{ marginBottom: 24 }}>
+      <Card title="Route Statistics (Overview)" style={{ marginBottom: 24 }}>
+        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+          <Col xs={24} sm={12} md={8}>
+            <Card type="inner" title="Source Bitrate">
+              <div data-testid="kpi-source-bitrate">
+                <Statistic
+                  value={sourceBytesPerSec != null ? (sourceBytesPerSec * 8) : null}
+                  precision={0}
+                  suffix="bps"
+                />
+              </div>
+              <Text type="secondary">From pipeline byte counter</Text>
+            </Card>
+          </Col>
+          <Col xs={24} sm={12} md={8}>
+            <Card type="inner" title="Connected Callers">
+              <div data-testid="kpi-connected-callers">
+                <Statistic value={stats['connected-callers'] ?? 0} />
+              </div>
+              <Text type="secondary">SRT source only</Text>
+            </Card>
+          </Col>
+          <Col xs={24} sm={12} md={8}>
+            <Card type="inner" title="Worst Destination Bitrate">
+              <div data-testid="kpi-worst-dest-bitrate">
+                <Statistic
+                  value={worstDestBytesPerSec != null ? (worstDestBytesPerSec * 8) : null}
+                  precision={0}
+                  suffix="bps"
+                />
+              </div>
+              <Text type="secondary">Lowest bytes/sec across destinations</Text>
+            </Card>
+          </Col>
+        </Row>
+
         <Row gutter={[16, 16]}>
           {/* <Col span={24}>
             <Card type="inner" title="Connected Callers">
@@ -357,7 +424,7 @@ const RouteItem = () => {
           </Col> */}
           
           <Col span={12}>
-            <Card type="inner" title="Total Bytes Received">
+            <Card type="inner" title="Source Throughput (bytes/sec)">
               <ResponsiveContainer width="100%" height={250}>
                 <AreaChart data={statsHistory}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -376,10 +443,10 @@ const RouteItem = () => {
                   />
                   <Area 
                     type="monotone" 
-                    dataKey="total-bytes-received" 
+                    dataKey="source.bytes_in_per_sec" 
                     stroke="#8884d8" 
                     fill="#8884d8" 
-                    name="Bytes Received"
+                    name="Bytes / sec"
                     isAnimationActive={false}
                     dot={false}
                   />
@@ -418,6 +485,239 @@ const RouteItem = () => {
           </Col>
         </Row>
       </Card>
+    );
+  };
+
+  const RouteStatisticsTab = () => {
+    if (!stats || !statsHistory.length) {
+      return (
+        <Card title="Statistics" style={{ marginBottom: 24 }}>
+          <div style={{ textAlign: 'center', padding: '20px' }}>
+            <Text type="secondary">Waiting for statistics...</Text>
+          </div>
+        </Card>
+      );
+    }
+
+    const formatBytes = (bytes) => {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    };
+
+    const pickFirstNumber = (obj, keys) => {
+      if (!obj) return null;
+      for (const k of keys) {
+        const v = obj?.[k];
+        if (typeof v === 'number') return v;
+      }
+      return null;
+    };
+
+    const rttKeys = ['rtt', 'rtt-ms', 'rtt_ms', 'srtt', 'srtt-ms', 'srtt_ms'];
+    const lossKeys = [
+      'pkt-recv-loss',
+      'pkt_recv_loss',
+      'packets-recv-lost',
+      'packets_recv_lost',
+      'pkt-snd-loss',
+      'pkt_snd_loss',
+    ];
+    const retransKeys = ['pkt-retrans', 'pkt_retrans', 'retrans', 'retransmissions'];
+
+    const sourceSrt = stats?.source?.srt;
+    const sourceRtt = pickFirstNumber(sourceSrt, rttKeys);
+    const sourceLoss = pickFirstNumber(sourceSrt, lossKeys);
+    const sourceRetrans = pickFirstNumber(sourceSrt, retransKeys);
+
+    const latestDestStats = Array.isArray(stats?.destinations) ? stats.destinations : [];
+    const latestDestById = latestDestStats.reduce((acc, d) => {
+      if (d?.id) acc[d.id] = d;
+      return acc;
+    }, {});
+
+    const destinationStatsColumns = [
+      {
+        title: 'Name',
+        dataIndex: 'name',
+        key: 'name',
+        render: (text, record) => (
+          <Space>
+            <a href={`#/routes/${id}/destinations/${record.id}/edit`}>{text}</a>
+          </Space>
+        ),
+      },
+      {
+        title: 'Schema',
+        dataIndex: 'schema',
+        key: 'schema',
+        render: (schema) => (
+          <Tag color={schema === 'SRT' ? 'blue' : schema === 'UDP' ? 'orange' : 'default'}>
+            {schema || 'N/A'}
+          </Tag>
+        ),
+      },
+      {
+        title: 'Type',
+        key: 'type',
+        render: (_, record) => {
+          const live = latestDestById[record.id];
+          return live?.type || 'N/A';
+        },
+      },
+      {
+        title: 'Live Bitrate',
+        key: 'live_bitrate',
+        render: (_, record) => {
+          const live = latestDestById[record.id];
+          const bps =
+            typeof live?.bytes_out_per_sec === 'number' ? Math.round(live.bytes_out_per_sec * 8) : null;
+          return bps != null ? `${bps} bps` : 'N/A';
+        },
+      },
+      {
+        title: 'Total Bytes',
+        key: 'total_bytes',
+        render: (_, record) => {
+          const live = latestDestById[record.id];
+          return typeof live?.bytes_out_total === 'number' ? formatBytes(live.bytes_out_total) : 'N/A';
+        },
+      },
+    ];
+
+    return (
+      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+        <Card title="Source" style={{ marginBottom: 0 }}>
+          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+            <Col xs={24} sm={12} md={8}>
+              <Card type="inner" title="RTT (if available)">
+                <Statistic value={sourceRtt != null ? sourceRtt : null} />
+                <Text type="secondary">Field name depends on SRT plugin</Text>
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={8}>
+              <Card type="inner" title="Loss (if available)">
+                <Statistic value={sourceLoss != null ? sourceLoss : null} />
+                <Text type="secondary">May be packets or %</Text>
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={8}>
+              <Card type="inner" title="Retrans (if available)">
+                <Statistic value={sourceRetrans != null ? sourceRetrans : null} />
+                <Text type="secondary">May be packets or rate</Text>
+              </Card>
+            </Col>
+          </Row>
+
+          <Card type="inner" title="Source Throughput (bytes/sec)">
+            <ResponsiveContainer width="100%" height={250}>
+              <AreaChart data={statsHistory}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="timestamp" interval="preserveStartEnd" minTickGap={50} />
+                <YAxis
+                  tickFormatter={(value) => formatBytes(value)}
+                  domain={['auto', 'auto']}
+                  padding={{ top: 20 }}
+                />
+                <Tooltip formatter={(value) => formatBytes(value)} />
+                <Area
+                  type="monotone"
+                  dataKey="source.bytes_in_per_sec"
+                  stroke="#8884d8"
+                  fill="#8884d8"
+                  name="Bytes / sec"
+                  isAnimationActive={false}
+                  dot={false}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </Card>
+        </Card>
+
+        <Card title="Destinations">
+          <Table
+            columns={destinationStatsColumns}
+            dataSource={filteredDestinations}
+            rowKey="id"
+            pagination={{ defaultPageSize: 10, showSizeChanger: true }}
+            scroll={{ x: true }}
+            expandable={{
+              expandedRowRender: (record) => {
+                const data = statsHistory.map((p) => {
+                  const dests = Array.isArray(p?.destinations) ? p.destinations : [];
+                  const live = dests.find((d) => d?.id === record.id);
+                  const bytesPerSec = typeof live?.bytes_out_per_sec === 'number' ? live.bytes_out_per_sec : null;
+                  return {
+                    timestamp: p.timestamp,
+                    bytes_out_per_sec: bytesPerSec,
+                  };
+                });
+
+                const latest = latestDestById[record.id];
+                const destSrt = latest?.srt;
+                const destRtt = pickFirstNumber(destSrt, rttKeys);
+                const destLoss = pickFirstNumber(destSrt, lossKeys);
+
+                return (
+                  <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                    <Card size="small" title="Throughput (bytes/sec)">
+                      <ResponsiveContainer width="100%" height={200}>
+                        <LineChart data={data}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="timestamp" interval="preserveStartEnd" minTickGap={50} />
+                          <YAxis tickFormatter={(value) => formatBytes(value)} />
+                          <Tooltip formatter={(value) => formatBytes(value)} />
+                          <Line
+                            type="monotone"
+                            dataKey="bytes_out_per_sec"
+                            stroke="#82ca9d"
+                            name="Bytes / sec"
+                            isAnimationActive={false}
+                            dot={false}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </Card>
+
+                    {record.schema === 'SRT' && (
+                      <Collapse
+                        items={[
+                          {
+                            key: 'srt',
+                            label: 'SRT QoS (if available)',
+                            children: (
+                              <Row gutter={[16, 16]}>
+                                <Col xs={24} sm={12} md={8}>
+                                  <Card size="small" title="RTT">
+                                    <Statistic value={destRtt != null ? destRtt : null} />
+                                  </Card>
+                                </Col>
+                                <Col xs={24} sm={12} md={8}>
+                                  <Card size="small" title="Loss">
+                                    <Statistic value={destLoss != null ? destLoss : null} />
+                                  </Card>
+                                </Col>
+                                <Col xs={24} sm={12} md={8}>
+                                  <Card size="small" title="SRT fields">
+                                    <Statistic value={destSrt ? Object.keys(destSrt).length : 0} />
+                                  </Card>
+                                </Col>
+                              </Row>
+                            ),
+                          },
+                        ]}
+                      />
+                    )}
+                  </Space>
+                );
+              },
+              rowExpandable: (record) => true,
+            }}
+          />
+        </Card>
+      </Space>
     );
   };
 
@@ -608,8 +908,29 @@ const RouteItem = () => {
         </Row>
       </Card>
 
-      {/* SRT Statistics */}
-      <SrtSourceStats />
+      <Tabs
+        activeKey={activeStatsTab}
+        onChange={setActiveStatsTab}
+        items={[
+          {
+            key: 'overview',
+            label: 'Overview',
+            children: (
+              <>
+                {/* SRT Statistics */}
+                <SrtSourceStats />
+              </>
+            )
+          },
+          {
+            key: 'statistics',
+            label: 'Statistics',
+            children: (
+              <RouteStatisticsTab />
+            )
+          }
+        ]}
+      />
 
       {/* Source Details */}
       <Card

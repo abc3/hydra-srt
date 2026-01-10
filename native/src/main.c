@@ -36,17 +36,24 @@
 int main(int argc, char* argv[])
 {
     setvbuf(stdout, NULL, _IONBF, 0);
-    char buffer[1024];
+    char buffer[8192];
 
     init_unix_socket("/tmp/hydra_unix_sock");
     atexit(cleanup_socket);
 
-    printf("Argument %d: %s\n", argc, argv[1]);
-    send_message_to_unix_socket("route_id:");
-    send_message_to_unix_socket(argv[1]);
+    if (argc > 1) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "route_id:%s", argv[1]);
+        send_message_to_unix_socket(msg);
+    } else {
+        printf("No route_id provided in arguments\n");
+    }
 
     printf("Waiting for JSON input...\n");
-    fgets(buffer, sizeof(buffer), stdin);
+    if (!fgets(buffer, sizeof(buffer), stdin)) {
+        printf("Failed to read JSON input\n");
+        return 1;
+    }
     printf("Received JSON: %s\n", buffer);
 
     cJSON* json = cJSON_Parse(buffer);
