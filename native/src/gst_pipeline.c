@@ -263,7 +263,11 @@ GstElement *create_pipeline(cJSON *json)
     g_print("Set do-timestamp=TRUE for source element\n");
 
     if (g_strcmp0(source_type->valuestring, "srtsrc") == 0) {
-        g_object_set(source, "authentication", TRUE, NULL);
+        // Only enable authentication when streamid is provided. Enabling it unconditionally
+        // causes some callers (e.g. ffmpeg) to be rejected when streamid is empty.
+        cJSON *streamid = cJSON_GetObjectItem(source_obj, "streamid");
+        gboolean auth = (cJSON_IsString(streamid) && streamid->valuestring && strlen(streamid->valuestring) > 0);
+        g_object_set(source, "authentication", auth, NULL);
         g_signal_connect(source, "caller-connecting", G_CALLBACK(on_caller_connecting), NULL);
     }
 
