@@ -51,12 +51,19 @@ test: $(TEST_EXEC)
 
 dummy_signal:
 	ffmpeg -re \
-		-f lavfi -i "testsrc=size=1280x720:rate=30" \
+		-f lavfi -i "testsrc2=size=1280x720:rate=30" \
 		-f lavfi -i "sine=frequency=440:sample_rate=48000" \
-		-c:v libx264 -preset veryfast -tune zerolatency -b:v 2000k \
-		-c:a aac -b:a 128k \
-		-f mpegts \
-		"srt://127.0.0.1:8000?mode=caller&streamid=test1"
+		-c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -profile:v baseline -g 60 \
+		-colorspace bt709 -color_primaries bt709 -color_trc bt709 \
+		-c:a aac -b:a 128k -ar 48000 -ac 2 \
+		-f mpegts "srt://127.0.0.1:8000?mode=listener&pkt_size=1316"
+
+dummy_gs:
+	gst-launch-1.0 -v \
+	srtsrc uri="srt://:8000?mode=listener&streamid=test1" ! \
+	queue ! \
+	udpsink host=224.0.0.3 port=1234 auto-multicast=true
+
 
 dummy_signal_with_pass:
 	ffmpeg -re \
