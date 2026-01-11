@@ -84,6 +84,8 @@ defmodule HydraSrt.UnixSockHandler do
     case Jason.decode(json) do
       {:ok, stats} ->
         try do
+          HydraSrt.StatsStore.put(data.route_id, stats)
+
           Phoenix.PubSub.broadcast(
             HydraSrt.PubSub,
             "stats:#{data.route_id}",

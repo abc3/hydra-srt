@@ -7,6 +7,8 @@ defmodule HydraSrt.Application do
   def start(_type, _args) do
     env = Application.get_env(:hydra_srt, :env, :prod)
 
+    :ok = HydraSrt.StatsStore.ensure_table()
+
     :ok =
       :gen_event.swap_sup_handler(
         :erl_signal_server,

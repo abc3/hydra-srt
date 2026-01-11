@@ -50,6 +50,8 @@ defmodule HydraSrtWeb.Router do
 
     get "/nodes", NodeController, :index
     get "/nodes/:id", NodeController, :show
+
+    get "/dashboard/summary", DashboardController, :summary
   end
 
   # TODO: improve this
