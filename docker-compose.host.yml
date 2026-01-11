@@ -1,0 +1,7 @@
+services:
+  hydra_srt:
+    # Linux-only: share the host network namespace (better for certain streaming/port scenarios).
+    # Note: Docker Desktop (macOS/Windows) does not support this mode in the same way.
+    network_mode: "host"
+    # With host networking enabled, port mappings are not used.
+    ports: []
