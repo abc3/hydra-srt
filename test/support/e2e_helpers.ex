@@ -12,44 +12,9 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     ensure_native_built!()
     ensure_api_auth_config!()
     ensure_cachex_started!()
-    ensure_khepri_started!()
+    ensure_repo_config_for_e2e!()
     ensure_app_started!()
-    ensure_app_started!()
-    :ok
-  end
-
-  def ensure_khepri_started! do
-    data_dir =
-      System.get_env("DATABASE_DATA_DIR") ||
-        Path.join(System.tmp_dir!(), "hydra_khepri_e2e_#{System.unique_integer([:positive])}")
-
-    System.put_env("DATABASE_DATA_DIR", data_dir)
-    File.mkdir_p!(data_dir)
-
-    case Application.ensure_all_started(:khepri) do
-      {:ok, _} -> :ok
-      other -> raise "Failed to start :khepri application for E2E: #{inspect(other)}"
-    end
-
-    case :khepri.start(data_dir) do
-      {:ok, _} -> :ok
-      {:error, {:already_started, _}} -> :ok
-      {:error, :already_started} -> :ok
-      other -> raise "Failed to start Khepri store for E2E: #{inspect(other)}"
-    end
-
-    wait_until(
-      fn ->
-        try do
-          match?({:ok, _}, :khepri.get_many("**"))
-        rescue
-          _ -> false
-        end
-      end,
-      5_000,
-      50
-    )
-
+    ensure_repo_migrated_for_e2e!()
     :ok
   end
 
@@ -73,32 +38,86 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
   end
 
   def ffmpeg_supports_srt_encryption? do
+    # Some ffmpeg/libsrt builds accept the passphrase options syntactically but
+    # fail only when an encrypted connection is actually attempted.
+    #
+    # Probe by doing a tiny loopback transfer over SRT with passphrase enabled.
+    # If either side exits non-zero, we consider encryption unsupported.
     port = tcp_free_port!()
+    sink_file = tmp_file!("ffmpeg_enc_probe_sink", "ts")
 
-    proc =
-      start_port_logged!(
+    rx =
+      start_port!(
         "ffmpeg",
         [
           "-hide_banner",
           "-loglevel",
           "error",
+          "-y",
           "-i",
-          "srt://:#{port}?mode=listener&passphrase=probe_pass&pbkeylen=16",
+          "srt://127.0.0.1:#{port}?mode=listener&passphrase=probe_pass&pbkeylen=16",
+          "-t",
+          "1",
+          "-c",
+          "copy",
           "-f",
-          "null",
-          "-"
-        ],
-        "ffmpeg_enc_probe"
+          "mpegts",
+          sink_file
+        ]
       )
 
-    case await_tag_exit_status("ffmpeg_enc_probe", 750) do
-      nil ->
-        kill_port(proc)
-        true
+    # Give listener a moment to bind.
+    Process.sleep(250)
 
-      _status ->
-        false
-    end
+    tx =
+      start_port!(
+        "ffmpeg",
+        [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-re",
+          "-f",
+          "lavfi",
+          "-i",
+          "testsrc2=size=320x240:rate=15",
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=frequency=440:sample_rate=48000",
+          "-t",
+          "1",
+          "-c:v",
+          "libx264",
+          "-preset",
+          "veryfast",
+          "-tune",
+          "zerolatency",
+          "-pix_fmt",
+          "yuv420p",
+          "-g",
+          "30",
+          "-c:a",
+          "aac",
+          "-b:a",
+          "96k",
+          "-ar",
+          "48000",
+          "-ac",
+          "2",
+          "-f",
+          "mpegts",
+          "srt://127.0.0.1:#{port}?mode=caller&passphrase=probe_pass&pbkeylen=16"
+        ]
+      )
+
+    tx_status = await_exit_status!(tx, 15_000)
+    rx_status = await_exit_status!(rx, 15_000)
+
+    if is_integer(tx_status) and tx_status != 0, do: kill_port(tx)
+    if is_integer(rx_status) and rx_status != 0, do: kill_port(rx)
+
+    tx_status == 0 and rx_status == 0
   end
 
   def ensure_native_built! do
@@ -135,6 +154,40 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
           other -> raise "Failed to start Cachex for E2E: #{inspect(other)}"
         end
     end
+  end
+
+  def ensure_repo_config_for_e2e! do
+    if System.get_env("E2E") == "true" do
+      db_path =
+        System.get_env("E2E_DATABASE_PATH") ||
+          Path.join(System.tmp_dir!(), "hydra_srt_e2e_#{System.unique_integer([:positive])}.db")
+
+      System.put_env("E2E_DATABASE_PATH", db_path)
+
+      current = Application.get_env(:hydra_srt, HydraSrt.Repo, [])
+
+      updated =
+        current
+        |> Keyword.put(:database, db_path)
+        |> Keyword.put(:pool, DBConnection.ConnectionPool)
+        |> Keyword.put(:pool_size, 5)
+
+      Application.put_env(:hydra_srt, HydraSrt.Repo, updated)
+    end
+
+    :ok
+  end
+
+  def ensure_repo_migrated_for_e2e! do
+    if System.get_env("E2E") == "true" do
+      migrations_path = Application.app_dir(:hydra_srt, "priv/repo/migrations")
+
+      Ecto.Migrator.with_repo(HydraSrt.Repo, fn repo ->
+        _ = Ecto.Migrator.run(repo, migrations_path, :up, all: true)
+      end)
+    end
+
+    :ok
   end
 
   def kill_all_pipelines! do

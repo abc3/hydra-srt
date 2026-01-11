@@ -18,6 +18,8 @@ defmodule HydraSrt.E2E.StatsContractE2ETest do
 
     source_port = E2EHelpers.tcp_free_port!()
     udp_dest_port = E2EHelpers.udp_free_port!()
+    udp_counter = E2EHelpers.start_udp_counter!(udp_dest_port)
+    on_exit(fn -> E2EHelpers.stop_udp_counter!(udp_counter) end)
 
     route_id =
       E2EHelpers.api_create_route!(base_url, token, %{

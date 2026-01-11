@@ -7,6 +7,41 @@ defmodule HydraSrt.Api do
   alias HydraSrt.Repo
 
   alias HydraSrt.Api.Route
+  alias HydraSrt.Api.Destination
+
+  @doc false
+  def list_routes(with_destinations) when with_destinations in [true, false] do
+    _ = with_destinations
+    Repo.all(Route)
+  end
+
+  @doc false
+  def get_route(id, with_destinations \\ false)
+      when is_binary(id) and with_destinations in [true, false] do
+    _ = with_destinations
+    Repo.get(Route, id)
+  end
+
+  @doc false
+  def list_destinations(route_id) when is_binary(route_id) do
+    from(d in Destination, where: d.route_id == ^route_id)
+    |> Repo.all()
+  end
+
+  @doc false
+  def get_destination(route_id, destination_id)
+      when is_binary(route_id) and is_binary(destination_id) do
+    from(d in Destination, where: d.id == ^destination_id and d.route_id == ^route_id)
+    |> Repo.one()
+  end
+
+  @doc false
+  def create_destination(route_id, attrs) when is_binary(route_id) and is_map(attrs) do
+    attrs
+    |> Map.put_new(:route_id, route_id)
+    |> Map.put_new("route_id", route_id)
+    |> create_destination()
+  end
 
   @doc """
   Returns the list of routes.
@@ -70,7 +105,7 @@ defmodule HydraSrt.Api do
   def update_route(%Route{} = route, attrs) do
     route
     |> Route.changeset(attrs)
-    |> Repo.update()
+    |> Repo.update(stale_error_field: :lock_version)
   end
 
   @doc """
@@ -101,8 +136,6 @@ defmodule HydraSrt.Api do
   def change_route(%Route{} = route, attrs \\ %{}) do
     Route.changeset(route, attrs)
   end
-
-  alias HydraSrt.Api.Destination
 
   @doc """
   Returns the list of destinations.
@@ -166,7 +199,7 @@ defmodule HydraSrt.Api do
   def update_destination(%Destination{} = destination, attrs) do
     destination
     |> Destination.changeset(attrs)
-    |> Repo.update()
+    |> Repo.update(stale_error_field: :lock_version)
   end
 
   @doc """

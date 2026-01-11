@@ -501,8 +501,8 @@ gboolean add_sink_to_pipeline(GstElement *pipeline, GstElement *tee, cJSON *sink
     if (strcmp(sink_type->valuestring, "srtsink") == 0) {
         g_object_set(sink_element, "async", FALSE, NULL);
         g_object_set(sink_element, "sync", FALSE, NULL);
-        g_object_set(sink_element, "wait-for-connection", FALSE, NULL);
-        g_print("Configured SRT sink with async=FALSE, sync=FALSE, wait-for-connection=FALSE\n");
+        g_object_set(sink_element, "wait-for-connection", TRUE, NULL);
+        g_print("Configured SRT sink with async=FALSE, sync=FALSE, wait-for-connection=TRUE\n");
     }
 
     gst_bin_add_many(GST_BIN(pipeline), queue, sink_element, NULL);

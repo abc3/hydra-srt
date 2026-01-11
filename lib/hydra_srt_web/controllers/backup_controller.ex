@@ -83,10 +83,10 @@ defmodule HydraSrtWeb.BackupController do
 
           now = DateTime.utc_now()
           formatted_time = Calendar.strftime(now, "%m-%d-%y-%H:%M:%S")
-          filename = "hydra-srt-#{formatted_time}.backup"
+          filename = "hydra-srt-#{formatted_time}.db"
 
           conn
-          |> put_resp_content_type("application/octet-stream")
+          |> put_resp_content_type("application/x-sqlite3")
           |> put_resp_header(
             "content-disposition",
             "attachment; filename=\"#{filename}\""

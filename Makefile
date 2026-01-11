@@ -37,7 +37,18 @@ dev_udp1:
 	ffmpeg -i "srt://127.0.0.1:4201?mode=caller" -f mpegts udp://239.0.0.1:1234?pkt_size=1316		
 
 docker_restart:
-	docker-compose down && docker-compose up -d
+	docker compose down && docker compose up -d
+
+.PHONY: docker_rebuild
+docker_rebuild:
+	docker compose down
+	docker compose build --no-cache
+	docker compose up -d
+
+.PHONY: docker_env
+docker_env:
+	@echo "DATABASE_PATH=/app/db/hydra_srt.db" > .env
+	@echo "Wrote .env (DATABASE_PATH=/app/db/hydra_srt.db)"
 
 docker_ssh:
 	docker compose exec hydra_srt bash

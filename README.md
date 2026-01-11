@@ -34,7 +34,7 @@ HydraSRT is structured into **three core layers**, each designed for efficiency,
 
 - **Manages streaming pipelines** and dynamic route configurations.
 - **Exposes a REST API** for frontend interaction.
-- **Uses [Khepri](https://rabbitmq.github.io/khepri/)** as a **persistent tree-based key-value store** for system state and configurations.
+- **Uses SQLite (Ecto + `ecto_sqlite3`)** as the **primary database** for system state and configurations.
 
 #### Cluster Mode
 
@@ -182,14 +182,14 @@ cd web_app && yarn dev
 
    ```bash
    # Start the application with interactive Elixir shell (recommended during early development)
-   API_AUTH_USERNAME=your_username API_AUTH_PASSWORD=your_password _build/prod/rel/hydra_srt/bin/hydra_srt start_iex
+   PHX_SERVER=true DATABASE_PATH=/etc/hydra_srt/hydra_srt.db API_AUTH_USERNAME=your_username API_AUTH_PASSWORD=your_password _build/prod/rel/hydra_srt/bin/hydra_srt start_iex
    ```
 
    Or in daemon mode (for stable production environments):
 
    ```bash
    # Start the application in the background
-   API_AUTH_USERNAME=your_username API_AUTH_PASSWORD=your_password _build/prod/rel/hydra_srt/bin/hydra_srt start
+   PHX_SERVER=true DATABASE_PATH=/etc/hydra_srt/hydra_srt.db API_AUTH_USERNAME=your_username API_AUTH_PASSWORD=your_password _build/prod/rel/hydra_srt/bin/hydra_srt start
    ```
 
 2. **Additional commands**:
@@ -230,7 +230,8 @@ Configure HydraSRT using the following environment variables:
 | `API_AUTH_PASSWORD`    | Password for API authentication         | (required)       |
 | `PORT`                 | HTTP port for the API server            | 4000             |
 | `RELEASE_COOKIE`       | Erlang distribution cookie              | (auto-generated) |
-| `DATABASE_DATA_DIR`    | Directory for Khepri database storage   | ./khepri#node()  |
+| `DATABASE_PATH`        | Path to SQLite database file            | (required)       |
+| `POOL_SIZE`            | DB pool size                            | 5                |
 | `VICTORIAMETRICS_HOST` | Host for VictoriaMetrics metrics export | (optional)       |
 | `VICTORIAMETRICS_PORT` | Port for VictoriaMetrics metrics export | (optional)       |
 
@@ -272,7 +273,15 @@ To run HydraSRT using Docker and Docker Compose, follow these steps:
    docker-compose up
    ```
 
-   This will start the application and all its dependencies in Docker containers.
+   This will start the application in Docker.
+   By default, `docker-compose.yml` uses `DATABASE_PATH=/app/db/hydra_srt.db` and mounts `./data/db` to persist the SQLite database file across restarts.
+
+   To override the DB path (and/or increase `POOL_SIZE`), create a `.env` file:
+
+   ```bash
+   echo "DATABASE_PATH=/app/db/hydra_srt.db" > .env
+   echo "POOL_SIZE=1" >> .env
+   ```
 
 3. **Access the Web UI**:
 

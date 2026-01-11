@@ -1,7 +1,7 @@
 defmodule HydraSrtWeb.RouteControllerTest do
   use HydraSrtWeb.ConnCase
 
-  import HydraSrt.DbFixtures
+  import HydraSrt.ApiFixtures
 
   @create_attrs %{
     "alias" => "some alias",
@@ -32,9 +32,6 @@ defmodule HydraSrtWeb.RouteControllerTest do
   }
 
   setup %{conn: conn} do
-    # Ensure clean slate for sequential tests if global cleanup fails
-    :khepri.delete_many("**")
-
     conn =
       conn
       |> put_req_header("accept", "application/json")
@@ -47,6 +44,12 @@ defmodule HydraSrtWeb.RouteControllerTest do
     test "lists all routes", %{conn: conn} do
       conn = get(conn, ~p"/api/routes")
       assert json_response(conn, 200)["data"] == []
+    end
+
+    test "rejects request without bearer token", %{conn: conn} do
+      conn = delete_req_header(conn, "authorization")
+      conn = get(conn, ~p"/api/routes")
+      assert json_response(conn, 403)["error"] in ["Unauthorized", "Authorization header missing"]
     end
   end
 
@@ -79,7 +82,7 @@ defmodule HydraSrtWeb.RouteControllerTest do
   describe "update route" do
     setup [:create_route]
 
-    test "renders route when data is valid", %{conn: conn, route: %{"id" => id}} do
+    test "renders route when data is valid", %{conn: conn, route: %{id: id}} do
       conn = put(conn, ~p"/api/routes/#{id}", route: @update_attrs)
       assert %{"id" => ^id} = json_response(conn, 200)["data"]
 
@@ -98,7 +101,7 @@ defmodule HydraSrtWeb.RouteControllerTest do
              } = json_response(conn, 200)["data"]
     end
 
-    test "renders errors when data is invalid", %{conn: conn, route: %{"id" => id}} do
+    test "renders errors when data is invalid", %{conn: conn, route: %{id: id}} do
       conn = put(conn, ~p"/api/routes/#{id}", route: @invalid_attrs)
       assert json_response(conn, 422)["errors"] != %{}
     end
@@ -107,7 +110,7 @@ defmodule HydraSrtWeb.RouteControllerTest do
   describe "delete route" do
     setup [:create_route]
 
-    test "deletes chosen route", %{conn: conn, route: %{"id" => id}} do
+    test "deletes chosen route", %{conn: conn, route: %{id: id}} do
       conn = delete(conn, ~p"/api/routes/#{id}")
       assert response(conn, 204)
 

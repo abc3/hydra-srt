@@ -19,6 +19,9 @@ defmodule HydraSrt.E2E.SrtPipelineE2ETest do
     sink_port = E2EHelpers.tcp_free_port!()
     udp_dummy_port = E2EHelpers.udp_free_port!()
 
+    udp_counter = E2EHelpers.start_udp_counter!(udp_dummy_port)
+    on_exit(fn -> E2EHelpers.stop_udp_counter!(udp_counter) end)
+
     route_id =
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_srt_basic_ok",
@@ -55,11 +58,14 @@ defmodule HydraSrt.E2E.SrtPipelineE2ETest do
           "1000",
           "-statspf",
           "default",
-          "srt://:#{sink_port}?mode=listener",
+          "srt://127.0.0.1:#{sink_port}?mode=listener",
           "udp://127.0.0.1:#{udp_dummy_port}"
         ],
         "srt-live-transmit"
       )
+
+    # Give srt-live-transmit a moment to bind and enter listen() before we start the pipeline.
+    Process.sleep(750)
 
     :ok = E2EHelpers.api_start_route!(base_url, token, route_id)
     Process.sleep(750)

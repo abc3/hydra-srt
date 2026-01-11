@@ -5,6 +5,8 @@ defmodule HydraSrt.Application do
 
   @impl true
   def start(_type, _args) do
+    env = Application.get_env(:hydra_srt, :env, :prod)
+
     :ok =
       :gen_event.swap_sup_handler(
         :erl_signal_server,
@@ -12,35 +14,37 @@ defmodule HydraSrt.Application do
         {HydraSrt.SignalHandler, []}
       )
 
-    khepri_data_dir = System.get_env("DATABASE_DATA_DIR", "#{File.cwd!()}/khepri##{node()}")
-    IO.puts("DEBUG: Khepri data dir: #{khepri_data_dir}")
-    start_result = :khepri.start(khepri_data_dir)
-    IO.puts("DEBUG: Khepri start result: #{inspect(start_result)}")
-    Logger.notice("Database directory: #{khepri_data_dir}")
-    Logger.notice("Starting database: #{inspect(start_result)}")
-
     :syn.add_node_to_scopes([:routes])
     runtime_schedulers = System.schedulers_online()
     Logger.info("Runtime schedulers: #{runtime_schedulers}")
 
-    {:ok, ranch_listener} =
-      :ranch.start_listener(
-        :hydra_unix_sock,
-        :ranch_tcp,
-        %{
-          max_connections: String.to_integer(System.get_env("MAX_CONNECTIONS") || "75000"),
-          num_acceptors: String.to_integer(System.get_env("NUM_ACCEPTORS") || "100"),
-          socket_opts: [
-            ip: {:local, "/tmp/hydra_unix_sock"},
-            port: 0,
-            keepalive: true
-          ]
-        },
-        HydraSrt.UnixSockHandler,
-        %{}
-      )
+    # The native pipeline connects to a UNIX domain socket for stats/telemetry.
+    # Unit tests don't need this listener, but E2E tests do (they run under MIX_ENV=test).
+    if env != :test or System.get_env("E2E") == "true" or System.get_env("E2E_UI") == "true" do
+      socket_path = "/tmp/hydra_unix_sock"
 
-    Logger.info("Ranch listener: #{inspect(ranch_listener)}")
+      # Best-effort cleanup in case a previous run crashed and left a stale socket file.
+      _ = File.rm(socket_path)
+
+      {:ok, ranch_listener} =
+        :ranch.start_listener(
+          :hydra_unix_sock,
+          :ranch_tcp,
+          %{
+            max_connections: String.to_integer(System.get_env("MAX_CONNECTIONS") || "75000"),
+            num_acceptors: String.to_integer(System.get_env("NUM_ACCEPTORS") || "100"),
+            socket_opts: [
+              ip: {:local, socket_path},
+              port: 0,
+              keepalive: true
+            ]
+          },
+          HydraSrt.UnixSockHandler,
+          %{}
+        )
+
+      Logger.info("Ranch listener: #{inspect(ranch_listener)}")
+    end
 
     children = [
       HydraSrt.ErlSysMon,

@@ -15,7 +15,6 @@ defmodule HydraSrt.ApiTest do
       status: nil,
       started_at: nil,
       source: nil,
-      destinations: nil,
       stopped_at: nil
     }
 
@@ -33,11 +32,13 @@ defmodule HydraSrt.ApiTest do
       valid_attrs = %{
         alias: "some alias",
         enabled: true,
+        exportStats: false,
         name: "some name",
+        schema: "UDP",
+        schema_options: %{},
         status: "some status",
         started_at: ~U[2025-02-18 14:51:00Z],
         source: %{},
-        destinations: %{},
         stopped_at: ~U[2025-02-18 14:51:00Z]
       }
 
@@ -48,7 +49,6 @@ defmodule HydraSrt.ApiTest do
       assert route.status == "some status"
       assert route.started_at == ~U[2025-02-18 14:51:00Z]
       assert route.source == %{}
-      assert route.destinations == %{}
       assert route.stopped_at == ~U[2025-02-18 14:51:00Z]
     end
 
@@ -62,11 +62,13 @@ defmodule HydraSrt.ApiTest do
       update_attrs = %{
         alias: "some updated alias",
         enabled: false,
+        exportStats: true,
         name: "some updated name",
+        schema: "SRT",
+        schema_options: %{"mode" => "listener"},
         status: "some updated status",
         started_at: ~U[2025-02-19 14:51:00Z],
         source: %{},
-        destinations: %{},
         stopped_at: ~U[2025-02-19 14:51:00Z]
       }
 
@@ -77,7 +79,6 @@ defmodule HydraSrt.ApiTest do
       assert route.status == "some updated status"
       assert route.started_at == ~U[2025-02-19 14:51:00Z]
       assert route.source == %{}
-      assert route.destinations == %{}
       assert route.stopped_at == ~U[2025-02-19 14:51:00Z]
     end
 
@@ -97,6 +98,17 @@ defmodule HydraSrt.ApiTest do
       route = route_fixture()
       assert %Ecto.Changeset{} = Api.change_route(route)
     end
+
+    test "update_route/2 detects concurrent updates (optimistic lock)" do
+      route = route_fixture()
+
+      r1 = Api.get_route!(route.id)
+      r2 = Api.get_route!(route.id)
+
+      assert {:ok, %Route{}} = Api.update_route(r1, %{status: "first"})
+      assert {:error, %Ecto.Changeset{} = changeset} = Api.update_route(r2, %{status: "second"})
+      assert {"is stale", _} = changeset.errors[:lock_version]
+    end
   end
 
   describe "destinations" do
@@ -105,10 +117,13 @@ defmodule HydraSrt.ApiTest do
     import HydraSrt.ApiFixtures
 
     @invalid_attrs %{
+      route_id: nil,
       alias: nil,
       enabled: nil,
       name: nil,
       status: nil,
+      schema: nil,
+      schema_options: nil,
       started_at: nil,
       stopped_at: nil
     }
@@ -124,11 +139,16 @@ defmodule HydraSrt.ApiTest do
     end
 
     test "create_destination/1 with valid data creates a destination" do
+      route = route_fixture()
+
       valid_attrs = %{
+        route_id: route.id,
         alias: "some alias",
         enabled: true,
         name: "some name",
         status: "some status",
+        schema: "UDP",
+        schema_options: %{"host" => "127.0.0.1", "port" => 5000},
         started_at: ~U[2025-02-19 16:24:00Z],
         stopped_at: ~U[2025-02-19 16:24:00Z]
       }
@@ -138,6 +158,8 @@ defmodule HydraSrt.ApiTest do
       assert destination.enabled == true
       assert destination.name == "some name"
       assert destination.status == "some status"
+      assert destination.schema == "UDP"
+      assert destination.schema_options == %{"host" => "127.0.0.1", "port" => 5000}
       assert destination.started_at == ~U[2025-02-19 16:24:00Z]
       assert destination.stopped_at == ~U[2025-02-19 16:24:00Z]
     end

@@ -47,6 +47,7 @@ async function main() {
   // Start Phoenix server in MIX_ENV=test with E2E_UI toggle
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydra_khepri_ui_e2e_'));
   fs.mkdirSync(dataDir, { recursive: true });
+  const unitDbPath = path.join(dataDir, 'hydra_srt_ui_e2e.db');
 
   const env = {
     ...process.env,
@@ -56,7 +57,13 @@ async function main() {
     E2E_PORT: String(port),
     PORT: String(port),
     DATABASE_DATA_DIR: dataDir,
+    // Ensure the Phoenix server and any pre-start tasks (ecto.create/migrate) share the same DB.
+    UNIT_DATABASE_PATH: unitDbPath,
   };
+
+  // Ensure DB exists + migrations are applied (MIX_ENV=test server does not run mix test aliases).
+  await run('mix', ['ecto.create', '--quiet'], { cwd: repoRoot, stdio: 'inherit', env });
+  await run('mix', ['ecto.migrate', '--quiet'], { cwd: repoRoot, stdio: 'inherit', env });
 
   const server = spawn('mix', ['phx.server'], { cwd: repoRoot, stdio: 'inherit', env });
 
