@@ -42,6 +42,14 @@ export const nodesApi = {
   },
 };
 
+// Dashboard API
+export const dashboardApi = {
+  getSummary: async () => {
+    const response = await authFetch('/api/dashboard/summary');
+    return response.json();
+  },
+};
+
 // Routes API
 export const routesApi = {
   // Get all routes
