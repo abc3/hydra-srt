@@ -1,12 +1,14 @@
 defmodule HydraSrtWeb.DestinationControllerTest do
   use HydraSrtWeb.ConnCase
 
-  import HydraSrt.DbFixtures
+  import HydraSrt.ApiFixtures
 
   @create_attrs %{
     "alias" => "some alias",
     "enabled" => true,
     "name" => "some name",
+    "schema" => "UDP",
+    "schema_options" => %{"host" => "127.0.0.1", "port" => 5000},
     "status" => "some status",
     "started_at" => ~U[2025-02-19 16:24:00Z],
     "stopped_at" => ~U[2025-02-19 16:24:00Z]
@@ -15,6 +17,8 @@ defmodule HydraSrtWeb.DestinationControllerTest do
     "alias" => "some updated alias",
     "enabled" => false,
     "name" => "some updated name",
+    "schema" => "UDP",
+    "schema_options" => %{"host" => "127.0.0.1", "port" => 5001},
     "status" => "some updated status",
     "started_at" => ~U[2025-02-20 16:24:00Z],
     "stopped_at" => ~U[2025-02-20 16:24:00Z]
@@ -23,6 +27,8 @@ defmodule HydraSrtWeb.DestinationControllerTest do
     "alias" => nil,
     "enabled" => nil,
     "name" => nil,
+    "schema" => nil,
+    "schema_options" => nil,
     "status" => nil,
     "started_at" => nil,
     "stopped_at" => nil
@@ -40,14 +46,14 @@ defmodule HydraSrtWeb.DestinationControllerTest do
   end
 
   describe "index" do
-    test "lists all destinations", %{conn: conn, route: %{"id" => route_id}} do
+    test "lists all destinations", %{conn: conn, route: %{id: route_id}} do
       conn = get(conn, ~p"/api/routes/#{route_id}/destinations")
       assert json_response(conn, 200)["data"] == []
     end
   end
 
   describe "create destination" do
-    test "renders destination when data is valid", %{conn: conn, route: %{"id" => route_id}} do
+    test "renders destination when data is valid", %{conn: conn, route: %{id: route_id}} do
       conn = post(conn, ~p"/api/routes/#{route_id}/destinations", destination: @create_attrs)
       assert %{"id" => id} = json_response(conn, 201)["data"]
 
@@ -64,7 +70,7 @@ defmodule HydraSrtWeb.DestinationControllerTest do
              } = json_response(conn, 200)["data"]
     end
 
-    test "renders errors when data is invalid", %{conn: conn, route: %{"id" => route_id}} do
+    test "renders errors when data is invalid", %{conn: conn, route: %{id: route_id}} do
       conn = post(conn, ~p"/api/routes/#{route_id}/destinations", destination: @invalid_attrs)
       assert json_response(conn, 422)["errors"] != %{}
     end
@@ -75,8 +81,8 @@ defmodule HydraSrtWeb.DestinationControllerTest do
 
     test "renders destination when data is valid", %{
       conn: conn,
-      route: %{"id" => route_id},
-      destination: %{"id" => dest_id}
+      route: %{id: route_id},
+      destination: %{id: dest_id}
     } do
       conn =
         put(conn, ~p"/api/routes/#{route_id}/destinations/#{dest_id}", destination: @update_attrs)
@@ -98,8 +104,8 @@ defmodule HydraSrtWeb.DestinationControllerTest do
 
     test "renders errors when data is invalid", %{
       conn: conn,
-      route: %{"id" => route_id},
-      destination: %{"id" => dest_id}
+      route: %{id: route_id},
+      destination: %{id: dest_id}
     } do
       conn =
         put(conn, ~p"/api/routes/#{route_id}/destinations/#{dest_id}",
@@ -115,8 +121,8 @@ defmodule HydraSrtWeb.DestinationControllerTest do
 
     test "deletes chosen destination", %{
       conn: conn,
-      route: %{"id" => route_id},
-      destination: %{"id" => dest_id}
+      route: %{id: route_id},
+      destination: %{id: dest_id}
     } do
       conn = delete(conn, ~p"/api/routes/#{route_id}/destinations/#{dest_id}")
       assert response(conn, 204)

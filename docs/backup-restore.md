@@ -41,7 +41,7 @@ The system provides two main functions:
 1. **User Initiates Restore**:
 
    - User navigates to the Settings page and clicks the "Select Backup File" button
-   - User selects a backup file (.backup extension) from their local system
+   - User selects a backup file (.db extension) from their local system
    - A confirmation dialog appears, warning about data replacement
 
 2. **User Confirms Restore**:
@@ -61,7 +61,7 @@ The system provides two main functions:
 ## Security Considerations
 
 1. **Authentication**: Only authenticated users can perform backup and restore operations
-2. **Data Integrity**: Backup files contain serialized Erlang terms that maintain data integrity
+2. **Data Integrity**: Backups are validated using SQLite `PRAGMA integrity_check` before applying
 3. **Secure Download**: Backup downloads use secure, time-limited, one-time-use links
 4. **Confirmation**: Restore operations require explicit user confirmation to prevent accidental data loss
 
@@ -75,10 +75,10 @@ The system provides two main functions:
    - `download_backup/2`: Verifies the session ID and serves the binary backup file
    - `restore/2`: Processes the uploaded backup file and restores the system
 
-2. **Database Module**: `HydraSrt.Db`
+2. **Backup Module**: `HydraSrt.Backup` (used via `HydraSrt.Db`)
 
-   - `backup/0`: Creates a binary backup of all system data
-   - `restore_backup/1`: Restores the system from a binary backup
+   - `backup_db_file/0`: Creates a consistent SQLite DB snapshot using online serialization (safe with WAL)
+   - `restore_db_file/1`: Validates and restores by swapping the DB file and restarting `HydraSrt.Repo`
 
 3. **Router Configuration**:
    - `/api/backup/create-backup-download-link`: Authenticated endpoint to get a download link
@@ -101,9 +101,9 @@ The system provides two main functions:
 
 ## Backup File Format
 
-The backup file is a binary file with the `.backup` extension containing serialized Erlang terms. The file represents the complete state of the Khepri database, including all routes, destinations, and system configuration.
+The backup file is a **SQLite database snapshot** with the `.db` extension.
 
-The filename format is: `hydra-srt-MM-DD-YY-HH:MM:SS.backup` where the timestamp represents the creation time.
+The filename format is: `hydra-srt-MM-DD-YY-HH:MM:SS.db` where the timestamp represents the creation time.
 
 ## Future Enhancements
 

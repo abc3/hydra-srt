@@ -43,10 +43,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install system dependencies (ffmpeg)
+    - name: Install system dependencies (ffmpeg, GStreamer, SRT, cJSON)
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg
+        sudo apt-get install -y ffmpeg pkg-config \
+          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+          gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+          libcjson-dev libsrt-openssl-dev
     - name: Set up Elixir
       uses: erlef/setup-beam@v1
       with:
@@ -62,6 +65,8 @@ jobs:
       run: mix deps.get
     - name: Compile dependencies
       run: mix deps.compile
+    - name: Build Native Pipeline
+      run: make -C native
 
     - uses: actions/setup-node@v4
       with:

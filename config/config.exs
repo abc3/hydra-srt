@@ -8,6 +8,7 @@
 import Config
 
 config :hydra_srt,
+  env: config_env(),
   ecto_repos: [HydraSrt.Repo],
   generators: [timestamp_type: :utc_datetime, binary_id: true]
 

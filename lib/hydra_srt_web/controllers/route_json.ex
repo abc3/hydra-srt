@@ -15,7 +15,8 @@ defmodule HydraSrtWeb.RouteJSON do
     %{data: data(route)}
   end
 
-  defp data(%Route{} = route) do
+  @doc false
+  def data(%Route{} = route) do
     %{
       id: route.id,
       enabled: route.enabled,
@@ -23,7 +24,7 @@ defmodule HydraSrtWeb.RouteJSON do
       alias: route.alias,
       status: route.status,
       source: route.source,
-      destinations: route.destinations,
+      destinations: route.destinations_legacy || [],
       started_at: route.started_at,
       stopped_at: route.stopped_at
     }

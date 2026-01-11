@@ -6,7 +6,17 @@ import Config
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
 config :hydra_srt, HydraSrt.Repo,
-  database: Path.expand("../hydra_srt_test.db", __DIR__),
+  # Use an isolated per-run SQLite DB file to prevent leaked state from previous runs
+  # (including E2E runs) from breaking unit tests.
+  #
+  # Note: `mix test` alias runs `ecto.create` and `ecto.migrate`, so a fresh DB path
+  # per run is safe and keeps the suite deterministic.
+  database:
+    System.get_env("UNIT_DATABASE_PATH") ||
+      Path.join(
+        System.tmp_dir!(),
+        "hydra_srt_unit_test_#{System.get_env("MIX_TEST_PARTITION") || "0"}_#{System.unique_integer([:positive])}.db"
+      ),
   pool_size: 5,
   pool: Ecto.Adapters.SQL.Sandbox
 

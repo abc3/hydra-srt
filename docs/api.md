@@ -175,7 +175,7 @@ The token is obtained by logging in and should be sent in the `Authorization` he
 ### Create Download Link (Binary Backup)
 
 *   **Endpoint:** `GET /api/backup/create-backup-download-link`
-*   **Description:** Generates a temporary link to download a full system backup (binary).
+*   **Description:** Generates a temporary link to download a full system backup (SQLite `.db` snapshot).
 
 ### Download Backup
 
@@ -183,10 +183,10 @@ The token is obtained by logging in and should be sent in the `Authorization` he
 *   **Description:** Downloads the JSON export (requires session ID from create link).
 
 *   **Endpoint:** `GET /backup/:session_id/download_backup`
-*   **Description:** Downloads the binary backup (requires session ID from create link).
+*   **Description:** Downloads the SQLite `.db` backup (requires session ID from create link).
 
 ### Restore Backup
 
 *   **Endpoint:** `POST /api/restore`
-*   **Description:** Restores system state from a binary backup file.
-*   **Payload:** Binary file content.
+*   **Description:** Restores system state from a SQLite `.db` backup snapshot.
+*   **Payload:** Raw SQLite DB file bytes.

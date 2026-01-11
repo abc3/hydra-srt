@@ -179,8 +179,10 @@ defmodule HydraSrt.RouteHandler do
     {:ok, []}
   end
 
-  defp build_srt_uri(opts) do
-    localaddress = Map.get(opts, "localaddress", "")
+  @doc false
+  def build_srt_uri(opts) when is_map(opts) do
+    mode = Map.get(opts, "mode")
+    localaddress = Map.get(opts, "localaddress", "127.0.0.1")
     localport = Map.get(opts, "localport")
 
     query_params =
@@ -190,15 +192,27 @@ defmodule HydraSrt.RouteHandler do
       |> maybe_add_param(opts, "pbkeylen")
       |> maybe_add_param(opts, "poll-timeout")
 
+    # Some clients (notably ffmpeg) reject `srt://:port?...` for listener mode,
+    # so we always include the host (usually from `localaddress`).
+    host =
+      case mode do
+        "listener" -> localaddress
+        _ -> localaddress
+      end
+
     URI.to_string(%URI{
       scheme: "srt",
-      host: localaddress,
+      host: host,
       port: localport,
       query: URI.encode_query(query_params)
     })
   end
 
-  defp maybe_add_param(params, opts, key) do
+  @doc false
+  def build_srt_uri(_), do: nil
+
+  @doc false
+  def maybe_add_param(params, opts, key) when is_map(params) and is_map(opts) do
     case Map.get(opts, key) do
       nil -> params
       "" -> params
@@ -209,102 +223,50 @@ defmodule HydraSrt.RouteHandler do
   def sink_from_record(%{"id" => id, "schema" => "SRT", "schema_options" => opts} = destination) do
     name = Map.get(destination, "name", id)
 
-    props = %{
-      "type" => "srtsink",
-      "uri" => build_srt_uri(opts),
-      "hydra_destination_id" => id,
-      "hydra_destination_name" => name,
-      "hydra_destination_schema" => "SRT"
-    }
-
-    remaining_props =
-      opts
-      |> Map.drop([
-        "localaddress",
-        "localport",
-        "mode",
-        "passphrase",
-        "pbkeylen",
-        "poll-timeout"
-      ])
-      |> Enum.filter(fn {key, _} ->
-        key in ["latency"]
-      end)
-      |> Enum.into(%{})
-
-    {:ok, Map.merge(props, remaining_props)}
+    # Native pipeline expects SRT properties directly on the element config (not a URI).
+    {:ok,
+     %{
+       "type" => "srtsink",
+       "uri" => build_srt_uri(opts),
+       "hydra_destination_id" => id,
+       "hydra_destination_name" => name,
+       "hydra_destination_schema" => "SRT"
+     }
+     |> Map.merge(opts)}
   end
 
   def sink_from_record(%{"id" => id, "schema" => "UDP", "schema_options" => opts} = destination) do
     name = Map.get(destination, "name", id)
 
-    {:ok, sink} =
-      create_sink("udpsink", opts, [
-        "host",
-        "port"
-      ])
+    # Native pipeline expects `address` and `port` (it maps `address` -> udpsink host property).
+    address = Map.get(opts, "address") || Map.get(opts, "host")
+    port = Map.get(opts, "port")
 
     {:ok,
-     Map.merge(sink, %{
+     %{
+       "type" => "udpsink",
+       "address" => address,
+       "host" => address,
+       "port" => port,
        "hydra_destination_id" => id,
        "hydra_destination_name" => name,
        "hydra_destination_schema" => "UDP"
-     })}
+     }}
   end
 
   def sink_from_record(_), do: {:error, :invalid_destination}
 
   def source_from_record(%{"schema" => "SRT", "schema_options" => opts}) do
-    props = %{
-      "type" => "srtsrc",
-      "uri" => build_srt_uri(opts)
-    }
-
-    remaining_props =
-      opts
-      |> Map.drop([
-        "localaddress",
-        "localport",
-        "mode",
-        "passphrase",
-        "pbkeylen",
-        "poll-timeout"
-      ])
-      |> Enum.filter(fn {key, _} ->
-        key in ["latency", "auto-reconnect", "keep-listening"]
-      end)
-      |> Enum.into(%{})
-
-    {:ok, Map.merge(props, remaining_props)}
+    # Native pipeline expects SRT properties directly on the element config (not a URI).
+    {:ok, %{"type" => "srtsrc", "uri" => build_srt_uri(opts)} |> Map.merge(opts)}
   end
 
   def source_from_record(%{"schema" => "UDP", "schema_options" => opts}) do
-    create_source("udpsrc", opts, [
-      "address",
-      "port",
-      "buffer-size",
-      "mtu"
-    ])
+    # Native pipeline expects `address` and `port` for udpsrc.
+    {:ok, %{"type" => "udpsrc"} |> Map.merge(opts)}
   end
 
   def source_from_record(_), do: {:error, :invalid_source}
-
-  # Helper Functions
-
-  defp create_source(type, opts, allowed_fields), do: build_properties(type, opts, allowed_fields)
-
-  defp create_sink(type, opts, allowed_fields), do: build_properties(type, opts, allowed_fields)
-
-  defp build_properties(type, opts, allowed_fields) do
-    props = %{"type" => type}
-
-    props =
-      opts
-      |> Enum.filter(fn {key, _} -> key in allowed_fields end)
-      |> Enum.into(props)
-
-    {:ok, props}
-  end
 
   def dummy_params do
     %{

@@ -11,7 +11,7 @@ import Config
 # - PHX_SERVER: Set to true to enable the server
 # - API_AUTH_USERNAME: Username for API authentication
 # - API_AUTH_PASSWORD: Password for API authentication
-# - DATABASE_DATA_DIR: Directory for Khepri database storage
+# - DATABASE_PATH: Path to the SQLite database file
 # - VICTORIAMETRICS_HOST: Host for VictoriaMetrics metrics export
 # - VICTORIAMETRICS_PORT: Port for VictoriaMetrics metrics export
 # - PORT: HTTP port for the API server
@@ -30,7 +30,7 @@ if System.get_env("PHX_SERVER") do
   config :hydra_srt, HydraSrtWeb.Endpoint, server: true
 end
 
-if config_env() != :test do
+if config_env() == :prod do
   export_metrics? =
     !!(System.get_env("VICTORIOMETRICS_HOST") && System.get_env("VICTORIOMETRICS_PORT"))
 
@@ -40,6 +40,17 @@ if config_env() != :test do
       System.get_env("API_AUTH_USERNAME") || raise("API_AUTH_USERNAME is not set"),
     api_auth_password:
       System.get_env("API_AUTH_PASSWORD") || raise("API_AUTH_PASSWORD is not set")
+
+  database_path =
+    System.get_env("DATABASE_PATH") ||
+      raise """
+      environment variable DATABASE_PATH is missing.
+      For example: /etc/hydra_srt/hydra_srt.db
+      """
+
+  config :hydra_srt, HydraSrt.Repo,
+    database: database_path,
+    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5")
 
   # database_path =
   #   System.get_env("DATABASE_PATH") ||

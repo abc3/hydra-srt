@@ -6,14 +6,9 @@ defmodule HydraSrtWeb.DestinationController do
   action_fallback HydraSrtWeb.FallbackController
 
   def index(conn, %{"route_id" => route_id}) do
-    {:ok, destinations} = Db.get_all_destinations(route_id)
-
-    destinations =
-      Enum.reduce(destinations, [], fn {["destinations", id], route}, acc ->
-        [Map.put(route, "id", id) | acc]
-      end)
-
-    data(conn, destinations)
+    with {:ok, destinations} <- Db.get_all_destinations(route_id) do
+      data(conn, destinations)
+    end
   end
 
   def create(conn, %{"destination" => dest_params, "route_id" => route_id}) do

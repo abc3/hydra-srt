@@ -34,6 +34,78 @@ function runProcess(cmd, args, tag) {
   return { proc: p, done, tag };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function startFfmpegDaemon(sourcePort) {
+  let stopping = false;
+  let currentProc = null;
+
+  const loop = async () => {
+    while (!stopping) {
+      console.log('[test] Starting ffmpeg daemon...');
+      const { proc, done } = runProcess(
+        'ffmpeg',
+        [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-re',
+          '-f',
+          'lavfi',
+          '-i',
+          'testsrc2=size=1280x720:rate=30',
+          '-f',
+          'lavfi',
+          '-i',
+          'sine=frequency=440:sample_rate=48000',
+          '-t',
+          '60', // Long enough to survive a few cycles if needed
+          '-c:v',
+          'libx264',
+          '-preset',
+          'veryfast',
+          '-tune',
+          'zerolatency',
+          '-pix_fmt',
+          'yuv420p',
+          '-g',
+          '60',
+          '-c:a',
+          'aac',
+          '-b:a',
+          '128k',
+          '-ar',
+          '48000',
+          '-ac',
+          '2',
+          '-f',
+          'mpegts',
+          // conntimeout=2000: fail relatively fast if listener isn't ready, so we can restart.
+          `srt://127.0.0.1:${sourcePort}?mode=caller&conntimeout=2000&pkt_size=1316`,
+        ],
+        'ffmpeg-daemon',
+      );
+      currentProc = proc;
+
+      const code = await done;
+      if (stopping) break;
+      console.log(`[test] ffmpeg exited with code ${code}. Restarting in 500ms...`);
+      await sleep(500);
+    }
+  };
+
+  loop();
+
+  return () => {
+    stopping = true;
+    if (currentProc) {
+      currentProc.kill();
+    }
+  };
+}
+
 async function apiJson(request, url, token, body) {
   const resp = await request.post(url, {
     headers: {
@@ -62,7 +134,8 @@ test('route Overview/Statistics show live throughput (full-stack)', async ({ pag
   const token = await page.evaluate(() => window.localStorage.getItem('token'));
   expect(token).toBeTruthy();
 
-  const sourcePort = await freeTcpPort();
+  // SRT uses UDP, so we must choose a UDP-free port (a TCP-free port can still be occupied for UDP).
+  const sourcePort = await freeUdpPort();
   const udpDestPort = await freeUdpPort();
 
   // Create route + UDP destination via API (so native pipeline has at least one sink that always counts bytes)
@@ -101,65 +174,31 @@ test('route Overview/Statistics show live throughput (full-stack)', async ({ pag
   });
   expect(startResp.ok()).toBeTruthy();
 
-  // Feed the SRT listener with a short ffmpeg sender
-  const ffmpeg = runProcess(
-    'ffmpeg',
-    [
-      '-hide_banner',
-      '-loglevel',
-      'error',
-      '-re',
-      '-f',
-      'lavfi',
-      '-i',
-      'testsrc2=size=1280x720:rate=30',
-      '-f',
-      'lavfi',
-      '-i',
-      'sine=frequency=440:sample_rate=48000',
-      '-t',
-      '6',
-      '-c:v',
-      'libx264',
-      '-preset',
-      'veryfast',
-      '-tune',
-      'zerolatency',
-      '-pix_fmt',
-      'yuv420p',
-      '-g',
-      '60',
-      '-c:a',
-      'aac',
-      '-b:a',
-      '128k',
-      '-ar',
-      '48000',
-      '-ac',
-      '2',
-      '-f',
-      'mpegts',
-      `srt://127.0.0.1:${sourcePort}?mode=caller`,
-    ],
-    'ffmpeg',
-  );
+  // Feed the SRT listener with a persistent ffmpeg sender daemon.
+  // This handles cases where the listener is slow to start or UDP ports collide briefly.
+  const stopFfmpeg = startFfmpegDaemon(sourcePort);
 
-  // Open the route page and wait for KPIs to populate
-  await page.goto(`${baseURL}/#/routes/${routeId}`);
+  try {
+    // Open the route page and wait for KPIs to populate
+    await page.goto(`${baseURL}/#/routes/${routeId}`);
 
-  const sourceKpi = page.getByTestId('kpi-source-bitrate');
-  const worstDestKpi = page.getByTestId('kpi-worst-dest-bitrate');
+    const sourceKpi = page.getByTestId('kpi-source-bitrate');
+    const worstDestKpi = page.getByTestId('kpi-worst-dest-bitrate');
 
-  await expect(sourceKpi).toContainText(/\d[\d,]*\s*bps/);
-  await expect(worstDestKpi).toContainText(/\d[\d,]*\s*bps/);
+    // Ensure the route page actually loaded (otherwise missing KPIs is hard to diagnose).
+    await expect(sourceKpi).toBeVisible();
+    await expect(worstDestKpi).toBeVisible();
 
-  // Switch to Statistics and ensure we see a live bitrate cell (not N/A)
-  await page.getByRole('tab', { name: 'Statistics' }).click();
-  await expect(page.locator('text=/\\d[\\d,]*\\s+bps/')).toBeVisible();
+    await expect(sourceKpi).toContainText(/\d[\d,]*\s*bps/);
+    await expect(worstDestKpi).toContainText(/\d[\d,]*\s*bps/);
 
-  // Ensure ffmpeg finishes cleanly
-  const code = await ffmpeg.done;
-  expect(code).toBe(0);
+    // Switch to Statistics and ensure we see a live bitrate cell (not N/A)
+    await page.getByRole('tab', { name: 'Statistics' }).click();
+    await expect(page.locator('text=/\\d[\\d,]*\\s+bps/')).toBeVisible();
+  } finally {
+    // Ensure ffmpeg stops
+    stopFfmpeg();
+  }
 
   // Stop + delete route (best-effort cleanup)
   await request.get(`${baseURL}/api/routes/${routeId}/stop`, {
