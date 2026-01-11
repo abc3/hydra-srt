@@ -264,16 +264,18 @@ To run HydraSRT using Docker and Docker Compose, follow these steps:
 1. **Build the Docker image**:
 
    ```bash
-   docker-compose build
+   docker compose build
    ```
 
 2. **Start the application**:
 
    ```bash
-   docker-compose up
+   docker compose up
    ```
 
    This will start the application in Docker.
+   On first start (fresh `./data/db` volume), the container will automatically run DB migrations.
+   To disable auto-migrations, set `RUN_MIGRATIONS=false`.
    By default, `docker-compose.yml` uses `DATABASE_PATH=/app/db/hydra_srt.db` and mounts `./data/db` to persist the SQLite database file across restarts.
 
    To override the DB path (and/or increase `POOL_SIZE`), create a `.env` file:
@@ -298,10 +300,35 @@ To run HydraSRT using Docker and Docker Compose, follow these steps:
    To stop the application and remove the containers, run:
 
    ```bash
-   docker-compose down
+   docker compose down
    ```
 
 ### Network Mode: Host
+
+HydraSRT supports two Docker networking modes:
+
+- **Default (recommended / portable)**: normal bridge networking with explicit port mappings (works on Linux + Docker Desktop).
+- **Host network (Linux-only)**: share the host network namespace (useful for certain high-performance or port-binding scenarios).
+
+#### Default mode (portable)
+
+```bash
+docker compose up --build
+```
+
+The Web UI will be available at:
+
+```
+http://127.0.0.1:4000
+```
+
+#### Host network mode (Linux-only)
+
+Docker Desktop (macOS/Windows) does not support Linux-style `network_mode: "host"` in the same way, so this mode is intended for Linux hosts only.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.host.yml up --build
+```
 
 When using Docker Compose, setting `network_mode: "host"` allows the container to share the host's networking namespace. This means:
 

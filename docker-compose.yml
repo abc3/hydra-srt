@@ -1,10 +1,13 @@
 services:
   hydra_srt:
-    network_mode: "host"
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Docker Desktop (macOS/Windows) does not support Linux-style host networking.
+    # Use the default bridge network with explicit port mappings for portability.
+    ports:
+      - "4000:4000"
     environment:
       - NODE_IP=127.0.0.1
       - RELEASE_COOKIE="Vt8gXnEI2zRH4l3eqUEBrcGQ22mHSj73CgkYm02u"
