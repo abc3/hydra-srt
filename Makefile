@@ -18,23 +18,23 @@ clean:
 	rm -rf _build && rm -rf deps
 
 dev_udp0:
-	ffmpeg -f lavfi -re -i smptebars=duration=6000:size=1280x720:rate=25 -f lavfi -re -i sine=frequency=1000:duration=6000:sample_rate=44100 \
+	ffmpeg -hide_banner -f lavfi -re -i smptebars=duration=6000:size=1280x720:rate=25 -f lavfi -re -i sine=frequency=1000:duration=6000:sample_rate=44100 \
 	-pix_fmt yuv420p -c:v libx264 -b:v 1000k -g 25 -keyint_min 100 -profile:v baseline -preset veryfast \
 	-f mpegts "udp://224.0.0.3:1234?pkt_size=1316"
 
 dev_udp:
-	ffmpeg -f lavfi -re -i smptebars=duration=6000:size=1280x720:rate=25 -f lavfi -re -i sine=frequency=1000:duration=6000:sample_rate=44100 \
+	ffmpeg -hide_banner -f lavfi -re -i smptebars=duration=6000:size=1280x720:rate=25 -f lavfi -re -i sine=frequency=1000:duration=6000:sample_rate=44100 \
 	-pix_fmt yuv420p -c:v libx264 -b:v 1000k -g 25 -keyint_min 100 -profile:v baseline -preset veryfast \
-	-f mpegts "srt://127.0.0.1:4201?mode=listener"	
+	-f mpegts "srt://127.0.0.1:4201?mode=caller"	
 
 dev_play:
 	ffplay udp://127.0.0.1:1234
 
 dev_play1:
-	srt-live-transmit "srt://127.0.0.1:4201?mode=listener" udp://:1234 -v -statspf default -stats 1000
+	srt-live-transmit "srt://127.0.0.1:4210?mode=listener" udp://:1234 -v -statspf default -stats 1000
 
 dev_udp1:
-	ffmpeg -i "srt://127.0.0.1:4201?mode=caller" -f mpegts udp://239.0.0.1:1234?pkt_size=1316		
+	ffmpeg -hide_banner -i "srt://127.0.0.1:4201?mode=caller" -f mpegts udp://239.0.0.1:1234?pkt_size=1316		
 
 docker_restart:
 	docker compose down && docker compose up -d
