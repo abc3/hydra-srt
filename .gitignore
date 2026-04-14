@@ -56,3 +56,4 @@ priv/static/index.html
 hydra_srt_analytics.*
 
 .playwright*
+/priv/static/
