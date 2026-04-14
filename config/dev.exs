@@ -1,5 +1,9 @@
 import Config
 
+config :hydra_srt,
+  api_auth_username: System.get_env("API_AUTH_USERNAME", "admin"),
+  api_auth_password: System.get_env("API_AUTH_PASSWORD", "admin")
+
 # Configure your database
 config :hydra_srt, HydraSrt.Repo,
   database: Path.expand("../hydra_srt_dev.db", __DIR__),
