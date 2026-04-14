@@ -1,3 +1,8 @@
+ERL_AFLAGS = +zdbbl 2097150
+
+user ?= admin
+pass ?= password123
+
 help:
 	@make -qpRr | egrep -e '^[a-z].*:$$' | sed -e 's~:~~g' | sort
 
@@ -7,8 +12,8 @@ dev:
 	VAULT_ENC_KEY="12345678901234567890123456789012" \
 	API_JWT_SECRET=dev \
 	METRICS_JWT_SECRET=dev \
-	API_AUTH_USERNAME=admin \
-	API_AUTH_PASSWORD=password123 \
+	API_AUTH_USERNAME=${user} \
+	API_AUTH_PASSWORD=${pass} \
 	ANALYTICS_DATABASE_PATH=./hydra_srt_analytics.duckdb \
 	DEMO_DATA=true \
 	ERL_AFLAGS="-kernel shell_history enabled +zdbbl 2097151" \
