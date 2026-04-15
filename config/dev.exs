@@ -23,6 +23,10 @@ config :hydra_srt, HydraSrtWeb.Endpoint,
   secret_key_base: "9re8gLwrcmLnNcUbxe8xgKSCNfm8gIpgoBBiCXhV0dVfJMB8DVFB3QQJwOye0iIo",
   watchers: []
 
+config :hydra_srt,
+  api_auth_username: System.get_env("API_AUTH_USERNAME") || "admin",
+  api_auth_password: System.get_env("API_AUTH_PASSWORD") || "password123"
+
 # ## SSL Support
 #
 # In order to use HTTPS in development, a self-signed
