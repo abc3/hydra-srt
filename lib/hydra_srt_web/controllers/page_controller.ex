@@ -7,10 +7,6 @@ defmodule HydraSrtWeb.PageController do
     |> halt()
   end
 
-  def index(conn, %{"path" => _path}) do
-    serve_index_html(conn)
-  end
-
   def index(conn, _params) do
     serve_index_html(conn)
   end
