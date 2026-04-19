@@ -135,7 +135,7 @@ defmodule HydraSrt.RouteHandler do
   defp send_initial_command(port, route_id) do
     with {:ok, params} <- route_data_to_params(route_id),
          {:ok, params} <- Jason.encode(params),
-         true <- Port.command(port, params <> "\n") do
+         :ok <- command_port(port, params <> "\n") do
       Logger.info("RouteHandler: sent initial command")
       :ok
     else
@@ -144,6 +144,22 @@ defmodule HydraSrt.RouteHandler do
         {:error, error}
     end
   end
+
+  defp command_port(port, payload) when is_port(port) and is_binary(payload) do
+    case Port.info(port) do
+      nil ->
+        {:error, :closed}
+
+      _info ->
+        try do
+          if Port.command(port, payload), do: :ok, else: {:error, :command_failed}
+        rescue
+          ArgumentError -> {:error, :closed}
+        end
+    end
+  end
+
+  defp command_port(_port, _payload), do: {:error, :invalid_port}
 
   defp close_port(port) do
     try do

@@ -135,7 +135,10 @@ fn add_sink_to_pipeline(
     pipeline
         .add_many([&queue, &sink_element])
         .context("failed to add sink elements to pipeline")?;
-    gst::Element::link_many([tee, &queue, &sink_element]).context("failed to link sink branch")?;
+    link_tee_branch(tee, &queue).context("failed to link tee to queue")?;
+    queue
+        .link(&sink_element)
+        .context("failed to link queue to sink")?;
 
     let metrics = Arc::new(DestMetrics {
         id: sink_config
@@ -180,10 +183,142 @@ fn add_sink_to_pipeline(
     Ok(())
 }
 
+fn link_tee_branch(tee: &gst::Element, queue: &gst::Element) -> Result<()> {
+    let tee_src_pad = tee
+        .request_pad_simple("src_%u")
+        .ok_or_else(|| anyhow!("failed to request tee src pad"))?;
+    let queue_sink_pad = queue
+        .static_pad("sink")
+        .ok_or_else(|| anyhow!("queue has no sink pad"))?;
+
+    tee_src_pad
+        .link(&queue_sink_pad)
+        .map(|_| ())
+        .map_err(|err| anyhow!("failed to link tee request pad: {err:?}"))?;
+
+    Ok(())
+}
+
 fn strip_internal_props(config: &ElementConfig) -> ElementConfig {
     let mut sanitized = config.clone();
     sanitized
         .props
         .retain(|key, _| !key.starts_with("hydra_"));
     sanitized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ElementConfig, PipelineConfig};
+    use crate::output::{StatsWriter, StdoutWriter};
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+
+    fn init_gst() {
+        let _ = gst::init();
+    }
+
+    #[test]
+    fn builds_pipeline_with_multiple_tee_branches() {
+        init_gst();
+
+        let config = PipelineConfig {
+            source: ElementConfig {
+                element_type: "fakesrc".to_string(),
+                props: BTreeMap::new(),
+            },
+            sinks: vec![
+                ElementConfig {
+                    element_type: "fakesink".to_string(),
+                    props: BTreeMap::from([("sync".to_string(), Value::Bool(false))]),
+                },
+                ElementConfig {
+                    element_type: "fakesink".to_string(),
+                    props: BTreeMap::from([("sync".to_string(), Value::Bool(false))]),
+                },
+            ],
+        };
+
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(StdoutWriter::new())));
+
+        let runtime = build_pipeline(config, writer).expect("pipeline should build");
+        assert_eq!(runtime.dest_metrics.lock().expect("metrics lock").len(), 2);
+    }
+
+    #[test]
+    fn tracks_metrics_for_mixed_sink_types() {
+        init_gst();
+
+        let config = PipelineConfig {
+            source: ElementConfig {
+                element_type: "fakesrc".to_string(),
+                props: BTreeMap::new(),
+            },
+            sinks: vec![
+                ElementConfig {
+                    element_type: "udpsink".to_string(),
+                    props: BTreeMap::from([
+                        ("address".to_string(), Value::String("127.0.0.1".to_string())),
+                        ("port".to_string(), Value::Number(4100_u64.into())),
+                        (
+                            "hydra_destination_id".to_string(),
+                            Value::String("udp_dest".to_string()),
+                        ),
+                        (
+                            "hydra_destination_name".to_string(),
+                            Value::String("UDP Dest".to_string()),
+                        ),
+                        (
+                            "hydra_destination_schema".to_string(),
+                            Value::String("UDP".to_string()),
+                        ),
+                    ]),
+                },
+                ElementConfig {
+                    element_type: "srtsink".to_string(),
+                    props: BTreeMap::from([
+                        ("localaddress".to_string(), Value::String("127.0.0.1".to_string())),
+                        ("localport".to_string(), Value::Number(4200_u64.into())),
+                        ("mode".to_string(), Value::String("caller".to_string())),
+                        (
+                            "hydra_destination_id".to_string(),
+                            Value::String("srt_dest".to_string()),
+                        ),
+                        (
+                            "hydra_destination_name".to_string(),
+                            Value::String("SRT Dest".to_string()),
+                        ),
+                        (
+                            "hydra_destination_schema".to_string(),
+                            Value::String("SRT".to_string()),
+                        ),
+                    ]),
+                },
+            ],
+        };
+
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(StdoutWriter::new())));
+
+        let runtime = build_pipeline(config, writer).expect("pipeline should build");
+        let metrics = runtime.dest_metrics.lock().expect("metrics lock");
+
+        assert_eq!(metrics.len(), 2);
+
+        let udp_metrics = metrics
+            .iter()
+            .find(|metric| metric.id.as_deref() == Some("udp_dest"))
+            .expect("udp metrics present");
+        assert_eq!(udp_metrics.kind, "udpsink");
+        assert!(udp_metrics.sink_element.is_none());
+
+        let srt_metrics = metrics
+            .iter()
+            .find(|metric| metric.id.as_deref() == Some("srt_dest"))
+            .expect("srt metrics present");
+        assert_eq!(srt_metrics.kind, "srtsink");
+        assert!(srt_metrics.sink_element.is_some());
+    }
 }
