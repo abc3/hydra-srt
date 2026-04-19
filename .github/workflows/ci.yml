@@ -22,6 +22,45 @@ jobs:
     - name: Run tests
       run: make test -C native
 
+  rs_native_e2e_test:
+    name: Rust Native E2E Tests
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+      NATIVE_E2E: true
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install native dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg pkg-config \
+          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+          gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+          libsrt-openssl-dev
+    - name: Set up Elixir
+      uses: erlef/setup-beam@v1
+      with:
+        elixir-version: '1.18.4'
+        otp-version: '27.3'
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Elixir dependencies
+      uses: actions/cache@v3
+      with:
+        path: deps
+        key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+        restore-keys: ${{ runner.os }}-mix-
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: rs-native
+    - name: Install Elixir dependencies
+      run: mix deps.get
+    - name: Compile Elixir dependencies
+      run: mix deps.compile
+    - name: Run rs-native E2E tests
+      run: make test_rs_native_e2e
+
   js_unit_test:
     name: JS Unit Tests
     runs-on: ubuntu-latest

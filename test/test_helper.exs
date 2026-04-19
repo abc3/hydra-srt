@@ -23,9 +23,31 @@ case System.get_env("TEST_TIMEOUT") do
     end
 end
 
-# Unless explicitly running E2E, exclude E2E-tagged tests from the unit suite.
-if System.get_env("E2E") != "true" do
-  ExUnit.configure(exclude: [e2e: true])
+if System.get_env("NATIVE_E2E") == "true" do
+  "test/native_e2e/support/*.ex"
+  |> Path.wildcard()
+  |> Enum.sort()
+  |> Enum.each(&Code.require_file/1)
+end
+
+excludes = []
+
+excludes =
+  if System.get_env("E2E") != "true" do
+    [e2e: true] ++ excludes
+  else
+    excludes
+  end
+
+excludes =
+  if System.get_env("NATIVE_E2E") != "true" do
+    [native_e2e: true] ++ excludes
+  else
+    excludes
+  end
+
+if excludes != [] do
+  ExUnit.configure(exclude: excludes)
 end
 
 if System.get_env("E2E") != "true" do
