@@ -132,8 +132,25 @@ const RouteItem = () => {
   const fetchRouteData = async () => {
     try {
       const result = await routesApi.getById(id);
-      setRouteData(result.data);
-      console.log("Route data:", result.data);
+      const route = result.data;
+      setRouteData(route);
+
+      if (route?.stats && !stats) {
+        setStats(route.stats);
+      }
+
+      if (Array.isArray(route?.stats_history) && route.stats_history.length > 0) {
+        setStatsHistory(
+          route.stats_history.map((entry) => ({
+            ...(entry?.stats || {}),
+            timestamp: entry?.inserted_at
+              ? new Date(entry.inserted_at).toLocaleTimeString()
+              : '',
+          }))
+        );
+      }
+
+      console.log("Route data:", route);
     } catch (error) {
       messageApi.error(`Failed to fetch route data: ${error.message}`);
       console.error('Error:', error);

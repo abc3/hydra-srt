@@ -7,6 +7,8 @@ defmodule HydraSrt.Db do
   alias HydraSrt.Api
   alias HydraSrt.Api.Route
   alias HydraSrt.Api.Destination
+  alias HydraSrt.StatsHistory
+  alias HydraSrt.StatsStore
 
   @spec create_route(map, binary | nil) :: {:ok, map} | {:error, any}
   def create_route(data, id \\ nil) when is_map(data) do
@@ -38,7 +40,12 @@ defmodule HydraSrt.Db do
             []
           end
 
-        {:ok, route_to_map(route, include_dest?, destinations)}
+        route_map =
+          route
+          |> route_to_map(include_dest?, destinations)
+          |> maybe_put_stats(id, include_dest?)
+
+        {:ok, route_map}
     end
   end
 
@@ -229,6 +236,36 @@ defmodule HydraSrt.Db do
       "created_at" => destination.inserted_at,
       "updated_at" => destination.updated_at
     }
+  end
+
+  defp maybe_put_stats(route_map, _route_id, false), do: route_map
+
+  defp maybe_put_stats(route_map, route_id, true) do
+    latest_stats =
+      case StatsStore.get(route_id) do
+        {:ok, %{stats: stats}} when is_map(stats) ->
+          stats
+
+        _ ->
+          case StatsHistory.get_latest_snapshot(route_id) do
+            %{stats: stats} when is_map(stats) -> stats
+            _ -> nil
+          end
+      end
+
+    stats_history =
+      StatsHistory.list_recent_snapshots(route_id)
+      |> Enum.map(fn snapshot ->
+        %{
+          "id" => snapshot.id,
+          "inserted_at" => snapshot.inserted_at,
+          "stats" => snapshot.stats
+        }
+      end)
+
+    route_map
+    |> Map.put("stats", latest_stats)
+    |> Map.put("stats_history", stats_history)
   end
 
   @doc false
