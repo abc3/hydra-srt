@@ -69,6 +69,11 @@ docker_clean:
 test_e2e:
 	E2E=true mix test --only e2e
 
+.PHONY: test_rs_native_e2e
+test_rs_native_e2e:
+	cd rs-native && cargo build
+	NATIVE_E2E=true mix test test/native_e2e
+
 .PHONY: test_e2e_encrypted
 test_e2e_encrypted:
 	E2E=true mix test --only encrypted
