@@ -40,9 +40,9 @@ HydraSRT is structured into **three core layers**, each designed for efficiency,
 
 Coming soon...
 
-### **2. Streaming & Processing Layer (Isolated C + GStreamer)**
+### **2. Streaming & Processing Layer (Isolated Rust + GStreamer)**
 
-- **Memory safety & stability** – The C-based application runs as a separate, isolated process, ensuring that memory leaks do not affect the Elixir control layer. Elixir can monitor for issues and terminate pipelines if necessary to maintain system stability.
+- **Memory safety & stability** – The Rust pipeline runs as a separate, isolated process, so faults in the media layer do not compromise the Elixir control plane. Elixir can monitor the process and terminate pipelines if necessary to maintain system stability.
 - **High-performance video processing** via **GStreamer**.
 - **Secure interprocess communication** with the Elixir layer.
 <!-- - **Support for dynamic routing**, allowing real-time addition/removal of destinations. -->
@@ -103,22 +103,22 @@ Before deploying HydraSRT, ensure your system has the following dependencies ins
    > - Erlang 27.0
    > - Node.js 18.13.0
 
-4. **GStreamer** and related libraries for the C application:
+4. **Rust**, Cargo, **GStreamer**, and related libraries for the streaming pipeline:
 
    ```bash
    # Ubuntu/Debian
    sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
      gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-     libcjson-dev libsrt-dev libcmocka-dev libgio2.0-dev pkg-config
+     libsrt-openssl-dev libglib2.0-dev pkg-config cargo rustc
 
    # macOS (using Homebrew)
    brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
-     cjson srt cmocka pkg-config
+     srt pkg-config rust
    ```
 
-5. **Verify C application dependencies** are correctly installed:
+5. **Verify streaming pipeline dependencies** are correctly installed:
    ```bash
-   pkg-config --libs gstreamer-1.0 libcjson cmocka gio-2.0 srt
+   pkg-config --libs gstreamer-1.0 gstreamer-base-1.0 glib-2.0 srt
    ```
    This command should output the linking flags without errors. If you see errors, ensure all required packages are installed.
 
@@ -163,14 +163,14 @@ cd web_app && yarn dev
    # Compile the project
    MIX_ENV=prod mix compile
 
-   # Create the release (this will automatically build the web app and C application)
+   # Create the release (this will automatically build the web app and Rust pipeline)
    MIX_ENV=prod mix release
    ```
 
    The release process will:
 
    - Compile the Elixir application
-   - Build the C application using `make`
+   - Build the Rust pipeline from `./rs-native` via `mix compile.rs_native`
    - Build the web application using `npm run build`
    - Package everything into a self-contained release
 
@@ -237,10 +237,10 @@ Configure HydraSRT using the following environment variables:
 
 ### Troubleshooting
 
-1. **C Application Issues**:
+1. **Streaming Pipeline Issues**:
 
-   - Verify all dependencies are installed with `pkg-config --libs gstreamer-1.0 libcjson cmocka gio-2.0 srt`
-   - Check the C application logs in `_build/prod/rel/hydra_srt/log/`
+   - Verify all dependencies are installed with `pkg-config --libs gstreamer-1.0 gstreamer-base-1.0 glib-2.0 srt`
+   - Rebuild the Rust binary with `mix compile.rs_native`
 
 2. **Web Application Issues**:
 

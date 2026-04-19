@@ -23,7 +23,7 @@ RUN mkdir -p /etc/apt/keyrings \
     && apt-get install -y nodejs \
     && apt-get clean
 
-# Install GStreamer and related libraries for the C application
+# Install GStreamer and related libraries for the Rust pipeline
 RUN apt-get update -y \
     && apt-get install -y \
     libgstreamer1.0-dev \
@@ -58,13 +58,9 @@ RUN mix deps.compile
 # Copy the rest of the application code
 COPY priv priv
 COPY lib lib
-COPY native native
 COPY rs-native rs-native
 COPY web_app web_app
 COPY rel rel
-
-# Build the C application - ensure we clean first to force a rebuild for Linux
-RUN cd native && make clean && make
 
 # Build the web application
 RUN cd web_app \

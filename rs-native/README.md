@@ -1,6 +1,6 @@
 # rs-native
 
-Rust alternative to `native/` for the `hydra_srt_pipeline` process.
+Rust implementation of the `hydra_srt_pipeline` process.
 
 Current contract compatibility:
 
