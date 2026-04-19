@@ -66,6 +66,26 @@ vi.mock('../../../utils/api', () => {
               updated_at: new Date().toISOString(),
             },
           ],
+          stats: {
+            source: { bytes_in_per_sec: 1000, bytes_in_total: 5000 },
+            destinations: [
+              { id: 'd1', name: 'Dest 1', schema: 'UDP', bytes_out_per_sec: 10, bytes_out_total: 100 },
+            ],
+            'connected-callers': 1,
+          },
+          stats_history: [
+            {
+              id: 'rs1',
+              inserted_at: new Date().toISOString(),
+              stats: {
+                source: { bytes_in_per_sec: 1000, bytes_in_total: 5000 },
+                destinations: [
+                  { id: 'd1', name: 'Dest 1', schema: 'UDP', bytes_out_per_sec: 10, bytes_out_total: 100 },
+                ],
+                'connected-callers': 1,
+              },
+            },
+          ],
         },
       }),
     },
@@ -127,5 +147,19 @@ describe('RouteItem stats tabs', () => {
 
     expect(screen.getByText('80 bps')).toBeInTheDocument(); // 10 B/s -> 80 bps
   });
-});
 
+  it('Statistics tab initializes from persisted stats returned by the route API', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Statistics' }));
+
+    expect(await screen.findByText('80 bps')).toBeInTheDocument();
+    expect(screen.queryByText('Waiting for statistics...')).not.toBeInTheDocument();
+  });
+});

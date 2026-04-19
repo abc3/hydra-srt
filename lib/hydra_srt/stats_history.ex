@@ -17,6 +17,26 @@ defmodule HydraSrt.StatsHistory do
     |> Repo.insert()
   end
 
+  def get_latest_snapshot(route_id) when is_binary(route_id) do
+    from(s in RouteStat,
+      where: s.route_id == ^route_id,
+      order_by: [desc: s.inserted_at],
+      limit: 1
+    )
+    |> Repo.one()
+  end
+
+  def list_recent_snapshots(route_id, limit \\ 300)
+      when is_binary(route_id) and is_integer(limit) and limit > 0 do
+    from(s in RouteStat,
+      where: s.route_id == ^route_id,
+      order_by: [desc: s.inserted_at],
+      limit: ^limit
+    )
+    |> Repo.all()
+    |> Enum.reverse()
+  end
+
   def prune_older_than_hours(hours) when is_integer(hours) and hours > 0 do
     cutoff = DateTime.utc_now() |> DateTime.add(-hours, :hour)
 
