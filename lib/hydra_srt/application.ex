@@ -16,9 +16,6 @@ defmodule HydraSrt.Application do
 
     :syn.add_node_to_scopes([:routes])
     runtime_schedulers = System.schedulers_online()
-    Logger.info("Runtime schedulers: #{runtime_schedulers}")
-
-    Logger.info("Native telemetry transport: Port stdio")
 
     children = [
       HydraSrt.ErlSysMon,
@@ -28,6 +25,7 @@ defmodule HydraSrt.Application do
        keys: :unique, name: HydraSrt.Registry.MsgHandlers, partitions: runtime_schedulers},
       HydraSrtWeb.Telemetry,
       HydraSrt.Repo,
+      HydraSrt.AuthCleanup,
       {Task.Supervisor, name: HydraSrt.TaskSupervisor},
       HydraSrt.StatsRetention,
       # {Ecto.Migrator,
@@ -47,7 +45,9 @@ defmodule HydraSrt.Application do
     children = [{Cachex, name: HydraSrt.Cache} | children]
 
     opts = [strategy: :one_for_one, name: HydraSrt.Supervisor]
-    Supervisor.start_link(children, opts)
+    {:ok, pid} = Supervisor.start_link(children, opts)
+    :ok = HydraSrt.Auth.startup_cleanup()
+    {:ok, pid}
   end
 
   @impl true

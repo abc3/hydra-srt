@@ -38,7 +38,7 @@ defmodule HydraSrtWeb.ConnCase do
 
   def log_in_user(conn) do
     token = "test_token_#{System.unique_integer()}"
-    {:ok, true} = Cachex.put(HydraSrt.Cache, "auth_session:#{token}", "user_session_data")
+    {:ok, _session} = HydraSrt.Auth.create_session(token, "user_session_data")
     Plug.Conn.put_req_header(conn, "authorization", "Bearer " <> token)
   end
 end

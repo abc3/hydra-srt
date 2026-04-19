@@ -16,7 +16,13 @@ defmodule HydraSrtWeb.LiveChannelTest do
     end
 
     token = "test_token_#{System.unique_integer([:positive])}"
-    Cachex.put(HydraSrt.Cache, "auth_session:#{token}", "admin", ttl: :timer.minutes(5))
+
+    Cachex.put(
+      HydraSrt.Cache,
+      "auth_session:#{HydraSrt.Auth.hash_token(token)}",
+      "admin",
+      ttl: :timer.minutes(5)
+    )
 
     {:ok, socket} = connect(HydraSrtWeb.UserSocket, %{"token" => token})
 

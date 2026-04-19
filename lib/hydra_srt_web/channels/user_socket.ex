@@ -5,16 +5,7 @@ defmodule HydraSrtWeb.UserSocket do
 
   @impl true
   def connect(%{"token" => token}, socket, _connect_info) do
-    case Cachex.get(HydraSrt.Cache, "auth_session:#{token}") do
-      {:ok, nil} ->
-        :error
-
-      {:ok, _value} ->
-        {:ok, socket}
-
-      _ ->
-        :error
-    end
+    if HydraSrt.Auth.authenticate_session(token), do: {:ok, socket}, else: :error
   end
 
   @impl true
