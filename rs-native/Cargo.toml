@@ -1,0 +1,12 @@
+[package]
+name = "hydra_srt_pipeline_rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+gio = "0.20"
+glib = "0.20"
+gstreamer = "0.23"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
