@@ -260,7 +260,14 @@ defmodule HydraSrt.RouteHandler do
   @doc false
   def build_srt_uri(opts) when is_map(opts) do
     mode = Map.get(opts, "mode")
-    localaddress = Map.get(opts, "localaddress", Application.get_env(:hydra_srt, :default_bind_ip, "127.0.0.1"))
+
+    localaddress =
+      Map.get(
+        opts,
+        "localaddress",
+        Application.get_env(:hydra_srt, :default_bind_ip, "127.0.0.1")
+      )
+
     localport = Map.get(opts, "localport")
 
     query_params =
