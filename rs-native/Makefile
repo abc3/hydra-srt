@@ -1,5 +1,5 @@
 BUILD_DIR := target/debug
-BIN := $(BUILD_DIR)/hydra_srt_pipeline_rs
+BIN := $(BUILD_DIR)/hydra_srt_pipeline
 ROUTE_ID ?= rs_demo
 SOURCE_PORT ?= 8000
 SINK_PORT ?= 8002
