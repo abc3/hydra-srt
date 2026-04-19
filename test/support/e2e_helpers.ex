@@ -531,6 +531,14 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     end
   end
 
+  def await_udp_bytes(counter, min_bytes, timeout_ms)
+      when is_map(counter) and is_integer(min_bytes) and is_integer(timeout_ms) do
+    wait_until(fn -> get_udp_bytes!(counter) >= min_bytes end, timeout_ms, 50)
+    {:ok, %{bytes: get_udp_bytes!(counter)}}
+  rescue
+    RuntimeError -> {:error, %{bytes: get_udp_bytes!(counter)}}
+  end
+
   def stop_udp_counter!(%{pid: pid} = counter) when is_pid(pid) do
     send(pid, :stop)
 
