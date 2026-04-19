@@ -10,8 +10,12 @@ ENV MIX_ENV="prod"
 
 # Install build dependencies
 RUN apt-get update -y \
-    && apt-get install -y build-essential git curl ca-certificates gnupg cargo rustc \
+    && apt-get install -y build-essential git curl ca-certificates gnupg \
     && apt-get clean
+
+# Install Rust via rustup
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Install Node.js 18.x
 RUN mkdir -p /etc/apt/keyrings \

@@ -48,7 +48,9 @@ unless config_env() == :test do
   vm_port = System.get_env("VICTORIOMETRICS_PORT")
   export_metrics? = present?.(vm_host) && present?.(vm_port)
 
-  config :hydra_srt, export_metrics?: export_metrics?
+  config :hydra_srt,
+    export_metrics?: export_metrics?,
+    default_bind_ip: System.get_env("HYDRA_DEFAULT_BIND_IP") || "127.0.0.1"
 
   if export_metrics? do
     config :hydra_srt, HydraSrt.Metrics.Connection,

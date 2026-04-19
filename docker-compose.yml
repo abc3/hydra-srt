@@ -8,12 +8,15 @@ services:
     # Use the default bridge network with explicit port mappings for portability.
     ports:
       - "4000:4000"
+      - "4100-4500:4100-4500/udp"
     environment:
       - NODE_IP=127.0.0.1
-      - RELEASE_COOKIE="Vt8gXnEI2zRH4l3eqUEBrcGQ22mHSj73CgkYm02u"
+      - HYDRA_DEFAULT_BIND_IP=0.0.0.0
+      - SECRET_KEY_BASE=9re8gLwrcmLnNcUbxe8xgKSCNfm8gIpgoBBiCXhV0dVfJMB8DVFB3QQJwOye0iIo
+      - RELEASE_COOKIE="test_cookie"
       - PHX_SERVER=true
       - PORT=4000
-      - PHX_HOST=0.0.0.0
+      - PHX_HOST=localhost
       - API_AUTH_USERNAME=admin
       - API_AUTH_PASSWORD=password123
       - DATABASE_PATH=${DATABASE_PATH:-/app/db/hydra_srt.db}
