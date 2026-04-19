@@ -75,21 +75,13 @@ defmodule HydraSrtWeb.Router do
   defp check_auth(conn, _opts) do
     case get_req_header(conn, "authorization") do
       ["Bearer " <> token] ->
-        case Cachex.get(HydraSrt.Cache, "auth_session:#{token}") do
-          {:ok, nil} ->
-            conn
-            |> put_status(403)
-            |> Phoenix.Controller.json(%{error: "Unauthorized"})
-            |> halt()
-
-          {:ok, _value} ->
-            conn
-
-          _ ->
-            conn
-            |> put_status(403)
-            |> Phoenix.Controller.json(%{error: "Unauthorized"})
-            |> halt()
+        if HydraSrt.Auth.authenticate_session(token) do
+          conn
+        else
+          conn
+          |> put_status(403)
+          |> Phoenix.Controller.json(%{error: "Unauthorized"})
+          |> halt()
         end
 
       _ ->

@@ -6,8 +6,7 @@ defmodule HydraSrtWeb.AuthController do
     if user == Application.get_env(:hydra_srt, :api_auth_username) &&
          password == Application.get_env(:hydra_srt, :api_auth_password) do
       token = generate_token()
-
-      Cachex.put(HydraSrt.Cache, "auth_session:#{token}", user, ttl: :timer.hours(24 * 14))
+      {:ok, _session} = HydraSrt.Auth.create_session(token, user)
 
       conn
       |> put_status(:ok)
