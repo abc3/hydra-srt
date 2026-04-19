@@ -6,6 +6,7 @@ defmodule HydraSrt.RouteHandler do
 
   alias HydraSrt.Db
   alias HydraSrt.Helpers
+  alias HydraSrt.StatsProcessor
 
   def start_link(args), do: :gen_statem.start_link(__MODULE__, args, [])
 
@@ -22,7 +23,9 @@ defmodule HydraSrt.RouteHandler do
     data = %{
       id: args.id,
       port: nil,
-      route: route
+      route: route,
+      port_buffer: "",
+      source_stream_id: nil
     }
 
     {:ok, :start, data, {:next_event, :internal, :start}}
@@ -44,13 +47,33 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  def handle_event(:info, {_port, {:data, info}}, _state, _data) do
-    String.split(info, "\n")
-    |> Enum.each(fn line ->
-      Logger.warning("RouteHandler: pipeline: #{inspect(line)}")
-    end)
+  def handle_event(:info, {port, {:data, info}}, _state, %{port: port} = data)
+      when is_binary(info) do
+    new_data = consume_port_output(info, data)
+    {:keep_state, new_data}
+  end
 
-    :keep_state_and_data
+  def handle_event(:info, {port, {:data, {:eol, info}}}, _state, %{port: port} = data)
+      when is_binary(info) do
+    new_data = consume_port_output(info <> "\n", data)
+    {:keep_state, new_data}
+  end
+
+  def handle_event(:info, {port, {:data, {:noeol, info}}}, _state, %{port: port} = data)
+      when is_binary(info) do
+    new_data = consume_port_output(info, data)
+    {:keep_state, new_data}
+  end
+
+  def handle_event(:info, {port, {:exit_status, status}}, _state, %{port: port} = data) do
+    log_fun = if status == 0, do: &Logger.info/1, else: &Logger.error/1
+    log_fun.("RouteHandler: native pipeline exited with status #{status}")
+    {:stop, {:port_exit, status}, data}
+  end
+
+  def handle_event(:info, {:EXIT, port, reason}, _state, %{port: port} = data) do
+    Logger.info("RouteHandler: port exit #{inspect(reason)}")
+    {:stop, {:port_exit, reason}, data}
   end
 
   def handle_event(type, content, state, data) do
@@ -149,6 +172,49 @@ defmodule HydraSrt.RouteHandler do
       error ->
         Logger.error("RouteHandler: Error closing port: #{inspect(error)}")
     end
+  end
+
+  defp consume_port_output(chunk, data) do
+    [buffer | completed_lines] =
+      (data.port_buffer <> chunk)
+      |> String.split("\n")
+      |> Enum.reverse()
+
+    completed_lines
+    |> Enum.reverse()
+    |> Enum.reduce(%{data | port_buffer: buffer}, fn line, acc ->
+      process_port_line(String.trim_trailing(line, "\r"), acc)
+    end)
+  end
+
+  defp process_port_line("", data), do: data
+
+  defp process_port_line("route_id:" <> route_id, data) do
+    if route_id != data.id do
+      Logger.warning("RouteHandler: route_id mismatch from native pipeline: #{inspect(route_id)}")
+    end
+
+    data
+  end
+
+  defp process_port_line("stats_source_stream_id:" <> stream_id, data) do
+    Logger.info("RouteHandler: stats_source_stream_id: #{stream_id}")
+    %{data | source_stream_id: stream_id}
+  end
+
+  defp process_port_line("{" <> _ = json, data) do
+    StatsProcessor.process_stats_json(json, %{
+      route_id: data.id,
+      route_record: data.route,
+      source_stream_id: data.source_stream_id
+    })
+
+    data
+  end
+
+  defp process_port_line(line, data) do
+    Logger.warning("RouteHandler: pipeline: #{inspect(line)}")
+    data
   end
 
   def route_data_to_params(route_id) do
