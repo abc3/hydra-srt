@@ -106,8 +106,15 @@ defmodule HydraSrt.RouteHandler do
   end
 
   defp get_binary_path do
-    if Mix.env() in [:dev, :test] do
-      Path.expand("./native/build/hydra_srt_pipeline")
+    env =
+      if Code.ensure_loaded?(Mix) and function_exported?(Mix, :env, 0) do
+        Mix.env()
+      else
+        :prod
+      end
+
+    if env in [:dev, :test] do
+      Path.expand("./rs-native/target/debug/hydra_srt_pipeline")
     else
       "#{:code.priv_dir(:hydra_srt)}/native/build/hydra_srt_pipeline"
     end

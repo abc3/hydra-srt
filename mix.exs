@@ -77,26 +77,26 @@ defmodule HydraSrt.MixProject do
   defp releases do
     [
       hydra_srt: [
-        steps: [:assemble, &copy_c_app/1, &copy_web_app/1],
+        steps: [:assemble, &copy_native_app/1, &copy_web_app/1],
         cookie: System.get_env("RELEASE_COOKIE", Base.url_encode64(:crypto.strong_rand_bytes(30)))
       ]
     ]
   end
 
-  defp copy_c_app(release) do
-    IO.puts("Copying C application to release...")
+  defp copy_native_app(release) do
+    IO.puts("Building and copying Rust native application to release...")
 
-    {result, exit_code} = System.cmd("make", ["-C", "native"])
+    {result, exit_code} = System.cmd("cargo", ["build"], cd: "rs-native")
     IO.puts(result)
 
     if exit_code != 0 do
-      raise "Failed to compile C application"
+      raise "Failed to compile Rust native application"
     end
 
-    source_path = Path.join(["native", "build", "hydra_srt_pipeline"])
+    source_path = Path.join(["rs-native", "target", "debug", "hydra_srt_pipeline"])
 
     unless File.exists?(source_path) do
-      raise "C application binary was not created at #{source_path}"
+      raise "Rust native binary was not created at #{source_path}"
     end
 
     app_dir = Path.join([release.path, "lib", "hydra_srt-#{release.version}"])
@@ -107,7 +107,7 @@ defmodule HydraSrt.MixProject do
     File.cp!(source_path, priv_dest_path)
     File.chmod!(priv_dest_path, 0o755)
 
-    IO.puts("C application copied to priv directory at #{priv_dest_path}")
+    IO.puts("Rust native application copied to priv directory at #{priv_dest_path}")
 
     release
   end
