@@ -22,12 +22,20 @@ dev_udp0:
 	-pix_fmt yuv420p -c:v libx264 -b:v 1000k -g 25 -keyint_min 100 -profile:v baseline -preset veryfast \
 	-f mpegts "udp://224.0.0.3:1234?pkt_size=1316"
 
-dev_udp:
+dev_udp1:
 	ffmpeg -hide_banner -loglevel error -re \
 	-f lavfi -i smptebars=duration=6000:size=1280x720:rate=25 \
 	-f lavfi -i sine=frequency=1000:duration=6000:sample_rate=44100 \
 	-pix_fmt yuv420p -c:v libx264 -b:v 1000k -g 25 -keyint_min 100 -profile:v baseline -preset veryfast \
 	-c:a aac -b:a 128k -ar 48000 -ac 2 \
+	-f mpegts "srt://127.0.0.1:4201?mode=caller"	
+
+dev_udp:
+	ffmpeg -hide_banner -loglevel error -re \
+	-f lavfi -i "testsrc=size=1280x720:rate=30" \
+	-f lavfi -i "sine=frequency=440:sample_rate=48000" \
+	-c:v libx264 -preset veryfast -tune zerolatency -b:v 2000k \
+	-c:a aac -b:a 128k \
 	-f mpegts "srt://127.0.0.1:4201?mode=caller"
 
 dev_play:
