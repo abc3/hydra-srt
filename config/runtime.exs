@@ -50,7 +50,8 @@ if config_env() == :prod do
 
   config :hydra_srt, HydraSrt.Repo,
     database: database_path,
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5")
+    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5"),
+    journal_mode: :wal
 
   # database_path =
   #   System.get_env("DATABASE_PATH") ||

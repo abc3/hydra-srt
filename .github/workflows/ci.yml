@@ -10,18 +10,6 @@ permissions:
   contents: read
 
 jobs:
-  native_test:
-    name: Native Tests (C)
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y pkg-config libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libcjson-dev libcmocka-dev libsrt-openssl-dev
-    - name: Run tests
-      run: make test -C native
-
   rs_native_unit_test:
     name: Rust Native Unit Tests
     runs-on: ubuntu-latest
@@ -103,13 +91,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install system dependencies (ffmpeg, GStreamer, SRT, cJSON)
+    - name: Install system dependencies (ffmpeg, GStreamer, SRT)
       run: |
         sudo apt-get update
         sudo apt-get install -y ffmpeg pkg-config \
           libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
           gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-          libcjson-dev libsrt-openssl-dev
+          libsrt-openssl-dev
     - name: Set up Elixir
       uses: erlef/setup-beam@v1
       with:
@@ -185,7 +173,7 @@ jobs:
           ffmpeg srt-tools \
           libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
           gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-          libcjson-dev libsrt-openssl-dev
+          libsrt-openssl-dev
     - name: Set up Elixir
       uses: erlef/setup-beam@v1
       with:

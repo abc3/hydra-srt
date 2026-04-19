@@ -95,9 +95,9 @@ test_backend_e2e:
 test_backend_e2e_encrypted:
 	E2E=true mix test --only encrypted
 
-.PHONY: test_native
-test_native:
-	make -C native test
+.PHONY: test_rs_native_unit
+test_rs_native_unit:
+	cd rs-native && cargo test
 
 .PHONY: test_web_unit
 test_web_unit:
@@ -113,8 +113,8 @@ test_all:
 	@$(MAKE) test_backend
 	@echo "Running: backend e2e tests"
 	@$(MAKE) test_backend_e2e
-	@echo "Running: native cmocka tests"
-	@$(MAKE) test_native
+	@echo "Running: rs-native unit tests (cargo)"
+	@$(MAKE) test_rs_native_unit
 	@echo "Running: web unit tests (vitest)"
 	@$(MAKE) test_web_unit
 	@echo "Running: web e2e tests (playwright)"

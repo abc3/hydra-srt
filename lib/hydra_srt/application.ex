@@ -28,6 +28,8 @@ defmodule HydraSrt.Application do
        keys: :unique, name: HydraSrt.Registry.MsgHandlers, partitions: runtime_schedulers},
       HydraSrtWeb.Telemetry,
       HydraSrt.Repo,
+      {Task.Supervisor, name: HydraSrt.TaskSupervisor},
+      HydraSrt.StatsRetention,
       # {Ecto.Migrator,
       #  repos: Application.fetch_env!(:hydra_srt, :ecto_repos), skip: skip_migrations?()},
       {Phoenix.PubSub, name: HydraSrt.PubSub, partitions: runtime_schedulers},
