@@ -1,7 +1,7 @@
 defmodule HydraSrt.DbFixtures do
   @moduledoc """
   This module defines test helpers for creating
-  entities via the `HydraSrt.Db` (Khepri) context.
+  entities via the `HydraSrt.Db` context.
   """
 
   @doc """

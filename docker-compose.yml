@@ -18,9 +18,7 @@ services:
       - API_AUTH_PASSWORD=password123
       - DATABASE_PATH=${DATABASE_PATH:-/app/db/hydra_srt.db}
       - POOL_SIZE=${POOL_SIZE:-1}
-      - DATABASE_DATA_DIR=/app/khepri
       - RLIMIT_NOFILE=65536
     volumes:
-      - ./data/khepri:/app/khepri
       - ./data/backup:/app/backup
       - ./data/db:/app/db

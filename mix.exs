@@ -45,7 +45,6 @@ defmodule HydraSrt.MixProject do
       {:telemetry_poller, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:plug_cowboy, "~> 2.7"},
-      {:khepri, "0.16.0"},
       {:uuid, "~> 1.1"},
       {:cors_plug, "~> 3.0"},
       {:syn, "~> 3.3"},

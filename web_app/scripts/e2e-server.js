@@ -45,7 +45,7 @@ async function main() {
   copyDir(distDir, staticDir);
 
   // Start Phoenix server in MIX_ENV=test with E2E_UI toggle
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydra_khepri_ui_e2e_'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydra_sqlite_ui_e2e_'));
   fs.mkdirSync(dataDir, { recursive: true });
   const unitDbPath = path.join(dataDir, 'hydra_srt_ui_e2e.db');
 
@@ -56,7 +56,6 @@ async function main() {
     E2E_HOST: host,
     E2E_PORT: String(port),
     PORT: String(port),
-    DATABASE_DATA_DIR: dataDir,
     // Ensure the Phoenix server and any pre-start tasks (ecto.create/migrate) share the same DB.
     UNIT_DATABASE_PATH: unitDbPath,
   };
