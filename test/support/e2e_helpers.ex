@@ -121,13 +121,7 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
   end
 
   def ensure_native_built! do
-    {output, exit_code} = System.cmd("cargo", ["build"], cd: "rs-native", stderr_to_stdout: true)
-
-    if exit_code != 0 do
-      raise "Failed to build Rust native binary with `cargo build` (exit=#{exit_code}):\n#{output}"
-    end
-
-    binary = Path.expand("rs-native/target/debug/hydra_srt_pipeline")
+    binary = Path.join([:code.priv_dir(:hydra_srt), "native", "hydra_srt_pipeline"])
 
     if File.exists?(binary),
       do: :ok,

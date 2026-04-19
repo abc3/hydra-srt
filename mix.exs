@@ -5,6 +5,7 @@ defmodule HydraSrt.MixProject do
     [
       app: :hydra_srt,
       version: "0.1.0",
+      compilers: [:rs_native] ++ Mix.compilers(),
       elixir: "~> 1.14",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -69,46 +70,70 @@ defmodule HydraSrt.MixProject do
       setup: ["deps.get", "ecto.setup"],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"]
+      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      "compile.rs_native": &rs_native_build/1
     ]
   end
 
   defp releases do
     [
       hydra_srt: [
-        steps: [:assemble, &copy_native_app/1, &copy_web_app/1],
+        steps: [:assemble, &copy_web_app/1],
         cookie: System.get_env("RELEASE_COOKIE", Base.url_encode64(:crypto.strong_rand_bytes(30)))
       ]
     ]
   end
 
-  defp copy_native_app(release) do
-    IO.puts("Building and copying Rust native application (release) to release...")
+  defp rs_native_build(_args) do
+    config = rs_native_build_config()
 
-    {result, exit_code} = System.cmd("cargo", ["build", "--release"], cd: "rs-native")
-    IO.puts(result)
+    IO.puts("Building Rust native application (#{config.profile})...")
+    File.mkdir_p!(config.dest_dir)
+
+    {_output, exit_code} =
+      System.cmd("cargo", config.cargo_args,
+        cd: config.rs_native_dir,
+        stderr_to_stdout: true,
+        into: IO.stream(:stdio, :line)
+      )
 
     if exit_code != 0 do
       raise "Failed to compile Rust native application"
     end
 
-    source_path = Path.join(["rs-native", "target", "release", "hydra_srt_pipeline"])
-
-    unless File.exists?(source_path) do
-      raise "Rust native binary was not created at #{source_path}"
+    unless File.exists?(config.source_path) do
+      raise "Rust native binary was not created at #{config.source_path}"
     end
 
-    app_dir = Path.join([release.path, "lib", "hydra_srt-#{release.version}"])
-    priv_dest_dir = Path.join(app_dir, "priv/native/build")
-    File.mkdir_p!(priv_dest_dir)
+    File.cp!(config.source_path, config.dest_path)
+    File.chmod!(config.dest_path, 0o755)
 
-    priv_dest_path = Path.join(priv_dest_dir, "hydra_srt_pipeline")
-    File.cp!(source_path, priv_dest_path)
-    File.chmod!(priv_dest_path, 0o755)
+    IO.puts("Rust native application copied to #{config.dest_path}")
 
-    IO.puts("Rust native application copied to priv directory at #{priv_dest_path}")
+    {:ok, []}
+  end
 
-    release
+  defp rs_native_build_config do
+    profile = if Mix.env() == :prod, do: "release", else: "debug"
+    project_root = project_root()
+    rs_native_dir = Path.join(project_root, "rs-native")
+    priv_native_dir = Path.join(project_root, "priv/native")
+
+    %{
+      profile: profile,
+      cargo_args: rs_native_cargo_args(profile),
+      rs_native_dir: rs_native_dir,
+      dest_dir: priv_native_dir,
+      dest_path: Path.join(priv_native_dir, "hydra_srt_pipeline"),
+      source_path: Path.join([rs_native_dir, "target", profile, "hydra_srt_pipeline"])
+    }
+  end
+
+  defp rs_native_cargo_args("release"), do: ["build", "--release"]
+  defp rs_native_cargo_args(_profile), do: ["build"]
+
+  defp project_root do
+    Path.expand(__DIR__)
   end
 
   defp copy_web_app(release) do

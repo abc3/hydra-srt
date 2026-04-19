@@ -10,7 +10,7 @@ ENV MIX_ENV="prod"
 
 # Install build dependencies
 RUN apt-get update -y \
-    && apt-get install -y build-essential git curl ca-certificates gnupg \
+    && apt-get install -y build-essential git curl ca-certificates gnupg cargo rustc \
     && apt-get clean
 
 # Install Node.js 18.x
@@ -59,6 +59,7 @@ RUN mix deps.compile
 COPY priv priv
 COPY lib lib
 COPY native native
+COPY rs-native rs-native
 COPY web_app web_app
 COPY rel rel
 
@@ -70,7 +71,7 @@ RUN cd web_app \
     && npm install \
     && npm run build
 
-# Compile the Elixir application
+# Compile the Elixir application. This also builds rs-native in release mode via mix compiler.
 RUN mix compile
 
 # Changes to config/runtime.exs don't require recompiling the code

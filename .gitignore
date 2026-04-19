@@ -41,3 +41,4 @@ tmp-*
 web_app/test-results
 
 rs-native/target
+priv/native/

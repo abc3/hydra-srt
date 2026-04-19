@@ -21,8 +21,7 @@ Current implementation scope:
 Build:
 
 ```bash
-cd rs-native
-cargo build
+mix compile.rs_native
 ```
 
 Run examples:

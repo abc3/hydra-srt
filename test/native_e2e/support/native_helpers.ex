@@ -30,7 +30,7 @@ defmodule HydraSrt.E2E.Native.Helpers do
   end
 
   def rs_native_binary_path do
-    Path.expand("rs-native/target/debug/hydra_srt_pipeline")
+    Path.join([:code.priv_dir(:hydra_srt), "native", "hydra_srt_pipeline"])
   end
 
   def free_srt_port!, do: E2EHelpers.tcp_free_port!()
