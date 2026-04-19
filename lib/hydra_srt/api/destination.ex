@@ -5,7 +5,6 @@ defmodule HydraSrt.Api.Destination do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "destinations" do
-    # NOTE: This schema was originally used as a lightweight validator for the Khepri-backed API.
     field :enabled, :boolean, default: true
     field :name, :string
     field :status, :string

@@ -88,9 +88,6 @@ ENV MIX_ENV="prod"
 ENV ECTO_IPV6 false
 # Use IPv4 instead of IPv6 for Erlang distribution
 ENV ERL_AFLAGS "-proto_dist inet_tcp"
-# Set the DATABASE_DATA_DIR environment variable to point to the mounted volume
-ENV DATABASE_DATA_DIR="/app/khepri"
-
 # Install runtime dependencies
 RUN apt-get update -y && \
     apt-get install -y \
@@ -117,8 +114,8 @@ WORKDIR "/app"
 
 # Create directory structure for mounted volumes
 # These directories will be overridden by the volumes
-RUN mkdir -p /app/khepri /app/backup && \
-    chmod -R 777 /app/khepri /app/backup
+RUN mkdir -p /app/backup && \
+    chmod -R 777 /app/backup
 
 # Copy the release from the builder stage
 COPY --from=builder /app/_build/prod/rel/hydra_srt ./

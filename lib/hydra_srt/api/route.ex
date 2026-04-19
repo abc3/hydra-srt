@@ -5,7 +5,6 @@ defmodule HydraSrt.Api.Route do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "routes" do
-    # NOTE: This schema was originally used as a lightweight validator for the Khepri-backed API.
     # We keep compatibility with the admin UI payload keys (camelCase) at the changeset layer.
     field :enabled, :boolean, default: true
     field :name, :string
