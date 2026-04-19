@@ -84,16 +84,16 @@ defmodule HydraSrt.MixProject do
   end
 
   defp copy_native_app(release) do
-    IO.puts("Building and copying Rust native application to release...")
+    IO.puts("Building and copying Rust native application (release) to release...")
 
-    {result, exit_code} = System.cmd("cargo", ["build"], cd: "rs-native")
+    {result, exit_code} = System.cmd("cargo", ["build", "--release"], cd: "rs-native")
     IO.puts(result)
 
     if exit_code != 0 do
       raise "Failed to compile Rust native application"
     end
 
-    source_path = Path.join(["rs-native", "target", "debug", "hydra_srt_pipeline"])
+    source_path = Path.join(["rs-native", "target", "release", "hydra_srt_pipeline"])
 
     unless File.exists?(source_path) do
       raise "Rust native binary was not created at #{source_path}"

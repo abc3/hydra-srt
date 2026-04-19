@@ -4,6 +4,10 @@ defmodule HydraSrt.StatsProcessor do
   require Logger
 
   alias HydraSrt.Metrics
+  alias HydraSrt.StatsHistory
+
+  @persist_error_log_interval_ms 10_000
+  @persist_error_log_key {__MODULE__, :last_persist_error_log_ms}
 
   def process_stats_json(json, %{route_id: route_id} = data) when is_binary(json) do
     case Jason.decode(json) do
@@ -17,9 +21,11 @@ defmodule HydraSrt.StatsProcessor do
             {:stats, stats}
           )
 
+          schedule_persist_stats_snapshot(route_id, data, stats)
+
           export? =
-            get_in(data, [:route_record, "exportStats"]) and
-              Application.get_env(:hydra_srt, :export_metrics?)
+            !!(get_in(data, [:route_record, "exportStats"]) &&
+                 Application.get_env(:hydra_srt, :export_metrics?))
 
           stats_to_metrics(stats, data, export?)
         rescue
@@ -29,16 +35,73 @@ defmodule HydraSrt.StatsProcessor do
             )
         end
 
-      {error, _} ->
-        Logger.error("Error decoding stats: #{inspect(error)} #{inspect(json)}")
+      {:error, reason} ->
+        Logger.error("Error decoding stats: #{inspect(reason)} #{inspect(json)}")
     end
 
     :ok
   end
 
-  def stats_to_metrics(_, _, false), do: nil
+  def schedule_persist_stats_snapshot(route_id, data, stats) when is_map(stats) do
+    if Application.get_env(:hydra_srt, :stats_persist_async?, true) do
+      case Process.whereis(HydraSrt.TaskSupervisor) do
+        nil ->
+          persist_stats_snapshot(route_id, data, stats)
 
-  def stats_to_metrics(stats, data, _) do
+        _pid ->
+          Task.Supervisor.start_child(HydraSrt.TaskSupervisor, fn ->
+            persist_stats_snapshot(route_id, data, stats)
+          end)
+
+          :ok
+      end
+    else
+      persist_stats_snapshot(route_id, data, stats)
+    end
+  end
+
+  def schedule_persist_stats_snapshot(_route_id, _data, _stats), do: :ok
+
+  def persist_stats_snapshot(route_id, data, stats) when is_map(stats) do
+    source_stream_id = Map.get(data, :source_stream_id)
+
+    case StatsHistory.insert_snapshot(route_id, source_stream_id, stats) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        log_persist_error(route_id, reason)
+    end
+  end
+
+  def persist_stats_snapshot(_route_id, _data, _stats), do: :ok
+
+  def log_persist_error(route_id, reason) do
+    now = System.monotonic_time(:millisecond)
+
+    last =
+      try do
+        :persistent_term.get(@persist_error_log_key, 0)
+      rescue
+        _ -> 0
+      end
+
+    if now - last >= @persist_error_log_interval_ms do
+      try do
+        :persistent_term.put(@persist_error_log_key, now)
+      rescue
+        _ -> :ok
+      end
+
+      Logger.error("StatsHistory insert failed route_id=#{inspect(route_id)}: #{inspect(reason)}")
+    end
+
+    :ok
+  end
+
+  def stats_to_metrics(_, _, export?) when export? != true, do: nil
+
+  def stats_to_metrics(stats, data, true) do
     tags = %{
       type: "source",
       route_id: data.route_id,

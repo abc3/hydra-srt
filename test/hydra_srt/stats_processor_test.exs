@@ -1,6 +1,10 @@
 defmodule HydraSrt.StatsProcessorTest do
-  use ExUnit.Case, async: false
+  use HydraSrt.DataCase, async: false
 
+  import Ecto.Query
+
+  alias HydraSrt.Repo
+  alias HydraSrt.RouteStat
   alias HydraSrt.StatsProcessor
   alias HydraSrt.StatsStore
 
@@ -12,7 +16,8 @@ defmodule HydraSrt.StatsProcessorTest do
   end
 
   test "process_stats_json stores stats and broadcasts them", %{route_id: route_id} do
-    json = ~s({"source":{"bytes_in_per_sec":123},"destinations":[{"id":"d1","bytes_out_per_sec":10}]})
+    json =
+      ~s({"source":{"bytes_in_per_sec":123},"destinations":[{"id":"d1","bytes_out_per_sec":10}]})
 
     assert :ok =
              StatsProcessor.process_stats_json(json, %{
@@ -24,6 +29,38 @@ defmodule HydraSrt.StatsProcessorTest do
     assert_receive {:stats, stats}
     assert %{"source" => %{"bytes_in_per_sec" => 123}} = stats
     assert {:ok, %{stats: ^stats}} = StatsStore.get(route_id)
+
+    assert wait_for(fn ->
+             Repo.one(from(r in RouteStat, where: r.route_id == ^route_id))
+           end)
+  end
+
+  test "process_stats_json logs decode error and does not crash", %{route_id: route_id} do
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert :ok =
+                 StatsProcessor.process_stats_json("{not json", %{
+                   route_id: route_id,
+                   route_record: %{},
+                   source_stream_id: "s"
+                 })
+      end)
+
+    assert log =~ "Error decoding stats"
+  end
+
+  def wait_for(fun, attempts \\ 50)
+  def wait_for(_fun, 0), do: nil
+
+  def wait_for(fun, attempts) do
+    case fun.() do
+      nil ->
+        Process.sleep(20)
+        wait_for(fun, attempts - 1)
+
+      value ->
+        value
+    end
   end
 
   test "stats_to_metrics accepts new payload shape" do

@@ -4,6 +4,7 @@ import Config
 config :hydra_srt, HydraSrt.Repo,
   database: Path.expand("../hydra_srt_dev.db", __DIR__),
   pool_size: 5,
+  journal_mode: :wal,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true
 
