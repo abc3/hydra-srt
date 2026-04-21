@@ -116,8 +116,7 @@ fn add_sink_to_pipeline(
         .build()
         .with_context(|| format!("failed to create sink {}", sink_config.element_type))?;
 
-    queue.set_property("max-size-buffers", 200_u32);
-    queue.set_property("max-size-time", 0_u64);
+    configure_branch_queue(&queue, &sink_config.element_type);
 
     apply_element_properties(&sink_element, &strip_internal_props(&sink_config))?;
 
@@ -181,6 +180,16 @@ fn add_sink_to_pipeline(
         .push(metrics);
 
     Ok(())
+}
+
+fn configure_branch_queue(queue: &gst::Element, sink_type: &str) {
+    queue.set_property("max-size-buffers", 200_u32);
+    queue.set_property("max-size-time", 0_u64);
+
+    if sink_type == "srtsink" {
+        // Keep one blocked SRT destination from applying backpressure to the whole tee fan-out.
+        queue.set_property_from_str("leaky", "downstream");
+    }
 }
 
 fn link_tee_branch(tee: &gst::Element, queue: &gst::Element) -> Result<()> {
@@ -320,5 +329,24 @@ mod tests {
             .expect("srt metrics present");
         assert_eq!(srt_metrics.kind, "srtsink");
         assert!(srt_metrics.sink_element.is_some());
+    }
+
+    #[test]
+    fn makes_srt_branch_queue_leaky() {
+        init_gst();
+
+        let queue = gst::ElementFactory::make("queue")
+            .build()
+            .expect("queue should build");
+
+        configure_branch_queue(&queue, "srtsink");
+
+        assert_eq!(
+            queue
+                .property_value("leaky")
+                .serialize()
+                .expect("serialized leaky property"),
+            "downstream"
+        );
     }
 }
