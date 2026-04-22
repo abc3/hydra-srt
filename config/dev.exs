@@ -22,7 +22,9 @@ config :hydra_srt, HydraSrtWeb.Endpoint,
   code_reloader: true,
   debug_errors: true,
   secret_key_base: "9re8gLwrcmLnNcUbxe8xgKSCNfm8gIpgoBBiCXhV0dVfJMB8DVFB3QQJwOye0iIo",
-  watchers: []
+  watchers: [
+    npm: ["run", "dev", cd: Path.expand("../web_app", __DIR__)]
+  ]
 
 config :hydra_srt,
   api_auth_username: System.get_env("API_AUTH_USERNAME") || "admin",

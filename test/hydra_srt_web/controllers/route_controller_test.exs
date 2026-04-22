@@ -119,6 +119,41 @@ defmodule HydraSrtWeb.RouteControllerTest do
     end
   end
 
+  describe "test source" do
+    test "returns probe validation error for invalid udp source", %{conn: conn} do
+      conn =
+        post(conn, ~p"/api/routes/test-source",
+          route: %{
+            "schema" => "UDP",
+            "schema_options" => %{}
+          }
+        )
+
+      assert json_response(conn, 422)["error"] == "UDP source is missing a valid port"
+    end
+
+    test "returns probe validation error for invalid srt source", %{conn: conn} do
+      conn =
+        post(conn, ~p"/api/routes/test-source",
+          route: %{
+            "schema" => "SRT",
+            "schema_options" => %{
+              "localaddress" => "127.0.0.1",
+              "mode" => "listener"
+            }
+          }
+        )
+
+      assert json_response(conn, 422)["error"] == "SRT source is missing a valid port"
+    end
+
+    test "returns bad request when route parameter is missing", %{conn: conn} do
+      conn = post(conn, ~p"/api/routes/test-source", %{})
+
+      assert json_response(conn, 400)["error"] == "Missing required 'route' parameter"
+    end
+  end
+
   defp create_route(_) do
     route = route_fixture()
     %{route: route}

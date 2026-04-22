@@ -1,10 +1,9 @@
-import { Form, Input, Radio, Card, Space, InputNumber, Switch, Select, Button, Row, Col, message, Typography } from 'antd';
-import { InfoCircleOutlined, SaveOutlined, CloseOutlined, HomeOutlined, LoadingOutlined } from '@ant-design/icons';
+import { Form, Input, Radio, Card, Space, InputNumber, Switch, Select, Button, Row, Col, message, Typography, Modal, Descriptions } from 'antd';
+import { InfoCircleOutlined, SaveOutlined, CloseOutlined, HomeOutlined, LoadingOutlined, ApiOutlined } from '@ant-design/icons';
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { routesApi } from '../../utils/api';
-import React from 'react';
 
 const { Title } = Typography;
 
@@ -13,7 +12,9 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
   const navigate = useNavigate();
   const { id } = useParams();
   const [messageApi, contextHolder] = message.useMessage();
+  const [modal, modalContextHolder] = Modal.useModal();
   const [loading, setLoading] = useState(id !== 'new');
+  const [testingConnection, setTestingConnection] = useState(false);
   const dataFetchedRef = useRef(false);
   const [routeData, setRouteData] = useState(null);
 
@@ -110,9 +111,119 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
     navigate(id === 'new' ? '/routes' : `/routes/${id}`);
   };
 
+  const openProbeResultModal = (probeResult) => {
+    const streams = probeResult?.streams || [];
+    const format = probeResult?.format || {};
+    const descriptionLabelStyle = { width: 180 };
+    const descriptionContentStyle = { wordBreak: 'break-word' };
+
+    modal.info({
+      title: 'Connection Test Result',
+      width: 900,
+      content: (
+        <Space direction="vertical" size="large" style={{ width: '100%', marginTop: 16 }}>
+          <Descriptions
+            bordered
+            size="small"
+            column={1}
+            labelStyle={descriptionLabelStyle}
+            contentStyle={descriptionContentStyle}
+          >
+            <Descriptions.Item label="Probe URI">
+              <Typography.Text code>{probeResult?.probe_uri || 'N/A'}</Typography.Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="Format">
+              {format.format_name || 'Unknown'}
+            </Descriptions.Item>
+            <Descriptions.Item label="Bitrate">
+              {format.bit_rate || 'Unknown'}
+            </Descriptions.Item>
+            <Descriptions.Item label="Duration">
+              {format.duration || 'Unknown'}
+            </Descriptions.Item>
+          </Descriptions>
+
+          <Typography.Title level={5} style={{ margin: 0 }}>
+            Streams
+          </Typography.Title>
+
+          {streams.length > 0 ? (
+            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+              {streams.map((stream, index) => (
+                <Descriptions
+                  key={`${stream.index ?? index}-${stream.codec_type ?? 'stream'}`}
+                  bordered
+                  size="small"
+                  column={1}
+                  title={`Stream ${stream.index ?? index}`}
+                  labelStyle={descriptionLabelStyle}
+                  contentStyle={descriptionContentStyle}
+                >
+                  <Descriptions.Item label="Index">{stream.index ?? index}</Descriptions.Item>
+                  <Descriptions.Item label="Type">{stream.codec_type || 'Unknown'}</Descriptions.Item>
+                  <Descriptions.Item label="Codec">{stream.codec_name || 'Unknown'}</Descriptions.Item>
+                  <Descriptions.Item label="Bitrate">{stream.bit_rate || 'Unknown'}</Descriptions.Item>
+                  <Descriptions.Item label="Resolution">
+                    {stream.width && stream.height ? `${stream.width}x${stream.height}` : 'N/A'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Sample Rate">{stream.sample_rate || 'N/A'}</Descriptions.Item>
+                  <Descriptions.Item label="Channels">{stream.channels || 'N/A'}</Descriptions.Item>
+                </Descriptions>
+              ))}
+            </Space>
+          ) : (
+            <Typography.Text type="secondary">ffprobe did not return any streams.</Typography.Text>
+          )}
+
+          <Typography.Title level={5} style={{ margin: 0 }}>
+            Raw Probe Data
+          </Typography.Title>
+          <pre
+            style={{
+              margin: 0,
+              maxHeight: 320,
+              overflow: 'auto',
+              padding: 12,
+              background: '#141414',
+              border: '1px solid #303030',
+              borderRadius: 8
+            }}
+          >
+            {JSON.stringify(probeResult?.raw ?? probeResult, null, 2)}
+          </pre>
+        </Space>
+      ),
+      okText: 'Close'
+    });
+  };
+
+  const handleTestConnection = () => {
+    form.validateFields()
+      .then(async (values) => {
+        setTestingConnection(true);
+        const loadingMessage = messageApi.loading('Testing source connection...', 0);
+
+        try {
+          const result = await routesApi.testSource(values);
+          loadingMessage();
+          messageApi.success('Connection test completed');
+          openProbeResultModal(result.data);
+        } catch (error) {
+          loadingMessage();
+          messageApi.error(`Failed to test source: ${error.message}`);
+        } finally {
+          setTestingConnection(false);
+        }
+      })
+      .catch(() => {
+        messageApi.error('Please check the form for errors');
+      });
+  };
+
   return (
     <div>
       {contextHolder}
+      {modalContextHolder}
 
       <Title
         level={3}
@@ -243,34 +354,56 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                             </Radio.Group>
                           </Form.Item>
 
-                          <Form.Item
-                            label="Local Address"
-                            name={['schema_options', 'localaddress']}
-                            extra="The address to bind when mode is listener or rendezvous. This property can be set by URI parameters."
-                          >
-                            <Input
-                              placeholder="Enter address"
-                              style={{ width: '100%' }}
-                            />
+                          <Form.Item noStyle dependencies={[['schema_options', 'mode']]}>
+                            {({ getFieldValue }) => {
+                              const mode = getFieldValue(['schema_options', 'mode']);
+                              const isCaller = mode === 'caller';
+
+                              return (
+                                <Form.Item
+                                  label={isCaller ? 'Remote Address' : 'Bind Address'}
+                                  name={['schema_options', 'localaddress']}
+                                  extra={
+                                    isCaller
+                                      ? 'The remote host or IP address to connect to in caller mode.'
+                                      : 'The local address to bind when mode is listener or rendezvous.'
+                                  }
+                                >
+                                  <Input
+                                    placeholder="Enter address"
+                                    style={{ width: '100%' }}
+                                  />
+                                </Form.Item>
+                              );
+                            }}
                           </Form.Item>
 
-                          <Form.Item
-                            style={{ width: '150px' }}
-                            size="5"
-                            label="Local Port"
-                            name={['schema_options', 'localport']}
-                            required
-                            tooltip="Port number (1-65535)"
-                            rules={[
-                              {
-                                type: 'number',
-                                min: 1,
-                                max: 65535,
-                                message: 'Port must be between 1 and 65535',
-                              },
-                            ]}
-                          >
-                            <InputNumber style={{ width: '100%' }} placeholder="Enter port number" />
+                          <Form.Item noStyle dependencies={[['schema_options', 'mode']]}>
+                            {({ getFieldValue }) => {
+                              const mode = getFieldValue(['schema_options', 'mode']);
+                              const isCaller = mode === 'caller';
+
+                              return (
+                                <Form.Item
+                                  style={{ width: '150px' }}
+                                  size="5"
+                                  label={isCaller ? 'Remote Port' : 'Bind Port'}
+                                  name={['schema_options', 'localport']}
+                                  required
+                                  tooltip="Port number (1-65535)"
+                                  rules={[
+                                    {
+                                      type: 'number',
+                                      min: 1,
+                                      max: 65535,
+                                      message: 'Port must be between 1 and 65535',
+                                    },
+                                  ]}
+                                >
+                                  <InputNumber style={{ width: '100%' }} placeholder="Enter port number" />
+                                </Form.Item>
+                              );
+                            }}
                           </Form.Item>
 
                           <Form.Item
@@ -437,6 +570,13 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                     onClick={handleCancel}
                   >
                     Cancel
+                  </Button>
+                  <Button
+                    icon={<ApiOutlined />}
+                    onClick={handleTestConnection}
+                    loading={testingConnection}
+                  >
+                    Test Connection
                   </Button>
                   <Button
                     type="primary"

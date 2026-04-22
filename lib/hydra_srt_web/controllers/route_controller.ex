@@ -2,6 +2,7 @@ defmodule HydraSrtWeb.RouteController do
   use HydraSrtWeb, :controller
 
   alias HydraSrt.Db
+  alias HydraSrt.SourceProbe
 
   action_fallback HydraSrtWeb.FallbackController
 
@@ -85,5 +86,35 @@ defmodule HydraSrtWeb.RouteController do
     end
   end
 
+  def test_source(conn, %{"route" => route_params}) do
+    case SourceProbe.probe(route_params) do
+      {:ok, result} ->
+        conn
+        |> put_status(:ok)
+        |> data(result)
+
+      {:error, reason} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: client_probe_error(reason)})
+    end
+  end
+
+  def test_source(conn, _params) do
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: "Missing required 'route' parameter"})
+  end
+
   defp data(conn, data), do: json(conn, %{data: data})
+
+  defp client_probe_error(reason) do
+    reason
+    |> to_string()
+    |> String.trim()
+    |> case do
+      "" -> "Failed to test source connection"
+      message -> String.slice(message, 0, 500)
+    end
+  end
 end

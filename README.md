@@ -124,20 +124,13 @@ Before deploying HydraSRT, ensure your system has the following dependencies ins
 
 ## Development
 
-To run HydraSRT locally, you'll need to start both the Elixir backend and the web UI.
+To run HydraSRT locally, start the Elixir app and Phoenix will also launch the Vite dev server for the web UI.
 
 ### Backend
 
 ```bash
-# Start the Elixir node
+# Start the Elixir node and the Vite web UI watcher
 make dev
-```
-
-### Frontend
-
-```bash
-# Start the web UI
-cd web_app && yarn dev
 ```
 
 ## Building for Production

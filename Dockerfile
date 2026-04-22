@@ -100,6 +100,7 @@ RUN apt-get update -y && \
     sudo \
     tini \
     curl \
+    ffmpeg \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
     libcjson1 \

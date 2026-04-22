@@ -112,6 +112,22 @@ export const routesApi = {
     const response = await authFetch(`/api/routes/${id}/restart`);
     return response.json();
   },
+
+  // Test a route source with ffprobe
+  testSource: async (routeData) => {
+    const response = await authFetch('/api/routes/test-source', {
+      method: 'POST',
+      body: JSON.stringify({ route: routeData }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to test source');
+    }
+
+    return data;
+  },
 };
 
 export const backupApi = {
