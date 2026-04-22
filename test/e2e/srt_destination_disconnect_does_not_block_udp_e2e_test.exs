@@ -135,7 +135,10 @@ defmodule HydraSrt.E2E.SrtDestinationDisconnectDoesNotBlockUdpE2ETest do
     end)
 
     assert is_integer(E2EHelpers.await_srt_packets_received(100, 5_000))
-    assert {:ok, %{bytes: udp_bytes_before_disconnect}} = E2EHelpers.await_udp_bytes(udp_dest_counter, 1, 5_000)
+
+    assert {:ok, %{bytes: udp_bytes_before_disconnect}} =
+             E2EHelpers.await_udp_bytes(udp_dest_counter, 1, 5_000)
+
     assert udp_bytes_before_disconnect > 0
 
     :ok = E2EHelpers.kill_port(srt_rx)

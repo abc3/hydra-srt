@@ -42,3 +42,6 @@ web_app/test-results
 
 rs-native/target
 priv/native/
+deployment/opentofu/.terraform/
+deployment/opentofu/.env
+deployment/opentofu/terraform.tfvars

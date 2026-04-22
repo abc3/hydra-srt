@@ -1,0 +1,23 @@
+[Unit]
+Description=HydraSRT service
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/var/lib/hydra_srt
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=hydra
+Group=hydra
+EnvironmentFile=/etc/hydra_srt/hydra_srt.env
+WorkingDirectory=/opt/hydra_srt/current
+ExecStart=/opt/hydra_srt/current/bin/server
+ExecStop=/opt/hydra_srt/current/bin/hydra_srt stop
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
