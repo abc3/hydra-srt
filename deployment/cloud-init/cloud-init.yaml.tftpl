@@ -1,0 +1,143 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - fail2ban
+  - ffmpeg
+  - gstreamer1.0-plugins-bad
+  - gstreamer1.0-plugins-base
+  - gstreamer1.0-plugins-good
+  - gstreamer1.0-tools
+  - libsrt1.5-openssl
+  - sqlite3
+  - ufw
+
+users:
+  - default
+  - name: hydra
+    gecos: HydraSRT service user
+    shell: /bin/bash
+    lock_passwd: true
+
+write_files:
+  - path: /usr/local/bin/hydra-prepare-volume.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      device="$1"
+      mount_point="$2"
+
+      for _ in $(seq 1 60); do
+        if [ -b "$device" ]; then
+          break
+        fi
+        sleep 2
+      done
+
+      if [ ! -b "$device" ]; then
+        echo "Expected volume device not found: $device" >&2
+        exit 1
+      fi
+
+      if ! blkid "$device" >/dev/null 2>&1; then
+        mkfs.ext4 -F "$device"
+      fi
+
+      mkdir -p "$mount_point"
+      uuid="$(blkid -s UUID -o value "$device")"
+
+      if ! grep -q "$uuid" /etc/fstab; then
+        echo "UUID=$uuid $mount_point ext4 defaults,nofail,discard 0 2" >> /etc/fstab
+      fi
+
+      mountpoint -q "$mount_point" || mount "$mount_point"
+
+      install -d -m 0755 -o hydra -g hydra \
+        "$mount_point/db" \
+        "$mount_point/backups" \
+        "$mount_point/releases"
+
+      install -d -m 0755 -o hydra -g hydra /opt/hydra_srt
+      ln -sfn "$mount_point/releases" /opt/hydra_srt/releases
+
+  - path: /usr/local/bin/configure-ufw.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      ufw --force reset
+      ufw default deny incoming
+      ufw default allow outgoing
+
+      %{ for cidr in admin_ipv4_cidrs ~}
+      ufw allow proto tcp from ${cidr} to any port 22 comment 'ssh admin ipv4'
+      %{ endfor ~}
+      %{ for cidr in admin_ipv6_cidrs ~}
+      ufw allow proto tcp from ${cidr} to any port 22 comment 'ssh admin ipv6'
+      %{ endfor ~}
+      %{ for cidr in app_ipv4_cidrs ~}
+      ufw allow proto tcp from ${cidr} to any port ${app_port} comment 'hydra app ipv4'
+      %{ endfor ~}
+      %{ for cidr in app_ipv6_cidrs ~}
+      ufw allow proto tcp from ${cidr} to any port ${app_port} comment 'hydra app ipv6'
+      %{ endfor ~}
+      %{ for port in stream_tcp_ports ~}
+      %{ for cidr in stream_ipv4_cidrs ~}
+      ufw allow proto tcp from ${cidr} to any port ${port} comment 'hydra stream tcp ipv4'
+      %{ endfor ~}
+      %{ for cidr in stream_ipv6_cidrs ~}
+      ufw allow proto tcp from ${cidr} to any port ${port} comment 'hydra stream tcp ipv6'
+      %{ endfor ~}
+      %{ endfor ~}
+      %{ for port in stream_udp_ports ~}
+      %{ for cidr in stream_ipv4_cidrs ~}
+      ufw allow proto udp from ${cidr} to any port ${port} comment 'hydra stream udp ipv4'
+      %{ endfor ~}
+      %{ for cidr in stream_ipv6_cidrs ~}
+      ufw allow proto udp from ${cidr} to any port ${port} comment 'hydra stream udp ipv6'
+      %{ endfor ~}
+      %{ endfor ~}
+
+      ufw --force enable
+
+  - path: /etc/fail2ban/jail.d/sshd.local
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [sshd]
+      enabled = true
+      port = ssh
+      banaction = ufw
+      maxretry = 5
+      findtime = 10m
+      bantime = 1h
+
+  - path: /etc/ssh/sshd_config.d/99-hardening.conf
+    permissions: "0644"
+    owner: root:root
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      PermitRootLogin prohibit-password
+      PubkeyAuthentication yes
+      X11Forwarding no
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+
+runcmd:
+  - install -d -m 0755 -o hydra -g hydra /etc/hydra_srt
+  - /usr/local/bin/hydra-prepare-volume.sh ${volume_linux_device_path} /var/lib/hydra_srt
+  - /usr/local/bin/configure-ufw.sh
+  - systemctl enable --now fail2ban
+  - systemctl restart ssh
+
+final_message: "HydraSRT host bootstrap is complete."
