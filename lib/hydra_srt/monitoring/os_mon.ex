@@ -27,7 +27,8 @@ defmodule HydraSrt.Monitoring.OsMon do
   def swap_usage do
     mem = :memsup.get_system_memory_data()
 
-    with total_swap when is_integer(total_swap) and total_swap > 0 <- Keyword.get(mem, :total_swap),
+    with total_swap when is_integer(total_swap) and total_swap > 0 <-
+           Keyword.get(mem, :total_swap),
          free_swap when is_integer(free_swap) <- Keyword.get(mem, :free_swap) do
       100 - free_swap / total_swap * 100
     else

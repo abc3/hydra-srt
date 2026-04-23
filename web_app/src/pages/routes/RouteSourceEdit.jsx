@@ -277,6 +277,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                     name="name"
                     required
                     tooltip="A unique name for this route"
+                    rules={[{ required: true, message: 'Please enter a route name' }]}
                   >
                     <Input placeholder="Enter route name" />
                   </Form.Item>
@@ -314,6 +315,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                     name="node"
                     required
                     tooltip="Node where route will launch"
+                    rules={[{ required: true, message: 'Please select a node' }]}
                   >
                     <Select
                       placeholder="Select a node"
@@ -329,6 +331,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                     label="Schema"
                     name="schema"
                     required
+                    rules={[{ required: true, message: 'Please select a source schema' }]}
                   >
                     <Radio.Group buttonStyle="solid">
                       <Radio.Button value="SRT">SRT</Radio.Button>
@@ -346,6 +349,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                             name={['schema_options', 'mode']}
                             required
                             extra="The SRT connection mode. Caller: Actively initiates the connection to a Listener. Listener: Waits for an incoming connection from a Caller. Rendezvous: Both endpoints attempt to connect to each other simultaneously"
+                            rules={[{ required: true, message: 'Please select an SRT mode' }]}
                           >
                             <Radio.Group buttonStyle="solid">
                               <Radio.Button value="caller">Caller</Radio.Button>
@@ -392,6 +396,10 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                   required
                                   tooltip="Port number (1-65535)"
                                   rules={[
+                                    {
+                                      required: true,
+                                      message: `Please enter a ${isCaller ? 'remote' : 'bind'} port`,
+                                    },
                                     {
                                       type: 'number',
                                       min: 1,
@@ -455,6 +463,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                     name={['schema_options', 'passphrase']}
                                     required
                                     extra="Encryption passphrase for SRT authentication"
+                                    rules={[{ required: true, message: 'Please enter an SRT passphrase' }]}
                                   >
                                     <Input.Password placeholder="Enter passphrase" />
                                   </Form.Item>
@@ -464,6 +473,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                     name={['schema_options', 'pbkeylen']}
                                     required
                                     extra="Encryption key length for SRT authentication"
+                                    rules={[{ required: true, message: 'Please select an SRT key length' }]}
                                   >
                                     <Select
                                       placeholder="Select key length"
@@ -509,6 +519,10 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                             required
                             tooltip="Port number (1-65535)"
                             rules={[
+                              {
+                                required: true,
+                                message: 'Please enter a UDP port',
+                              },
                               {
                                 type: 'number',
                                 min: 1,
