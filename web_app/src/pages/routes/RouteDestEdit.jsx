@@ -173,6 +173,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         name="name"
                                         required
                                         extra="A unique name for this destination"
+                                        rules={[{ required: true, message: 'Please enter a destination name' }]}
                                     >
                                         <Input placeholder="Enter destination name" />
                                     </Form.Item>
@@ -184,6 +185,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         label="Schema"
                                         name="schema"
                                         required
+                                        rules={[{ required: true, message: 'Please select a destination schema' }]}
                                     >
                                         <Radio.Group buttonStyle="solid">
                                             <Radio.Button value="SRT">SRT</Radio.Button>
@@ -211,6 +213,10 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         extra="Local port to bind."
                                                         rules={[
                                                             {
+                                                                required: true,
+                                                                message: 'Please enter a local port',
+                                                            },
+                                                            {
                                                                 type: 'number',
                                                                 min: 1,
                                                                 max: 65535,
@@ -229,6 +235,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         name={['schema_options', 'mode']}
                                                         required
                                                         extra="Caller: Actively initiates the connection. Listener: Waits for incoming connections. Rendezvous: Both endpoints connect to each other simultaneously."
+                                                        rules={[{ required: true, message: 'Please select an SRT mode' }]}
                                                     >
                                                         <Radio.Group buttonStyle="solid">
                                                             <Radio.Button value="caller">Caller</Radio.Button>
@@ -268,6 +275,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                         name={['schema_options', 'passphrase']}
                                                                         required
                                                                         extra="Encryption passphrase for SRT authentication"
+                                                                        rules={[{ required: true, message: 'Please enter an SRT passphrase' }]}
                                                                     >
                                                                         <Input.Password placeholder="Enter passphrase" />
                                                                     </Form.Item>
@@ -277,6 +285,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                         name={['schema_options', 'pbkeylen']}
                                                                         required
                                                                         extra="Encryption key length for SRT authentication"
+                                                                        rules={[{ required: true, message: 'Please select an SRT key length' }]}
                                                                     >
                                                                         <Select
                                                                             placeholder="Select key length"
@@ -308,6 +317,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         required
                                                         name={['schema_options', 'host']}
                                                         extra="The host/IP/Multicast group to send the packets to"
+                                                        rules={[{ required: true, message: 'Please enter a UDP destination address' }]}
                                                     >
                                                         <Input placeholder="Enter address" />
                                                     </Form.Item>
@@ -318,6 +328,10 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         required
                                                         extra="The port to send the packets to"
                                                         rules={[
+                                                            {
+                                                                required: true,
+                                                                message: 'Please enter a UDP destination port',
+                                                            },
                                                             {
                                                                 type: 'number',
                                                                 min: 1,
