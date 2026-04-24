@@ -118,8 +118,24 @@ defmodule HydraSrt.E2E.SrtPipelineE2ETest do
       E2EHelpers.kill_port(rx)
     end)
 
-    Process.sleep(6_000)
-    assert E2EHelpers.await_tag_exit_status("ffmpeg", 10_000) == 0
+    E2EHelpers.wait_until(
+      fn ->
+        case E2EHelpers.api_get_route(base_url, token, route_id) do
+          {:ok, route} ->
+            route["schema_status"] == "processing" and
+              Enum.all?(route["destinations"], fn destination ->
+                destination["status"] == "processing"
+              end)
+
+          _ ->
+            false
+        end
+      end,
+      10_000,
+      250
+    )
+
     assert is_integer(E2EHelpers.await_srt_packets_received(100, 5_000))
+    assert E2EHelpers.await_tag_exit_status("ffmpeg", 10_000) == 0
   end
 end

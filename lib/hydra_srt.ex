@@ -26,7 +26,7 @@ defmodule HydraSrt do
         Supervisor.stop(pid, :normal)
 
       other ->
-        HydraSrt.set_route_status(id, "stopped")
+        HydraSrt.mark_route_stopped(id)
         other
     end
   end
@@ -51,6 +51,49 @@ defmodule HydraSrt do
     with {:ok, route} <- Db.update_route(id, route_runtime_status_attrs(status)) do
       {:ok, route}
     end
+  end
+
+  @spec set_route_schema_status(String.t(), String.t() | nil) :: {:ok, map()} | {:error, term()}
+  def set_route_schema_status(id, schema_status) do
+    Db.update_route_schema_status(id, schema_status)
+  end
+
+  @spec set_route_runtime_status(String.t(), String.t() | nil) :: {:ok, map()} | {:error, term()}
+  def set_route_runtime_status(id, status) do
+    Db.update_route_runtime_status(id, status)
+  end
+
+  @spec mark_route_started(String.t()) :: {:ok, map()} | {:error, term()}
+  def mark_route_started(id) do
+    :ok = Db.update_destinations_status(id, nil)
+
+    with {:ok, route} <-
+           Db.update_route(
+             id,
+             route_runtime_status_attrs("started")
+             |> Map.put("schema_status", nil)
+           ) do
+      {:ok, route}
+    end
+  end
+
+  @spec mark_route_stopped(String.t()) :: {:ok, map()} | {:error, term()}
+  def mark_route_stopped(id) do
+    :ok = Db.update_destinations_status(id, "stopped")
+
+    with {:ok, route} <-
+           Db.update_route(
+             id,
+             route_runtime_status_attrs("stopped")
+             |> Map.put("schema_status", "stopped")
+           ) do
+      {:ok, route}
+    end
+  end
+
+  @spec mark_route_terminated(String.t()) :: {:ok, map()} | {:error, term()}
+  def mark_route_terminated(id) do
+    set_route_status(id, "stopped")
   end
 
   defp route_runtime_status_attrs(status) when is_binary(status) do

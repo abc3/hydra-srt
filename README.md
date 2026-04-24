@@ -1,5 +1,3 @@
-<img src="/web_app/public/logo.webp" alt="HydraSRT" width="400"/>
-
 # HydraSRT – An Open Source Alternative to Haivision SRT Gateway
 
 > ⚠️ **Pre-Alpha Status**: This project is in a very early development stage. Features may be incomplete, and breaking changes are expected.

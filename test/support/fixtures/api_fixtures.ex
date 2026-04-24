@@ -16,6 +16,7 @@ defmodule HydraSrt.ApiFixtures do
         name: "some name",
         exportStats: false,
         schema: "UDP",
+        schema_status: nil,
         schema_options: %{},
         source: %{},
         started_at: ~U[2025-02-18 14:51:00Z],

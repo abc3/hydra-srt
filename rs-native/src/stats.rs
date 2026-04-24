@@ -46,11 +46,17 @@ pub fn start_stats_loop(runtime: &PipelineRuntime, writer: Arc<Mutex<Box<dyn Sta
                 .as_ref()
                 .and_then(extract_callers_from_stats)
                 .unwrap_or_default();
-            root.insert("connected-callers".into(), Value::Number((callers.len() as u64).into()));
+            root.insert(
+                "connected-callers".into(),
+                Value::Number((callers.len() as u64).into()),
+            );
             root.insert("callers".into(), Value::Array(callers));
 
             let mut source_obj = Map::new();
-            source_obj.insert("type".into(), Value::String(source.type_().name().to_string()));
+            source_obj.insert(
+                "type".into(),
+                Value::String(source.type_().name().to_string()),
+            );
             source_obj.insert("bytes_in_total".into(), Value::Number(current_total.into()));
             source_obj.insert(
                 "bytes_in_per_sec".into(),
@@ -154,7 +160,10 @@ fn structure_to_json(structure: &gst::Structure) -> Value {
                 if let Ok(inet) = address.downcast::<InetSocketAddress>() {
                     let ip = inet.address().to_string();
                     let port = inet.port();
-                    obj.insert(field_name.to_string(), Value::String(format!("{ip}:{port}")));
+                    obj.insert(
+                        field_name.to_string(),
+                        Value::String(format!("{ip}:{port}")),
+                    );
                 }
             }
             continue;

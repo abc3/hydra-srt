@@ -132,4 +132,50 @@ defmodule HydraSrt.RouteHandlerTest do
   test "callback_mode returns handle_event_function" do
     assert RouteHandler.callback_mode() == [:handle_event_function]
   end
+
+  test "parse_native_json_line detects pipeline status events" do
+    assert {:pipeline_status, "processing", nil} =
+             RouteHandler.parse_native_json_line(
+               ~s({"event":"pipeline_status","status":"processing"})
+             )
+  end
+
+  test "parse_native_json_line keeps stats payloads separate" do
+    assert :stats =
+             RouteHandler.parse_native_json_line(
+               ~s({"source":{"bytes_in_per_sec":123},"destinations":[]})
+             )
+  end
+
+  test "parse_native_json_line keeps status reason when present" do
+    assert {:pipeline_status, "stopped", "failure"} =
+             RouteHandler.parse_native_json_line(
+               ~s({"event":"pipeline_status","status":"stopped","reason":"failure"})
+             )
+  end
+
+  test "normalize_runtime_status ignores stopped failure event to preserve failed state" do
+    assert :ignore = RouteHandler.normalize_runtime_status("stopped", "failure")
+    assert {:update, "failed"} = RouteHandler.normalize_runtime_status("failed", "runtime_error")
+    assert {:update, "processing"} = RouteHandler.normalize_runtime_status("processing", nil)
+  end
+
+  test "failed runtime status is preserved when binary exits with non-zero code" do
+    # Rust emits `failed` then immediately `stopped/failure` before the OS process dies.
+    # The two parse steps produce distinct tuples...
+    assert {:pipeline_status, "failed", "runtime_error"} =
+             RouteHandler.parse_native_json_line(
+               ~s({"event":"pipeline_status","status":"failed","reason":"runtime_error"})
+             )
+
+    assert {:pipeline_status, "stopped", "failure"} =
+             RouteHandler.parse_native_json_line(
+               ~s({"event":"pipeline_status","status":"stopped","reason":"failure"})
+             )
+
+    # ...and the normalization layer updates on the first event but ignores the second,
+    # so the DB value stays "failed" rather than being overwritten with "stopped".
+    assert {:update, "failed"} = RouteHandler.normalize_runtime_status("failed", "runtime_error")
+    assert :ignore = RouteHandler.normalize_runtime_status("stopped", "failure")
+  end
 end

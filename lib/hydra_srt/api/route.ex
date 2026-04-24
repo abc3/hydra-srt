@@ -9,6 +9,7 @@ defmodule HydraSrt.Api.Route do
     field :enabled, :boolean, default: true
     field :name, :string
     field :status, :string
+    field :schema_status, :string
     field :export_stats, :boolean, default: false
     field :schema, :string
     field :schema_options, :map
@@ -34,6 +35,7 @@ defmodule HydraSrt.Api.Route do
       :name,
       :alias,
       :status,
+      :schema_status,
       :export_stats,
       :schema,
       :schema_options,

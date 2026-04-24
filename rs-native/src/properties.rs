@@ -180,7 +180,10 @@ mod tests {
         let config = ElementConfig {
             element_type: "srtsrc".to_string(),
             props: BTreeMap::from([
-                ("localaddress".to_string(), Value::String("127.0.0.1".to_string())),
+                (
+                    "localaddress".to_string(),
+                    Value::String("127.0.0.1".to_string()),
+                ),
                 ("localport".to_string(), Value::Number(4201_u64.into())),
                 ("mode".to_string(), Value::String("listener".to_string())),
                 ("pbkeylen".to_string(), Value::Number(16_u64.into())),
@@ -207,14 +210,18 @@ mod tests {
         let config = ElementConfig {
             element_type: "srtsink".to_string(),
             props: BTreeMap::from([
-                ("localaddress".to_string(), Value::String("127.0.0.1".to_string())),
+                (
+                    "localaddress".to_string(),
+                    Value::String("127.0.0.1".to_string()),
+                ),
                 ("localport".to_string(), Value::Number(4201_u64.into())),
                 ("mode".to_string(), Value::String("caller".to_string())),
                 ("pbkeylen".to_string(), Value::Number(16_u64.into())),
             ]),
         };
 
-        apply_element_properties(&element, &config).expect("setting srtsink properties should work");
+        apply_element_properties(&element, &config)
+            .expect("setting srtsink properties should work");
 
         let value = element.property_value("pbkeylen");
         let (_, enum_value) =
@@ -226,10 +233,16 @@ mod tests {
     #[test]
     fn build_srt_uri_only_embeds_transport_fields() {
         let props = BTreeMap::from([
-            ("localaddress".to_string(), Value::String("127.0.0.1".to_string())),
+            (
+                "localaddress".to_string(),
+                Value::String("127.0.0.1".to_string()),
+            ),
             ("localport".to_string(), Value::Number(4201_u64.into())),
             ("mode".to_string(), Value::String("listener".to_string())),
-            ("passphrase".to_string(), Value::String("secret".to_string())),
+            (
+                "passphrase".to_string(),
+                Value::String("secret".to_string()),
+            ),
             ("pbkeylen".to_string(), Value::Number(16_u64.into())),
             ("poll-timeout".to_string(), Value::Number(1000_u64.into())),
         ]);

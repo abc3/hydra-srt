@@ -1,9 +1,21 @@
 ExUnit.start()
 
+test_args = System.argv()
+
+e2e_mode_enabled? =
+  System.get_env("E2E") == "true" or
+    Enum.chunk_every(test_args, 2, 1, :discard)
+    |> Enum.any?(fn
+      ["--only", tag] -> String.starts_with?(tag, "e2e")
+      ["--include", tag] -> String.starts_with?(tag, "e2e")
+      _ -> false
+    end)
+
 # Opt-in helpers for debugging hangs:
 # - TRACE=true       -> prints every test name as it runs
 # - SLOWEST=true     -> prints slowest tests at end (ExUnit 1.13+)
 # - TEST_TIMEOUT=ms  -> per-test timeout override
+# - E2E_DEBUG_LOGS=true -> prints full stdout/stderr from external E2E helper processes
 if System.get_env("TRACE") == "true" do
   ExUnit.configure(trace: true)
 end
@@ -23,17 +35,18 @@ case System.get_env("TEST_TIMEOUT") do
     end
 end
 
-if System.get_env("NATIVE_E2E") == "true" do
-  "test/native_e2e/support/*.ex"
-  |> Path.wildcard()
-  |> Enum.sort()
-  |> Enum.each(&Code.require_file/1)
-end
+[
+  "test/native_e2e/support/process_registry.ex",
+  "test/native_e2e/support/udp_listener.ex",
+  "test/native_e2e/support/native_helpers.ex",
+  "test/native_e2e/support/rs_native_harness.ex"
+]
+|> Enum.each(&Code.require_file/1)
 
 excludes = []
 
 excludes =
-  if System.get_env("E2E") != "true" do
+  if not e2e_mode_enabled? do
     [e2e: true] ++ excludes
   else
     excludes
@@ -50,7 +63,7 @@ if excludes != [] do
   ExUnit.configure(exclude: excludes)
 end
 
-if System.get_env("E2E") != "true" do
+if not e2e_mode_enabled? do
   # Unit tests use SQL Sandbox.
   if Code.ensure_loaded?(HydraSrt.Repo) and function_exported?(HydraSrt.Repo, :__adapter__, 0) do
     case Process.whereis(HydraSrt.Repo) do
@@ -63,10 +76,11 @@ if System.get_env("E2E") != "true" do
   end
 end
 
-if System.get_env("E2E") == "true" do
+if e2e_mode_enabled? do
+  Application.put_env(:hydra_srt, :stats_persist_async?, false)
+
   # E2E suite needs the real HTTP server + API auth
   HydraSrt.TestSupport.E2EHelpers.ensure_e2e_prereqs!()
-  HydraSrt.TestSupport.E2EHelpers.ensure_endpoint_server_started!()
 
   if not HydraSrt.TestSupport.E2EHelpers.ffmpeg_supports_srt_encryption?() do
     IO.puts(
@@ -77,4 +91,6 @@ if System.get_env("E2E") == "true" do
   end
 
   ExUnit.after_suite(fn _ -> HydraSrt.TestSupport.E2EHelpers.kill_all_pipelines!() end)
+else
+  Application.put_env(:hydra_srt, :stats_persist_async?, true)
 end

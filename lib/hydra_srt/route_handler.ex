@@ -25,7 +25,9 @@ defmodule HydraSrt.RouteHandler do
       port: nil,
       route: route,
       port_buffer: "",
-      source_stream_id: nil
+      source_stream_id: nil,
+      pipeline_status: nil,
+      shutdown_reason: nil
     }
 
     {:ok, :start, data, {:next_event, :internal, :start}}
@@ -38,7 +40,7 @@ defmodule HydraSrt.RouteHandler do
 
     case send_initial_command(port, data.id) do
       :ok ->
-        HydraSrt.set_route_status(data.id, "started")
+        HydraSrt.mark_route_started(data.id)
         {:next_state, :started, %{data | port: port}}
 
       {:error, reason} ->
@@ -68,12 +70,22 @@ defmodule HydraSrt.RouteHandler do
   def handle_event(:info, {port, {:exit_status, status}}, _state, %{port: port} = data) do
     log_fun = if status == 0, do: &Logger.info/1, else: &Logger.error/1
     log_fun.("RouteHandler: native pipeline exited with status #{status}")
-    {:stop, {:port_exit, status}, data}
+
+    if status == 0 do
+      {:stop, :normal, %{data | shutdown_reason: {:port_exit, 0}}}
+    else
+      {:stop, {:port_exit, status}, data}
+    end
   end
 
   def handle_event(:info, {:EXIT, port, reason}, _state, %{port: port} = data) do
     Logger.info("RouteHandler: port exit #{inspect(reason)}")
-    {:stop, {:port_exit, reason}, data}
+
+    if reason == :normal do
+      {:stop, :normal, %{data | shutdown_reason: {:port_exit, :normal}}}
+    else
+      {:stop, {:port_exit, reason}, data}
+    end
   end
 
   def handle_event(type, content, state, data) do
@@ -86,16 +98,23 @@ defmodule HydraSrt.RouteHandler do
   end
 
   @impl true
+  def terminate(reason, _state, %{id: id, shutdown_reason: shutdown_reason})
+      when not is_nil(shutdown_reason) do
+    Logger.info("RouteHandler: reason: #{inspect(reason)}")
+    mark_route_terminated(id, shutdown_reason)
+    :ok
+  end
+
   def terminate(reason, _state, %{port: port, id: id}) when is_port(port) do
     Logger.info("RouteHandler: reason: #{inspect(reason)} Closing port #{inspect(port)}")
     close_port(port)
-    HydraSrt.set_route_status(id, "stopped")
+    mark_route_terminated(id, reason)
     :ok
   end
 
   def terminate(reason, _state, data) do
     Logger.info("RouteHandler: reason: #{inspect(reason)}")
-    HydraSrt.set_route_status(data.id, "stopped")
+    mark_route_terminated(data.id, reason)
     :ok
   end
 
@@ -163,16 +182,20 @@ defmodule HydraSrt.RouteHandler do
 
   defp close_port(port) do
     try do
-      case Port.info(port, :os_pid) do
-        {:os_pid, pid} when is_integer(pid) ->
-          Logger.info("RouteHandler: Killing external process with PID #{pid}")
-          Helpers.sys_kill(pid)
+      if is_nil(Port.info(port)) do
+        :ok
+      else
+        case Port.info(port, :os_pid) do
+          {:os_pid, pid} when is_integer(pid) ->
+            Logger.info("RouteHandler: Killing external process with PID #{pid}")
+            Helpers.sys_kill(pid)
 
-        _ ->
-          Logger.warning("RouteHandler: Could not get OS PID, relying on Port.close/1")
+          _ ->
+            Logger.warning("RouteHandler: Could not get OS PID, relying on Port.close/1")
+        end
+
+        Port.close(port)
       end
-
-      Port.close(port)
     rescue
       error ->
         Logger.error("RouteHandler: Error closing port: #{inspect(error)}")
@@ -208,18 +231,80 @@ defmodule HydraSrt.RouteHandler do
   end
 
   defp process_port_line("{" <> _ = json, data) do
-    StatsProcessor.process_stats_json(json, %{
-      route_id: data.id,
-      route_record: data.route,
-      source_stream_id: data.source_stream_id
-    })
+    case parse_native_json_line(json) do
+      {:pipeline_status, status, reason} ->
+        Logger.info("RouteHandler: pipeline_status=#{status} reason=#{inspect(reason)}")
 
-    data
+        case normalize_runtime_status(status, reason) do
+          {:update, normalized_status} ->
+            HydraSrt.set_route_runtime_status(data.id, normalized_status)
+
+            StatsProcessor.process_pipeline_status(%{
+              route_id: data.id,
+              route_record: data.route,
+              source_stream_id: data.source_stream_id,
+              pipeline_status: normalized_status
+            })
+
+            %{data | pipeline_status: normalized_status}
+
+          :ignore ->
+            data
+        end
+
+      :stats ->
+        StatsProcessor.process_stats_json(json, %{
+          route_id: data.id,
+          route_record: data.route,
+          source_stream_id: data.source_stream_id,
+          pipeline_status: data.pipeline_status
+        })
+
+        data
+
+      :unknown ->
+        Logger.warning("RouteHandler: unknown native json line: #{inspect(json)}")
+        data
+    end
   end
 
   defp process_port_line(line, data) do
     Logger.warning("RouteHandler: pipeline: #{inspect(line)}")
     data
+  end
+
+  @doc false
+  def parse_native_json_line(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, %{"event" => "pipeline_status", "status" => status} = payload}
+      when is_binary(status) ->
+        {:pipeline_status, status, Map.get(payload, "reason")}
+
+      {:ok, %{"event" => _event}} ->
+        :unknown
+
+      {:ok, %{} = _stats} ->
+        :stats
+
+      _ ->
+        :unknown
+    end
+  end
+
+  @doc false
+  def normalize_runtime_status("stopped", "failure"), do: :ignore
+  def normalize_runtime_status(status, _reason) when is_binary(status), do: {:update, status}
+
+  defp mark_route_terminated(route_id, {:port_exit, status}) when status not in [0, :normal] do
+    HydraSrt.mark_route_terminated(route_id)
+  end
+
+  defp mark_route_terminated(route_id, reason) when reason in [:normal, {:port_exit, 0}] do
+    HydraSrt.mark_route_stopped(route_id)
+  end
+
+  defp mark_route_terminated(route_id, _reason) do
+    HydraSrt.mark_route_terminated(route_id)
   end
 
   def route_data_to_params(route_id) do
