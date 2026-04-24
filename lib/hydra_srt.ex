@@ -48,8 +48,30 @@ defmodule HydraSrt do
 
   @spec set_route_status(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def set_route_status(id, status) do
-    with {:ok, route} <- Db.update_route(id, %{"status" => status}) do
+    with {:ok, route} <- Db.update_route(id, route_runtime_status_attrs(status)) do
       {:ok, route}
+    end
+  end
+
+  defp route_runtime_status_attrs(status) when is_binary(status) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    case String.downcase(status) do
+      "started" ->
+        %{
+          "status" => status,
+          "started_at" => now,
+          "stopped_at" => nil
+        }
+
+      "stopped" ->
+        %{
+          "status" => status,
+          "stopped_at" => now
+        }
+
+      _ ->
+        %{"status" => status}
     end
   end
 end
