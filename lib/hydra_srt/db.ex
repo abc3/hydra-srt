@@ -66,6 +66,26 @@ defmodule HydraSrt.Db do
     end
   end
 
+  @spec update_route_schema_status(String.t(), String.t() | nil) :: {:ok, map()} | {:error, any()}
+  def update_route_schema_status(id, schema_status) when is_binary(id) do
+    update_route(id, %{"schema_status" => schema_status})
+  end
+
+  @spec update_destinations_status(String.t(), String.t() | nil) :: :ok
+  def update_destinations_status(route_id, status) when is_binary(route_id) do
+    from(d in Destination, where: d.route_id == ^route_id)
+    |> Repo.update_all(set: [status: status, updated_at: DateTime.utc_now(:second)])
+
+    :ok
+  end
+
+  @spec update_route_runtime_status(String.t(), String.t() | nil) ::
+          {:ok, map()} | {:error, any()}
+  def update_route_runtime_status(route_id, status) when is_binary(route_id) do
+    :ok = update_destinations_status(route_id, status)
+    update_route_schema_status(route_id, status)
+  end
+
   @spec delete_route(String.t()) :: [:ok] | [{:error, any}]
   def delete_route(id) when is_binary(id) do
     case Api.get_route(id, false) do
@@ -205,6 +225,7 @@ defmodule HydraSrt.Db do
       "name" => route.name,
       "alias" => route.alias,
       "status" => route.status,
+      "schema_status" => route.schema_status,
       "exportStats" => route.export_stats,
       "schema" => route.schema,
       "schema_options" => route.schema_options,

@@ -46,6 +46,23 @@ import {
 
 const { Title, Text } = Typography;
 
+const getRuntimeStatusMeta = (status) => {
+  switch ((status || '').toLowerCase()) {
+    case 'processing':
+    case 'started':
+      return { color: 'success', label: status };
+    case 'starting':
+    case 'reconnecting':
+      return { color: 'processing', label: status };
+    case 'failed':
+      return { color: 'error', label: status };
+    case 'stopped':
+      return { color: 'default', label: status };
+    default:
+      return { color: 'default', label: status || 'unknown' };
+  }
+};
+
 const RouteItem = () => {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -86,6 +103,9 @@ const RouteItem = () => {
     channel.on("stats", stats => {
       console.log("Received stats:", stats);
       setStats(stats);
+      if (stats?.schema_status) {
+        setRouteData(prev => prev ? { ...prev, schema_status: stats.schema_status } : prev);
+      }
       // Add timestamp to stats for charts
       const timestamp = new Date().toLocaleTimeString();
       setStatsHistory(prev => {
@@ -258,6 +278,20 @@ const RouteItem = () => {
     //     );
     //   },
     // },
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      key: 'status',
+      render: (status) => {
+        const { color, label } = getRuntimeStatusMeta(status);
+
+        return (
+          <Tag color={color}>
+            {label ? label.charAt(0).toUpperCase() + label.slice(1) : 'Unknown'}
+          </Tag>
+        );
+      },
+    },
     {
       title: 'Destination',
       key: 'host_port',
@@ -748,6 +782,8 @@ const RouteItem = () => {
 
   // Get status details
   const statusDetails = getStatusDetails(routeData);
+  const runtimeStatus = routeData?.schema_status || routeData?.status;
+  const runtimeStatusMeta = getRuntimeStatusMeta(runtimeStatus);
 
   // Helper function to check if route is started
   const isRouteStarted = routeData && routeData.status && routeData.status.toLowerCase() === 'started';
@@ -764,13 +800,15 @@ const RouteItem = () => {
         if (result && result.data) {
           setRouteData(prev => ({
             ...prev,
-            status: result.data.status
+            status: result.data.status,
+            schema_status: 'stopped'
           }));
         } else {
           // If no data is returned, assume the route is stopped
           setRouteData(prev => ({
             ...prev,
-            status: 'stopped'
+            status: 'stopped',
+            schema_status: 'stopped'
           }));
         }
 
@@ -783,13 +821,15 @@ const RouteItem = () => {
         if (result && result.data) {
           setRouteData(prev => ({
             ...prev,
-            status: result.data.status
+            status: result.data.status,
+            schema_status: null
           }));
         } else {
           // If no data is returned, assume the route is started
           setRouteData(prev => ({
             ...prev,
-            status: 'started'
+            status: 'started',
+            schema_status: null
           }));
         }
 
@@ -803,7 +843,8 @@ const RouteItem = () => {
         // Update the UI to reflect that the route is started
         setRouteData(prev => ({
           ...prev,
-          status: 'started'
+          status: 'started',
+          schema_status: null
         }));
       } else if (error.message && error.message.includes('not_found')) {
         messageApi.info('Route process not found. It may have already been stopped.');
@@ -811,7 +852,8 @@ const RouteItem = () => {
         // Update the UI to reflect that the route is stopped
         setRouteData(prev => ({
           ...prev,
-          status: 'stopped'
+          status: 'stopped',
+          schema_status: 'stopped'
         }));
       } else if (error.response && error.response.status === 422) {
         // Handle 422 Unprocessable Entity error
@@ -882,9 +924,14 @@ const RouteItem = () => {
             <Space direction="vertical" size="small">
               <Title level={4} style={{ margin: 0 }}>{routeData.name}</Title>
               <Space>
-                <Tag color={statusDetails.color}>
-                  {routeData.status ? routeData.status.charAt(0).toUpperCase() + routeData.status.slice(1) : 'Unknown'}
+                <Tag color={runtimeStatusMeta.color}>
+                  {runtimeStatus ? runtimeStatus.charAt(0).toUpperCase() + runtimeStatus.slice(1) : 'Unknown'}
                 </Tag>
+                {routeData?.status && routeData?.schema_status && routeData.status !== routeData.schema_status && (
+                  <Tag color={statusDetails.color}>
+                    Route {routeData.status.charAt(0).toUpperCase() + routeData.status.slice(1)}
+                  </Tag>
+                )}
                 <Text type="secondary">
                   Last Updated: {new Date(routeData.updated_at).toLocaleString()}
                 </Text>

@@ -22,20 +22,29 @@ const ONE_HOUR_SECONDS = 60 * ONE_MINUTE_SECONDS;
 const ONE_DAY_SECONDS = 24 * ONE_HOUR_SECONDS;
 const ONE_MONTH_SECONDS = 30 * ONE_DAY_SECONDS;
 
-const renderStatusTag = (status) => {
-  const normalizedStatus = typeof status === 'string' ? status.toLowerCase() : '';
-
-  if (normalizedStatus === 'started') {
-    return (
-      <Tag color="success" icon={<CheckCircleOutlined />} variant="outlined">
-        started
-      </Tag>
-    );
+const getStatusMeta = (status) => {
+  switch ((status || '').toLowerCase()) {
+    case 'processing':
+    case 'started':
+      return { color: 'success', label: status, icon: <CheckCircleOutlined /> };
+    case 'starting':
+    case 'reconnecting':
+      return { color: 'processing', label: status, icon: null };
+    case 'failed':
+      return { color: 'error', label: status, icon: <ExclamationCircleOutlined /> };
+    case 'stopped':
+      return { color: 'default', label: status, icon: null };
+    default:
+      return { color: 'default', label: status || 'unknown', icon: null };
   }
+};
+
+const renderStatusTag = (status) => {
+  const { color, label, icon } = getStatusMeta(status);
 
   return (
-    <Tag color="error" icon={<ExclamationCircleOutlined />} variant="outlined">
-      stopped
+    <Tag color={color} icon={icon} variant="outlined">
+      {label}
     </Tag>
   );
 };
@@ -220,7 +229,6 @@ const Routes = () => {
   const [modal, modalContextHolder] = Modal.useModal();
   const navigate = useNavigate();
 
-  // Set breadcrumb items for the Routes page
   useEffect(() => {
     if (window.setBreadcrumbItems) {
       window.breadcrumbSet = true;
@@ -280,7 +288,7 @@ const Routes = () => {
     try {
       await routesApi.delete(id);
       messageApi.success('Route deleted successfully');
-      fetchRoutes(); // Refresh the list
+      fetchRoutes();
     } catch (error) {
       messageApi.error(`Failed to delete route: ${error.message}`);
       console.error('Error:', error);
@@ -293,9 +301,14 @@ const Routes = () => {
         ? await routesApi.start(id)
         : await routesApi.stop(id);
 
-      // Update the specific route in the routes array
       setRoutes(routes.map(route =>
-        route.id === id ? { ...route, status: result.data.status } : route
+        route.id === id
+          ? {
+              ...route,
+              status: result.data.status,
+              schema_status: action === 'stop' ? 'stopped' : null,
+            }
+          : route
       ));
 
       messageApi.success(`Route ${action}ed successfully`);
@@ -331,7 +344,7 @@ const Routes = () => {
               {text}
             </a>
           </Space>
-        )
+        );
       },
     },
     {
@@ -409,9 +422,9 @@ const Routes = () => {
       title: 'Enabled',
       dataIndex: 'enabled',
       key: 'enabled',
-      render: (schema) => (
-        <Tag color={schema ? 'green' : 'gray'}>
-          {schema ? 'yes' : 'no'}
+      render: (enabled) => (
+        <Tag color={enabled ? 'green' : 'gray'}>
+          {enabled ? 'yes' : 'no'}
         </Tag>
       ),
     },
@@ -419,7 +432,7 @@ const Routes = () => {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      render: (status) => renderStatusTag(status),
+      render: (_, record) => renderStatusTag(record.schema_status || record.status),
     },
     {
       title: 'Uptime',
@@ -522,4 +535,4 @@ const Routes = () => {
   );
 };
 
-export default Routes; 
+export default Routes;

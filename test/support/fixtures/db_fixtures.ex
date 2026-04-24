@@ -15,6 +15,7 @@ defmodule HydraSrt.DbFixtures do
         "destinations" => [],
         "enabled" => true,
         "name" => "some name",
+        "schema_status" => nil,
         "schema" => "UDP",
         "schema_options" => %{},
         "source" => %{},

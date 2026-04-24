@@ -8,6 +8,7 @@ use gstreamer::prelude::*;
 use serde_json::Value;
 
 use crate::config::{ElementConfig, PipelineConfig};
+use crate::lifecycle::PipelineLifecycleEmitter;
 use crate::output::StatsWriter;
 use crate::properties::apply_element_properties;
 use crate::runtime::{DestMetrics, PipelineRuntime};
@@ -17,6 +18,7 @@ pub fn build_pipeline(
     writer: Arc<Mutex<Box<dyn StatsWriter>>>,
 ) -> Result<PipelineRuntime> {
     let pipeline = gst::Pipeline::new();
+    let lifecycle = PipelineLifecycleEmitter::new(writer.clone());
     let source = gst::ElementFactory::make(&config.source.element_type)
         .build()
         .with_context(|| format!("failed to create source {}", config.source.element_type))?;
@@ -68,20 +70,26 @@ pub fn build_pipeline(
     pipeline
         .add_many([&source, &tee])
         .context("failed to add source/tee to pipeline")?;
-    source
-        .link(&tee)
-        .context("failed to link source to tee")?;
+    source.link(&tee).context("failed to link source to tee")?;
 
     let source_bytes_total = Arc::new(AtomicU64::new(0));
     let source_bytes_last_interval = Arc::new(AtomicU64::new(0));
     let source_bytes_per_sec = Arc::new(AtomicU64::new(0));
+    let processing_pending = Arc::new(AtomicBool::new(true));
     let dest_metrics: Arc<Mutex<Vec<Arc<DestMetrics>>>> = Arc::new(Mutex::new(Vec::new()));
 
     if let Some(src_pad) = source.static_pad("src") {
         let bytes_counter = source_bytes_total.clone();
+        let lifecycle_ref = lifecycle.clone();
+        let processing_pending_ref = processing_pending.clone();
         src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
             if let Some(buffer) = info.buffer() {
-                bytes_counter.fetch_add(buffer.size() as u64, Ordering::Relaxed);
+                record_source_buffer(
+                    &bytes_counter,
+                    &processing_pending_ref,
+                    &lifecycle_ref,
+                    buffer.size() as u64,
+                );
             }
             gst::PadProbeReturn::Ok
         });
@@ -95,9 +103,11 @@ pub fn build_pipeline(
         pipeline,
         loop_: glib::MainLoop::new(None, false),
         source,
+        lifecycle,
         source_bytes_total,
         source_bytes_last_interval,
         source_bytes_per_sec,
+        processing_pending,
         dest_metrics,
         running: Arc::new(AtomicBool::new(true)),
     })
@@ -182,6 +192,19 @@ fn add_sink_to_pipeline(
     Ok(())
 }
 
+fn record_source_buffer(
+    bytes_counter: &Arc<AtomicU64>,
+    processing_pending: &Arc<AtomicBool>,
+    lifecycle: &PipelineLifecycleEmitter,
+    buffer_size: u64,
+) {
+    bytes_counter.fetch_add(buffer_size, Ordering::Relaxed);
+
+    if processing_pending.swap(false, Ordering::AcqRel) {
+        let _ = lifecycle.emit_processing();
+    }
+}
+
 fn configure_branch_queue(queue: &gst::Element, sink_type: &str) {
     queue.set_property("max-size-buffers", 200_u32);
     queue.set_property("max-size-time", 0_u64);
@@ -210,9 +233,7 @@ fn link_tee_branch(tee: &gst::Element, queue: &gst::Element) -> Result<()> {
 
 fn strip_internal_props(config: &ElementConfig) -> ElementConfig {
     let mut sanitized = config.clone();
-    sanitized
-        .props
-        .retain(|key, _| !key.starts_with("hydra_"));
+    sanitized.props.retain(|key, _| !key.starts_with("hydra_"));
     sanitized
 }
 
@@ -220,9 +241,12 @@ fn strip_internal_props(config: &ElementConfig) -> ElementConfig {
 mod tests {
     use super::*;
     use crate::config::{ElementConfig, PipelineConfig};
+    use crate::lifecycle::PipelineStatus;
     use crate::output::{StatsWriter, StdoutWriter};
     use serde_json::Value;
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
 
     fn init_gst() {
         let _ = gst::init();
@@ -269,7 +293,10 @@ mod tests {
                 ElementConfig {
                     element_type: "udpsink".to_string(),
                     props: BTreeMap::from([
-                        ("address".to_string(), Value::String("127.0.0.1".to_string())),
+                        (
+                            "address".to_string(),
+                            Value::String("127.0.0.1".to_string()),
+                        ),
                         ("port".to_string(), Value::Number(4100_u64.into())),
                         (
                             "hydra_destination_id".to_string(),
@@ -288,7 +315,10 @@ mod tests {
                 ElementConfig {
                     element_type: "srtsink".to_string(),
                     props: BTreeMap::from([
-                        ("localaddress".to_string(), Value::String("127.0.0.1".to_string())),
+                        (
+                            "localaddress".to_string(),
+                            Value::String("127.0.0.1".to_string()),
+                        ),
                         ("localport".to_string(), Value::Number(4200_u64.into())),
                         ("mode".to_string(), Value::String("caller".to_string())),
                         (
@@ -347,6 +377,152 @@ mod tests {
                 .serialize()
                 .expect("serialized leaky property"),
             "downstream"
+        );
+    }
+
+    #[test]
+    fn emits_processing_when_source_buffer_hook_runs() {
+        init_gst();
+
+        #[derive(Debug, Default)]
+        struct MemoryWriter {
+            messages: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl StatsWriter for MemoryWriter {
+            fn send_message(&mut self, message: &str) -> Result<()> {
+                self.messages
+                    .lock()
+                    .expect("messages lock")
+                    .push(message.to_string());
+                Ok(())
+            }
+        }
+
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(MemoryWriter {
+                messages: messages.clone(),
+            })));
+
+        let lifecycle = PipelineLifecycleEmitter::new(writer);
+        let bytes_counter = Arc::new(AtomicU64::new(0));
+        let processing_pending = Arc::new(AtomicBool::new(true));
+
+        assert_eq!(lifecycle.current_status().expect("initial status"), None);
+
+        lifecycle.emit_starting().expect("starting");
+        record_source_buffer(&bytes_counter, &processing_pending, &lifecycle, 188);
+        record_source_buffer(&bytes_counter, &processing_pending, &lifecycle, 188);
+
+        assert_eq!(bytes_counter.load(Ordering::Relaxed), 376);
+        assert_eq!(
+            lifecycle.current_status().expect("status after buffers"),
+            Some(PipelineStatus::Processing)
+        );
+
+        let messages = messages.lock().expect("messages lock");
+        assert_eq!(
+            messages.as_slice(),
+            [
+                r#"{"event":"pipeline_status","status":"starting"}"#,
+                r#"{"event":"pipeline_status","status":"processing"}"#,
+            ]
+        );
+    }
+
+    #[test]
+    fn source_buffer_hook_can_promote_to_processing_before_starting_event() {
+        init_gst();
+
+        #[derive(Debug, Default)]
+        struct MemoryWriter {
+            messages: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl StatsWriter for MemoryWriter {
+            fn send_message(&mut self, message: &str) -> Result<()> {
+                self.messages
+                    .lock()
+                    .expect("messages lock")
+                    .push(message.to_string());
+                Ok(())
+            }
+        }
+
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(MemoryWriter {
+                messages: messages.clone(),
+            })));
+
+        let lifecycle = PipelineLifecycleEmitter::new(writer);
+        let bytes_counter = Arc::new(AtomicU64::new(0));
+        let processing_pending = Arc::new(AtomicBool::new(true));
+
+        record_source_buffer(&bytes_counter, &processing_pending, &lifecycle, 188);
+        record_source_buffer(&bytes_counter, &processing_pending, &lifecycle, 188);
+
+        assert_eq!(bytes_counter.load(Ordering::Relaxed), 376);
+        assert_eq!(
+            lifecycle.current_status().expect("status after buffers"),
+            Some(PipelineStatus::Processing)
+        );
+
+        let messages = messages.lock().expect("messages lock");
+        assert_eq!(
+            messages.as_slice(),
+            [r#"{"event":"pipeline_status","status":"processing"}"#,]
+        );
+    }
+
+    #[test]
+    fn source_buffer_hook_only_emits_processing_when_rearmed() {
+        init_gst();
+
+        #[derive(Debug, Default)]
+        struct MemoryWriter {
+            messages: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl StatsWriter for MemoryWriter {
+            fn send_message(&mut self, message: &str) -> Result<()> {
+                self.messages
+                    .lock()
+                    .expect("messages lock")
+                    .push(message.to_string());
+                Ok(())
+            }
+        }
+
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(MemoryWriter {
+                messages: messages.clone(),
+            })));
+
+        let lifecycle = PipelineLifecycleEmitter::new(writer);
+        let bytes_counter = Arc::new(AtomicU64::new(0));
+        let processing_pending = Arc::new(AtomicBool::new(true));
+
+        lifecycle.emit_starting().expect("starting");
+        record_source_buffer(&bytes_counter, &processing_pending, &lifecycle, 188);
+        record_source_buffer(&bytes_counter, &processing_pending, &lifecycle, 188);
+
+        lifecycle.emit_reconnecting().expect("reconnecting");
+        processing_pending.store(true, Ordering::Release);
+        record_source_buffer(&bytes_counter, &processing_pending, &lifecycle, 188);
+        record_source_buffer(&bytes_counter, &processing_pending, &lifecycle, 188);
+
+        let messages = messages.lock().expect("messages lock");
+        assert_eq!(
+            messages.as_slice(),
+            [
+                r#"{"event":"pipeline_status","status":"starting"}"#,
+                r#"{"event":"pipeline_status","status":"processing"}"#,
+                r#"{"event":"pipeline_status","status":"reconnecting"}"#,
+                r#"{"event":"pipeline_status","status":"processing"}"#,
+            ]
         );
     }
 }

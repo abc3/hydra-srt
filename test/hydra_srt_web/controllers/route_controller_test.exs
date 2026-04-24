@@ -1,12 +1,15 @@
 defmodule HydraSrtWeb.RouteControllerTest do
   use HydraSrtWeb.ConnCase
 
+  alias HydraSrt.StatsHistory
+
   import HydraSrt.ApiFixtures
 
   @create_attrs %{
     "alias" => "some alias",
     "enabled" => true,
     "name" => "some name",
+    "schema_status" => "processing",
     "status" => "some status",
     "started_at" => ~U[2025-02-18 14:51:00Z],
     "source" => %{},
@@ -16,6 +19,7 @@ defmodule HydraSrtWeb.RouteControllerTest do
     "alias" => "some updated alias",
     "enabled" => false,
     "name" => "some updated name",
+    "schema_status" => "failed",
     "status" => "some updated status",
     "started_at" => ~U[2025-02-19 14:51:00Z],
     "source" => %{},
@@ -25,6 +29,7 @@ defmodule HydraSrtWeb.RouteControllerTest do
     "alias" => nil,
     "enabled" => nil,
     "name" => nil,
+    "schema_status" => nil,
     "status" => nil,
     "started_at" => nil,
     "source" => nil,
@@ -66,6 +71,7 @@ defmodule HydraSrtWeb.RouteControllerTest do
                "destinations" => [],
                "enabled" => true,
                "name" => "some name",
+               "schema_status" => "processing",
                "source" => %{},
                "started_at" => "2025-02-18T14:51:00Z",
                "status" => "some status",
@@ -94,6 +100,7 @@ defmodule HydraSrtWeb.RouteControllerTest do
                "destinations" => [],
                "enabled" => false,
                "name" => "some updated name",
+               "schema_status" => "failed",
                "source" => %{},
                "started_at" => "2025-02-19T14:51:00Z",
                "status" => "some updated status",
@@ -104,6 +111,32 @@ defmodule HydraSrtWeb.RouteControllerTest do
     test "renders errors when data is invalid", %{conn: conn, route: %{id: id}} do
       conn = put(conn, ~p"/api/routes/#{id}", route: @invalid_attrs)
       assert json_response(conn, 422)["errors"] != %{}
+    end
+  end
+
+  describe "show route with stats history" do
+    setup [:create_route]
+
+    test "returns persisted stats snapshots including runtime schema_status", %{
+      conn: conn,
+      route: %{id: id}
+    } do
+      assert {:ok, _snapshot} =
+               StatsHistory.insert_snapshot(id, "stream_1", %{
+                 "schema_status" => "processing",
+                 "source" => %{"bytes_in_per_sec" => 123},
+                 "destinations" => [%{"id" => "d1", "status" => "processing"}]
+               })
+
+      conn = get(conn, ~p"/api/routes/#{id}")
+      data = json_response(conn, 200)["data"]
+
+      assert data["stats"]["schema_status"] == "processing"
+      assert hd(data["stats_history"])["stats"]["schema_status"] == "processing"
+
+      assert hd(data["stats_history"])["stats"]["destinations"] == [
+               %{"id" => "d1", "status" => "processing"}
+             ]
     end
   end
 

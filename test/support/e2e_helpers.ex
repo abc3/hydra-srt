@@ -11,14 +11,19 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     ensure_executables!()
     ensure_native_built!()
     ensure_api_auth_config!()
-    ensure_cachex_started!()
     ensure_repo_config_for_e2e!()
     ensure_app_started!()
+    ensure_cachex_started!()
     ensure_repo_migrated_for_e2e!()
+    ensure_endpoint_server_started!()
     :ok
   end
 
   def ensure_app_started! do
+    if is_pid(Process.whereis(HydraSrt.Supervisor)) and not repo_started_with_e2e_config?() do
+      :ok = Application.stop(:hydra_srt)
+    end
+
     case Application.ensure_all_started(:hydra_srt) do
       {:ok, _} -> :ok
       {:error, {:already_started, :hydra_srt}} -> :ok
@@ -150,36 +155,46 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     end
   end
 
-  def ensure_repo_config_for_e2e! do
-    if System.get_env("E2E") == "true" do
-      db_path =
-        System.get_env("E2E_DATABASE_PATH") ||
-          Path.join(System.tmp_dir!(), "hydra_srt_e2e_#{System.unique_integer([:positive])}.db")
+  defp repo_started_with_e2e_config? do
+    repo_pid = Process.whereis(HydraSrt.Repo)
 
-      System.put_env("E2E_DATABASE_PATH", db_path)
+    if is_pid(repo_pid) do
+      repo_config = HydraSrt.Repo.config()
+      expected_db_path = System.get_env("E2E_DATABASE_PATH")
 
-      current = Application.get_env(:hydra_srt, HydraSrt.Repo, [])
-
-      updated =
-        current
-        |> Keyword.put(:database, db_path)
-        |> Keyword.put(:pool, DBConnection.ConnectionPool)
-        |> Keyword.put(:pool_size, 5)
-
-      Application.put_env(:hydra_srt, HydraSrt.Repo, updated)
+      repo_config[:pool] == DBConnection.ConnectionPool and
+        repo_config[:database] == expected_db_path
+    else
+      false
     end
+  end
+
+  def ensure_repo_config_for_e2e! do
+    db_path =
+      System.get_env("E2E_DATABASE_PATH") ||
+        Path.join(System.tmp_dir!(), "hydra_srt_e2e_#{System.unique_integer([:positive])}.db")
+
+    System.put_env("E2E_DATABASE_PATH", db_path)
+
+    current = Application.get_env(:hydra_srt, HydraSrt.Repo, [])
+
+    updated =
+      current
+      |> Keyword.put(:database, db_path)
+      |> Keyword.put(:pool, DBConnection.ConnectionPool)
+      |> Keyword.put(:pool_size, 5)
+
+    Application.put_env(:hydra_srt, HydraSrt.Repo, updated)
 
     :ok
   end
 
   def ensure_repo_migrated_for_e2e! do
-    if System.get_env("E2E") == "true" do
-      migrations_path = Application.app_dir(:hydra_srt, "priv/repo/migrations")
+    migrations_path = Application.app_dir(:hydra_srt, "priv/repo/migrations")
 
-      Ecto.Migrator.with_repo(HydraSrt.Repo, fn repo ->
-        _ = Ecto.Migrator.run(repo, migrations_path, :up, all: true)
-      end)
-    end
+    Ecto.Migrator.with_repo(HydraSrt.Repo, fn repo ->
+      _ = Ecto.Migrator.run(repo, migrations_path, :up, all: true)
+    end)
 
     :ok
   end
@@ -198,26 +213,22 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
   end
 
   def ensure_endpoint_server_started! do
-    if System.get_env("E2E") == "true" do
-      current = Application.get_env(:hydra_srt, HydraSrtWeb.Endpoint, [])
-      updated = Keyword.put(current, :server, true)
-      Application.put_env(:hydra_srt, HydraSrtWeb.Endpoint, updated)
+    current = Application.get_env(:hydra_srt, HydraSrtWeb.Endpoint, [])
+    updated = Keyword.put(current, :server, true)
+    Application.put_env(:hydra_srt, HydraSrtWeb.Endpoint, updated)
 
-      pid = Process.whereis(HydraSrtWeb.Endpoint)
+    pid = Process.whereis(HydraSrtWeb.Endpoint)
 
-      if is_pid(pid) do
-        # Restart endpoint so it picks up server=true and boots Cowboy listener.
-        # We must use the supervision tree to restart it properly.
-        Supervisor.terminate_child(HydraSrt.Supervisor, HydraSrtWeb.Endpoint)
-        {:ok, _} = Supervisor.restart_child(HydraSrt.Supervisor, HydraSrtWeb.Endpoint)
-      end
-
-      wait_until(fn -> is_pid(Process.whereis(HydraSrtWeb.Endpoint)) end, 5_000, 50)
-      wait_for_healthcheck!(base_url(), 10_000)
-      :ok
-    else
-      raise ExUnit.AssertionError, message: "Set E2E=true to run E2E tests"
+    if is_pid(pid) do
+      # Restart endpoint so it picks up server=true and boots Cowboy listener.
+      # We must use the supervision tree to restart it properly.
+      Supervisor.terminate_child(HydraSrt.Supervisor, HydraSrtWeb.Endpoint)
+      {:ok, _} = Supervisor.restart_child(HydraSrt.Supervisor, HydraSrtWeb.Endpoint)
     end
+
+    wait_until(fn -> is_pid(Process.whereis(HydraSrtWeb.Endpoint)) end, 5_000, 50)
+    wait_for_healthcheck!(base_url(), 10_000)
+    :ok
   end
 
   def base_url do
@@ -279,6 +290,26 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
       http_raw(:get, base_url <> "/api/routes/#{route_id}/start", auth_headers(token), "")
 
     :ok
+  end
+
+  def api_get_route!(base_url, token, route_id) do
+    {:ok, 200, _headers, resp} =
+      http_raw(:get, base_url <> "/api/routes/#{route_id}", auth_headers(token), "")
+
+    Jason.decode!(resp) |> get_in(["data"])
+  end
+
+  def api_get_route(base_url, token, route_id) do
+    case http_raw(:get, base_url <> "/api/routes/#{route_id}", auth_headers(token), "") do
+      {:ok, 200, _headers, resp} ->
+        {:ok, Jason.decode!(resp) |> get_in(["data"])}
+
+      {:ok, status, _headers, resp} ->
+        {:error, {status, resp}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   def api_stop_route(base_url, token, route_id) do
@@ -384,20 +415,20 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
         String.split(data, "\n")
         |> Enum.each(fn line ->
           if line != "" do
-            Logger.warning("#{tag}: #{line}")
             maybe_emit_srt_stats(tag, line, owner)
+            maybe_log_e2e_port_line(tag, line)
           end
         end)
 
         port_log_loop(port, tag, owner)
 
       {^port, {:exit_status, status}} ->
-        Logger.warning("#{tag}: exit_status=#{status}")
+        maybe_log_e2e_port_exit_status(tag, status)
         send(owner, {:port_exit_status, tag, status})
         :ok
 
       {:EXIT, ^port, reason} ->
-        Logger.warning("#{tag}: port_exit=#{inspect(reason)}")
+        maybe_log_e2e_port_exit_reason(tag, reason)
         send(owner, {:port_exit_status, tag, reason})
         :ok
     after
@@ -428,6 +459,28 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     end
 
     :ok
+  end
+
+  defp maybe_log_e2e_port_line(tag, line) do
+    if e2e_port_logs_enabled?() do
+      Logger.warning("#{tag}: #{line}")
+    end
+  end
+
+  defp maybe_log_e2e_port_exit_status(_tag, 0), do: :ok
+
+  defp maybe_log_e2e_port_exit_status(tag, status) do
+    Logger.warning("#{tag}: exit_status=#{status}")
+  end
+
+  defp maybe_log_e2e_port_exit_reason(_tag, :normal), do: :ok
+
+  defp maybe_log_e2e_port_exit_reason(tag, reason) do
+    Logger.warning("#{tag}: port_exit=#{inspect(reason)}")
+  end
+
+  defp e2e_port_logs_enabled? do
+    System.get_env("E2E_DEBUG_LOGS") == "true"
   end
 
   def await_srt_packets_received(min_packets, timeout_ms)
@@ -479,8 +532,8 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
         _ -> proc.os_pid
       end
 
-    if is_integer(os_pid) do
-      System.cmd("kill", ["-9", "#{os_pid}"])
+    if is_integer(os_pid) and process_alive?(os_pid) do
+      System.cmd("kill", ["-9", "#{os_pid}"], stderr_to_stdout: true)
     end
 
     try do
@@ -490,6 +543,13 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     end
 
     :ok
+  end
+
+  def process_alive?(os_pid) when is_integer(os_pid) do
+    case System.cmd("kill", ["-0", Integer.to_string(os_pid)], stderr_to_stdout: true) do
+      {_out, 0} -> true
+      _ -> false
+    end
   end
 
   def start_udp_counter!(port) when is_integer(port) do

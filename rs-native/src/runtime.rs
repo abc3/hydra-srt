@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use gstreamer as gst;
 
+use crate::lifecycle::PipelineLifecycleEmitter;
+
 #[derive(Debug)]
 pub struct DestMetrics {
     pub id: Option<String>,
@@ -20,9 +22,11 @@ pub struct PipelineRuntime {
     pub pipeline: gst::Pipeline,
     pub loop_: glib::MainLoop,
     pub source: gst::Element,
+    pub lifecycle: PipelineLifecycleEmitter,
     pub source_bytes_total: Arc<AtomicU64>,
     pub source_bytes_last_interval: Arc<AtomicU64>,
     pub source_bytes_per_sec: Arc<AtomicU64>,
+    pub processing_pending: Arc<AtomicBool>,
     pub dest_metrics: Arc<Mutex<Vec<Arc<DestMetrics>>>>,
     pub running: Arc<AtomicBool>,
 }

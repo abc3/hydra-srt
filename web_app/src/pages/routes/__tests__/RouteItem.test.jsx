@@ -39,11 +39,14 @@ vi.mock('../../../utils/auth', () => {
 vi.mock('../../../utils/api', () => {
   return {
     routesApi: {
+      stop: async () => ({ data: { status: 'stopped' } }),
+      start: async () => ({ data: { status: 'started' } }),
       getById: async () => ({
         data: {
           id: 'r1',
           name: 'Route 1',
           status: 'started',
+          schema_status: 'processing',
           updated_at: new Date().toISOString(),
           enabled: true,
           exportStats: false,
@@ -54,6 +57,7 @@ vi.mock('../../../utils/api', () => {
             {
               id: 'd1',
               name: 'Dest 1',
+              status: 'processing',
               schema: 'UDP',
               schema_options: { host: '127.0.0.1', port: 9999 },
               updated_at: new Date().toISOString(),
@@ -61,6 +65,7 @@ vi.mock('../../../utils/api', () => {
             {
               id: 'd2',
               name: 'Dest 2',
+              status: 'processing',
               schema: 'SRT',
               schema_options: { localaddress: '127.0.0.1', localport: 8888, mode: 'caller' },
               updated_at: new Date().toISOString(),
@@ -161,5 +166,55 @@ describe('RouteItem stats tabs', () => {
 
     expect(await screen.findByText('80 bps')).toBeInTheDocument();
     expect(screen.queryByText('Waiting for statistics...')).not.toBeInTheDocument();
+  });
+
+  it('updates status tag when schema_status arrives via Phoenix Channel', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // Wait for initial render (route schema_status 'processing' is visible)
+    expect(await screen.findAllByText('Processing')).not.toHaveLength(0);
+
+    // Live stats push carrying a new schema_status
+    await act(async () => {
+      statsCallback?.({ schema_status: 'reconnecting', 'connected-callers': 0 });
+    });
+
+    expect(screen.getByText('Reconnecting')).toBeInTheDocument();
+  });
+
+  it('immediately shows Stopped after Stop is clicked (optimistic update)', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const stopButton = await screen.findByRole('button', { name: /stop/i });
+
+    await act(async () => {
+      fireEvent.click(stopButton);
+    });
+
+    expect(screen.getByText('Stopped')).toBeInTheDocument();
+  });
+
+  it('shows destination runtime status in the destinations table', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findAllByText('Processing')).not.toHaveLength(0);
   });
 });
