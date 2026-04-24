@@ -24,7 +24,7 @@ defmodule HydraSrtWeb.RouteJSON do
       alias: route.alias,
       status: route.status,
       source: route.source,
-      destinations: route.destinations_legacy || [],
+      destinations: [],
       started_at: route.started_at,
       stopped_at: route.stopped_at
     }

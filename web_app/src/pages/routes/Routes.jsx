@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Table, Card, Button, Tag, Space, Typography, message, Modal } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ExclamationCircleFilled, CaretRightOutlined, StopOutlined, HomeOutlined } from '@ant-design/icons';
+import { Table, Card, Button, Tag, Space, Typography, message, Modal, Dropdown } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ExclamationCircleFilled, CaretRightOutlined, StopOutlined, HomeOutlined, HolderOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
 
@@ -163,32 +163,54 @@ const Routes = () => {
     {
       title: 'Actions',
       key: 'actions',
-      render: (_, record) => (
-        <Space>
-          <Button
-            type="link"
-            icon={record.status === 'started' ? <StopOutlined /> : <CaretRightOutlined />}
-            onClick={() => handleRouteStatus(record.id, record.status === 'started' ? 'stop' : 'start')}
+      render: (_, record) => {
+        const items = [
+          {
+            key: 'toggle-status',
+            icon: record.status === 'started' ? <StopOutlined /> : <CaretRightOutlined />,
+            label: record.status === 'started' ? 'Stop' : 'Start',
+          },
+          {
+            key: 'edit',
+            icon: <EditOutlined />,
+            label: 'Edit',
+          },
+          {
+            key: 'delete',
+            icon: <DeleteOutlined />,
+            label: 'Delete',
+            danger: true,
+          },
+        ];
+
+        const handleMenuClick = ({ key }) => {
+          if (key === 'toggle-status') {
+            handleRouteStatus(record.id, record.status === 'started' ? 'stop' : 'start');
+            return;
+          }
+
+          if (key === 'edit') {
+            navigate(`/routes/${record.id}/edit`);
+            return;
+          }
+
+          if (key === 'delete') {
+            showDeleteConfirm(record);
+          }
+        };
+
+        return (
+          <Dropdown
+            menu={{
+              items,
+              onClick: handleMenuClick,
+            }}
+            trigger={['click']}
           >
-            {record.status === 'started' ? 'Stop' : 'Start'}
-          </Button>
-          <Button
-            type="link"
-            icon={<EditOutlined />}
-            onClick={() => navigate(`/routes/${record.id}/edit`)}
-          >
-            Edit
-          </Button>
-          <Button
-            type="link"
-            danger
-            icon={<DeleteOutlined />}
-            onClick={() => showDeleteConfirm(record)}
-          >
-            Delete
-          </Button>
-        </Space>
-      ),
+            <Button icon={<HolderOutlined />} />
+          </Dropdown>
+        );
+      },
     },
   ];
 

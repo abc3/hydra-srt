@@ -9,7 +9,6 @@ defmodule HydraSrt.Repo.Migrations.CreateRoutes do
       add :alias, :string
       add :status, :string
       add :source, :map
-      add :destinations, :map
       add :started_at, :utc_datetime
       add :stopped_at, :utc_datetime
 

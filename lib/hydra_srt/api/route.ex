@@ -17,7 +17,6 @@ defmodule HydraSrt.Api.Route do
 
     field :alias, :string
     field :source, :map
-    field :destinations_legacy, :map, source: :destinations
     field :started_at, :utc_datetime
     field :stopped_at, :utc_datetime
     field :lock_version, :integer, default: 1
