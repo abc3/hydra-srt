@@ -1,10 +1,39 @@
 import { useEffect, useState } from 'react';
 import { Table, Card, Button, Tag, Space, Typography, message, Modal, Dropdown } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ExclamationCircleFilled, CaretRightOutlined, StopOutlined, HomeOutlined, HolderOutlined } from '@ant-design/icons';
+import {
+  PlusOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  ExclamationCircleFilled,
+  CaretRightOutlined,
+  StopOutlined,
+  HomeOutlined,
+  HolderOutlined,
+  CheckCircleOutlined,
+  ExclamationCircleOutlined,
+} from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
 
 const { Title } = Typography;
+
+const renderStatusTag = (status) => {
+  const normalizedStatus = typeof status === 'string' ? status.toLowerCase() : '';
+
+  if (normalizedStatus === 'started') {
+    return (
+      <Tag color="success" icon={<CheckCircleOutlined />} variant="outlined">
+        started
+      </Tag>
+    );
+  }
+
+  return (
+    <Tag color="default" icon={<ExclamationCircleOutlined />} variant="outlined">
+      stopped
+    </Tag>
+  );
+};
 
 const Routes = () => {
   const [routes, setRoutes] = useState([]);
@@ -119,6 +148,7 @@ const Routes = () => {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
+      render: (status) => renderStatusTag(status),
     },
     {
       title: 'Authentication',
