@@ -9,12 +9,12 @@ import {
   Button,
   Table,
   Modal,
-  Descriptions,
   Collapse,
   message,
   Input,
   Tabs,
-  Statistic
+  Statistic,
+  Dropdown
 } from 'antd';
 import {
   PlayCircleOutlined,
@@ -25,7 +25,8 @@ import {
   ExclamationCircleFilled,
   HomeOutlined,
   LoadingOutlined,
-  SearchOutlined
+  SearchOutlined,
+  HolderOutlined
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { routesApi, destinationsApi } from '../../utils/api';
@@ -60,6 +61,84 @@ const getRuntimeStatusMeta = (status) => {
       return { color: 'default', label: status };
     default:
       return { color: 'default', label: status || 'unknown' };
+  }
+};
+
+const getEndpointValue = (endpoint, key) => endpoint?.schema_options?.[key];
+
+const getEndpointAddress = (endpoint) => {
+  if (!endpoint) return 'N/A';
+
+  switch (endpoint.schema) {
+    case 'SRT':
+      return `${getEndpointValue(endpoint, 'localaddress') || 'N/A'}:${getEndpointValue(endpoint, 'localport') || 'N/A'}`;
+    case 'UDP':
+      return `${getEndpointValue(endpoint, 'host') || getEndpointValue(endpoint, 'address') || 'N/A'}:${getEndpointValue(endpoint, 'port') || 'N/A'}`;
+    default:
+      return 'N/A';
+  }
+};
+
+const getEndpointType = (endpoint) => {
+  if (!endpoint) return 'N/A';
+
+  if (endpoint.schema === 'SRT') {
+    return getEndpointValue(endpoint, 'mode') || 'listener';
+  }
+
+  return endpoint.type || endpoint.role || endpoint.schema || 'N/A';
+};
+
+const getEndpointLatency = (endpoint) => {
+  if (!endpoint) return null;
+  const latency = endpoint.latency ?? getEndpointValue(endpoint, 'latency');
+  return typeof latency === 'number' ? latency : null;
+};
+
+const formatLastUpdated = (date) => {
+  if (!date) {
+    return '-';
+  }
+
+  const parsedDate = new Date(date);
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    return '-';
+  }
+
+  const pad = (value) => String(value).padStart(2, '0');
+
+  const hours = pad(parsedDate.getHours());
+  const minutes = pad(parsedDate.getMinutes());
+  const seconds = pad(parsedDate.getSeconds());
+  const day = pad(parsedDate.getDate());
+  const month = pad(parsedDate.getMonth() + 1);
+  const year = parsedDate.getFullYear();
+
+  return `${hours}:${minutes}:${seconds} ${day}/${month}/${year}`;
+};
+
+const renderSrtModeTag = (mode) => {
+  switch (mode) {
+    case 'listener':
+      return <Tag color="default">L</Tag>;
+    case 'caller':
+      return <Tag color="processing">C</Tag>;
+    case 'rendezvous':
+      return <Tag color="warning">R</Tag>;
+    default:
+      return null;
+  }
+};
+
+const renderProtocolTag = (schema) => {
+  switch (schema) {
+    case 'SRT':
+      return <Tag color="blue">SRT</Tag>;
+    case 'UDP':
+      return <Tag color="cyan">UDP</Tag>;
+    default:
+      return null;
   }
 };
 
@@ -225,8 +304,48 @@ const RouteItem = () => {
     }
   };
 
-  // Destination table columns
-  const destinationColumns = [
+  const sourceRow = routeData ? {
+    ...routeData,
+    id: `source-${routeData.id}`,
+    endpointId: routeData.id,
+    role: 'Source',
+    rowType: 'source',
+    name: routeData.name || 'Source',
+  } : null;
+
+  // Filter destinations
+  const filteredDestinations = routeData?.destinations.filter(dest =>
+    dest.name.toLowerCase().includes(destinationFilter.toLowerCase()) ||
+    getEndpointAddress(dest).toLowerCase().includes(destinationFilter.toLowerCase())
+  ) || [];
+
+  const endpointsData = [
+    ...(sourceRow ? [sourceRow] : []),
+    ...filteredDestinations.map((dest) => ({
+      ...dest,
+      endpointId: dest.id,
+      role: 'Destination',
+      rowType: 'destination',
+    })),
+  ];
+
+  const endpointColumns = [
+    {
+      title: 'Role',
+      dataIndex: 'role',
+      key: 'role',
+      width: 130,
+      render: (role) => (
+        <Tag color={role === 'Source' ? 'geekblue' : 'default'}>
+          {role}
+        </Tag>
+      ),
+      filters: [
+        { text: 'Source', value: 'Source' },
+        { text: 'Destination', value: 'Destination' },
+      ],
+      onFilter: (value, record) => record.role === value,
+    },
     {
       title: 'Name',
       dataIndex: 'name',
@@ -234,12 +353,9 @@ const RouteItem = () => {
       sorter: (a, b) => a.name.localeCompare(b.name),
       render: (text, record) => (
         <Space>
-          <a href={`#/routes/${id}/destinations/${record.id}/edit`}>
+          <a href={record.rowType === 'source' ? `#/routes/${id}/edit` : `#/routes/${id}/destinations/${record.endpointId}/edit`}>
             {text}
           </a>
-          {/* <Tag color={record.enabled ? 'green' : 'red'}>
-            {record.enabled ? 'Active' : 'Inactive'}
-          </Tag> */}
         </Space>
       ),
     },
@@ -249,7 +365,7 @@ const RouteItem = () => {
       key: 'schema',
       filters: [
         { text: 'SRT', value: 'SRT' },
-        { text: 'Other', value: 'Other' }
+        { text: 'UDP', value: 'UDP' },
       ],
       onFilter: (value, record) => record.schema === value,
       render: (schema) => (
@@ -258,98 +374,66 @@ const RouteItem = () => {
         </Tag>
       ),
     },
-    // {
-    //   title: 'Authentication',
-    //   key: 'authentication',
-    //   filters: [
-    //     { text: 'Enabled', value: true },
-    //     { text: 'Disabled', value: false }
-    //   ],
-    //   onFilter: (value, record) => {
-    //     if (record.schema !== 'SRT') return !value;
-    //     return (record.schema_options && record.schema_options.authentication) === value;
-    //   },
-    //   render: (_, record) => {
-    //     if (record.schema !== 'SRT') return <Tag color="default">N/A</Tag>;
-    //     return record.schema_options && record.schema_options.authentication ? (
-    //       <Tag color="green">Enabled</Tag>
-    //     ) : (
-    //       <Tag color="red">Disabled</Tag>
-    //     );
-    //   },
-    // },
     {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      render: (status) => {
-        const { color, label } = getRuntimeStatusMeta(status);
+      title: 'Addr',
+      key: 'addr',
+      render: (_, record) => {
+        const srtModeTag =
+          record.schema === 'SRT' ? renderSrtModeTag(getEndpointValue(record, 'mode')) : null;
 
         return (
-          <Tag color={color}>
-            {label ? label.charAt(0).toUpperCase() + label.slice(1) : 'Unknown'}
-          </Tag>
+          <Space size="small">
+            {renderProtocolTag(record.schema)}
+            {srtModeTag}
+            <span>{getEndpointAddress(record)}</span>
+          </Space>
         );
       },
-    },
-    {
-      title: 'Destination',
-      key: 'host_port',
-      render: (_, record) => {
-        console.log(record);
-        switch (record.schema) {
-          case 'SRT':
-            return (`${record.schema_options?.localaddress}:${record.schema_options?.localport}:${record.schema_options?.mode}`)
-          case 'UDP':
-            return (`${record.schema_options?.host}:${record.schema_options?.port}`)
-          default:
-            return 'N/A'
-        }
-      },
-      sorter: (a, b) => a.port - b.port,
-    },
-    {
-      title: 'Latency',
-      dataIndex: 'latency',
-      key: 'latency',
-      render: (latency) => latency ? `${latency}ms` : 'N/A',
-      sorter: (a, b) => {
-        if (!a.latency) return 1;
-        if (!b.latency) return -1;
-        return a.latency - b.latency;
-      },
-    },
-    {
-      title: 'Last Updated',
-      dataIndex: 'updated_at',
-      key: 'updated_at',
-      render: (date) => new Date(date).toLocaleString(),
-      sorter: (a, b) => new Date(a.updated_at) - new Date(b.updated_at),
+      sorter: (a, b) => getEndpointAddress(a).localeCompare(getEndpointAddress(b)),
     },
     {
       title: 'Actions',
       key: 'actions',
-      render: (_, record) => (
-        <Space>
-          <Button
-            type="link"
-            icon={<EditOutlined />}
-            aria-label={`Edit destination ${record.name}`}
-            onClick={() => navigate(`/routes/${id}/destinations/${record.id}/edit`)}
+      render: (_, record) => {
+        const items = [
+          {
+            key: 'edit',
+            icon: <EditOutlined />,
+            label: 'Edit',
+          },
+          ...(record.rowType === 'destination'
+            ? [{
+                key: 'delete',
+                icon: <DeleteOutlined />,
+                label: 'Delete',
+                danger: true,
+              }]
+            : []),
+        ];
+
+        const handleMenuClick = ({ key }) => {
+          if (key === 'edit') {
+            navigate(record.rowType === 'source' ? `/routes/${id}/edit` : `/routes/${id}/destinations/${record.endpointId}/edit`);
+            return;
+          }
+
+          if (key === 'delete') {
+            handleDeleteDestination(record);
+          }
+        };
+
+        return (
+          <Dropdown
+            menu={{
+              items,
+              onClick: handleMenuClick,
+            }}
+            trigger={['click']}
           >
-            Edit
-          </Button>
-          <Button
-            type="link"
-            danger
-            icon={<DeleteOutlined />}
-            aria-label={`Delete destination ${record.name}`}
-            onClick={() => handleDeleteDestination(record)}
-          >
-            Delete
-          </Button>
-        </Space>
-      ),
+            <Button icon={<HolderOutlined />} aria-label={`Actions for ${record.name}`} />
+          </Dropdown>
+        );
+      },
     },
   ];
 
@@ -378,165 +462,6 @@ const RouteItem = () => {
       messageApi.error(`Failed to delete destination: ${error.message}`);
       console.error('Error:', error);
     }
-  };
-
-  const SrtSourceStats = () => {
-    if (!stats || !statsHistory.length) {
-      return (
-        <Card title="Route Statistics (Overview)" style={{ marginBottom: 24 }}>
-          <div style={{ textAlign: 'center', padding: '20px' }}>
-            <Text type="secondary">Waiting for statistics...</Text>
-          </div>
-        </Card>
-      );
-    }
-
-    const formatBytes = (bytes) => {
-      if (bytes === 0) return '0 B';
-      const k = 1024;
-      const sizes = ['B', 'KB', 'MB', 'GB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    };
-
-    const getSourceBytesPerSec = (s) => {
-      const v = s?.source?.bytes_in_per_sec;
-      return typeof v === 'number' ? v : null;
-    };
-
-    const getDestinations = (s) => {
-      return Array.isArray(s?.destinations) ? s.destinations : [];
-    };
-
-    const getWorstDestBytesPerSec = (s) => {
-      const dests = getDestinations(s);
-      if (!dests.length) return null;
-
-      const rates = dests
-        .map(d => (typeof d?.bytes_out_per_sec === 'number' ? d.bytes_out_per_sec : null))
-        .filter(v => typeof v === 'number');
-      if (!rates.length) return null;
-
-      return Math.min(...rates);
-    };
-
-    const sourceBytesPerSec = getSourceBytesPerSec(stats);
-    const worstDestBytesPerSec = getWorstDestBytesPerSec(stats);
-
-    return (
-      <Card title="Route Statistics (Overview)" style={{ marginBottom: 24 }}>
-        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-          <Col xs={24} sm={12} md={8}>
-            <Card type="inner" title="Source Bitrate">
-              <div data-testid="kpi-source-bitrate">
-                <Statistic
-                  value={sourceBytesPerSec != null ? (sourceBytesPerSec * 8) : null}
-                  precision={0}
-                  suffix="bps"
-                />
-              </div>
-              <Text type="secondary">From pipeline byte counter</Text>
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} md={8}>
-            <Card type="inner" title="Connected Callers">
-              <div data-testid="kpi-connected-callers">
-                <Statistic value={stats['connected-callers'] ?? 0} />
-              </div>
-              <Text type="secondary">SRT source only</Text>
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} md={8}>
-            <Card type="inner" title="Worst Destination Bitrate">
-              <div data-testid="kpi-worst-dest-bitrate">
-                <Statistic
-                  value={worstDestBytesPerSec != null ? (worstDestBytesPerSec * 8) : null}
-                  precision={0}
-                  suffix="bps"
-                />
-              </div>
-              <Text type="secondary">Lowest bytes/sec across destinations</Text>
-            </Card>
-          </Col>
-        </Row>
-
-        <Row gutter={[16, 16]}>
-          {/* <Col span={24}>
-            <Card type="inner" title="Connected Callers">
-              <Row justify="space-between" align="middle">
-                <Col>
-                  <Title level={3} style={{ margin: 0 }}>
-                    {stats['connected-callers']}
-                  </Title>
-                  <Text type="secondary">Current Connections</Text>
-                </Col>
-              </Row>
-            </Card>
-          </Col> */}
-          
-          <Col span={12}>
-            <Card type="inner" title="Source Throughput (bytes/sec)">
-              <ResponsiveContainer width="100%" height={250}>
-                <AreaChart data={statsHistory}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis 
-                    dataKey="timestamp"
-                    interval="preserveStartEnd"
-                    minTickGap={50}
-                  />
-                  <YAxis 
-                    tickFormatter={(value) => formatBytes(value)}
-                    domain={['auto', 'auto']}
-                    padding={{ top: 20 }}
-                  />
-                  <Tooltip 
-                    formatter={(value) => formatBytes(value)}
-                  />
-                  <Area 
-                    type="monotone" 
-                    dataKey="source.bytes_in_per_sec" 
-                    stroke="#8884d8" 
-                    fill="#8884d8" 
-                    name="Bytes / sec"
-                    isAnimationActive={false}
-                    dot={false}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </Card>
-          </Col>
-
-          <Col span={12}>
-            <Card type="inner" title="Connected Callers">
-              <ResponsiveContainer width="100%" height={250}>
-                <AreaChart data={statsHistory}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis 
-                    dataKey="timestamp"
-                    interval="preserveStartEnd"
-                    minTickGap={50}
-                  />
-                  <YAxis 
-                    domain={['auto', 'auto']}
-                    padding={{ top: 20 }}
-                  />
-                  <Tooltip />
-                  <Area 
-                    type="monotone" 
-                    dataKey="connected-callers" 
-                    stroke="#82ca9d" 
-                    fill="#82ca9d" 
-                    name="Connected Callers"
-                    isAnimationActive={false}
-                    dot={false}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </Card>
-          </Col>
-        </Row>
-      </Card>
-    );
   };
 
   const RouteStatisticsTab = () => {
@@ -896,12 +821,6 @@ const RouteItem = () => {
     }
   };
 
-  // Filter destinations
-  const filteredDestinations = routeData?.destinations.filter(dest =>
-    dest.name.toLowerCase().includes(destinationFilter.toLowerCase()) ||
-    (dest.host && dest.host.toLowerCase().includes(destinationFilter.toLowerCase()))
-  ) || [];
-
   return (
     <Space
       direction="vertical"
@@ -979,12 +898,7 @@ const RouteItem = () => {
           {
             key: 'overview',
             label: 'Overview',
-            children: (
-              <>
-                {/* SRT Statistics */}
-                <SrtSourceStats />
-              </>
-            )
+            children: null
           },
           {
             key: 'statistics',
@@ -996,95 +910,8 @@ const RouteItem = () => {
         ]}
       />
 
-      {/* Source Details */}
       <Card
-        title="Source Configuration"
-        style={{ marginBottom: 24 }}
-        extra={
-          <Button
-            onClick={() => navigate(`/routes/${id}/edit`)}
-            icon={<EditOutlined />}
-          >
-            Edit
-          </Button>
-        }
-      >
-        <Descriptions
-          column={2}
-          bordered
-          styles={{ content: { textAlign: 'left' } }}
-        >
-          <Descriptions.Item label="Source">
-            <Tag color={routeData.schema === 'SRT' ? 'blue' : 'orange'}>
-              {routeData.schema}
-            </Tag>
-            {' '}
-            {routeData.schema === 'SRT' ? 
-              `${routeData.schema_options?.localaddress || 'N/A'}:${routeData.schema_options?.localport || 'N/A'}:${routeData.schema_options?.mode || 'N/A'}` :
-              routeData.schema === 'UDP' ?
-              `${routeData.schema_options?.address || 'N/A'}:${routeData.schema_options?.port || 'N/A'}` :
-              'N/A'
-            }
-          </Descriptions.Item>
-          <Descriptions.Item label="Node">{routeData.node}</Descriptions.Item>
-          
-          {routeData.schema === 'SRT' && (
-            <>
-              <Descriptions.Item label="Latency">{routeData.schema_options?.latency ? `${routeData.schema_options.latency}ms` : 'Default (125ms)'}</Descriptions.Item>
-              <Descriptions.Item label="Auto Reconnect">
-                <Tag color={routeData.schema_options?.['auto-reconnect'] ? 'green' : 'red'}>
-                  {routeData.schema_options?.['auto-reconnect'] ? 'Enabled' : 'Disabled'}
-                </Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Keep Listening">
-                <Tag color={routeData.schema_options?.['keep-listening'] ? 'green' : 'red'}>
-                  {routeData.schema_options?.['keep-listening'] ? 'Enabled' : 'Disabled'}
-                </Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Authentication">
-                <Tag color={routeData.schema_options?.authentication ? 'green' : 'red'}>
-                  {routeData.schema_options?.authentication ? 'Enabled' : 'Disabled'}
-                </Tag>
-              </Descriptions.Item>
-              {routeData.schema_options?.authentication && (
-                <Descriptions.Item label="Key Length">
-                  {routeData.schema_options?.pbkeylen !== undefined ? routeData.schema_options.pbkeylen : '0 (Default)'}
-                </Descriptions.Item>
-              )}
-            </>
-          )}
-          
-          {routeData.schema === 'UDP' && (
-            <>
-              <Descriptions.Item label="Address">{routeData.schema_options?.address || '0.0.0.0 (Default)'}</Descriptions.Item>
-              <Descriptions.Item label="Port">{routeData.schema_options?.port || 'N/A'}</Descriptions.Item>
-              <Descriptions.Item label="Buffer Size">{routeData.schema_options?.['buffer-size'] ? `${routeData.schema_options['buffer-size']} bytes` : '0 bytes (Default)'}</Descriptions.Item>
-              <Descriptions.Item label="MTU">{routeData.schema_options?.mtu || '1492 (Default)'}</Descriptions.Item>
-            </>
-          )}
-          
-          <Descriptions.Item label="Enabled">
-            <Tag color={routeData.enabled ? 'green' : 'red'}>
-              {routeData.enabled ? 'Yes' : 'No'}
-            </Tag>
-          </Descriptions.Item>
-          <Descriptions.Item label="Export Stats">
-            <Tag color={(routeData.exportStats || routeData.export_stats) ? 'green' : 'red'}>
-              {(routeData.exportStats || routeData.export_stats) ? 'Yes' : 'No'}
-            </Tag>
-            {(routeData.exportStats || routeData.export_stats) && <span style={{marginLeft: '8px'}}></span>}
-          </Descriptions.Item>
-          {routeData.gstDebug && (
-            <Descriptions.Item label="GST_DEBUG" span={2}>
-              {routeData.gstDebug}
-            </Descriptions.Item>
-          )}
-        </Descriptions>
-      </Card>
-
-      {/* Destinations Table */}
-      <Card
-        title="Destinations"
+        title="Endpoints"
         extra={
           <Button
             type="primary"
@@ -1097,42 +924,22 @@ const RouteItem = () => {
       >
         <Input
           prefix={<SearchOutlined />}
-          placeholder="Filter destinations by name or host"
+          placeholder="Filter endpoints by name or address"
           style={{ marginBottom: 16, width: '100%' }}
           value={destinationFilter}
           onChange={(e) => setDestinationFilter(e.target.value)}
         />
         <Table
-          columns={destinationColumns}
-          dataSource={filteredDestinations}
+          columns={endpointColumns}
+          dataSource={endpointsData}
           rowKey="id"
           pagination={{
             defaultPageSize: 10,
             showSizeChanger: true,
-            showTotal: (total) => `Total ${total} destinations`,
+            showTotal: (total) => `Total ${total} endpoints`,
           }}
-          scroll={{ x: true }}  // Enable horizontal scrolling on small screens
-          expandable={{
-            expandedRowRender: record => {
-              if (record.schema !== 'SRT' || !record.schema_options || !record.schema_options.authentication) {
-                return null;
-              }
-
-              return (
-                <Card size="small" title="Authentication Details" style={{ margin: '0 16px' }}>
-                  <Descriptions column={2} size="small">
-                    <Descriptions.Item label="Authentication">
-                      <Tag color="green">Enabled</Tag>
-                    </Descriptions.Item>
-                    <Descriptions.Item label="Key Length">
-                      {record.schema_options.pbkeylen || '0 (Default)'}
-                    </Descriptions.Item>
-                  </Descriptions>
-                </Card>
-              );
-            },
-            rowExpandable: record => record.schema === 'SRT' && record.schema_options && record.schema_options.authentication,
-          }}
+          scroll={{ x: true }}
+          rowClassName={(record) => (record.rowType === 'source' ? 'route-endpoint-source-row' : '')}
         />
       </Card>
     </Space>

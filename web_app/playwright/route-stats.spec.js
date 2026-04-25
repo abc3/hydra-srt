@@ -122,7 +122,7 @@ async function apiJson(request, url, token, body) {
   return await resp.json();
 }
 
-test('route Overview/Statistics show live throughput (full-stack)', async ({ page, request, baseURL }) => {
+test('route Statistics tab shows live throughput (full-stack)', async ({ page, request, baseURL }) => {
   // UI login
   await page.goto(`${baseURL}/#/login`);
   await page.getByPlaceholder('Username').fill('admin');
@@ -179,18 +179,8 @@ test('route Overview/Statistics show live throughput (full-stack)', async ({ pag
   const stopFfmpeg = startFfmpegDaemon(sourcePort);
 
   try {
-    // Open the route page and wait for KPIs to populate
+    // Open the route page and verify live throughput in the Statistics tab
     await page.goto(`${baseURL}/#/routes/${routeId}`);
-
-    const sourceKpi = page.getByTestId('kpi-source-bitrate');
-    const worstDestKpi = page.getByTestId('kpi-worst-dest-bitrate');
-
-    // Ensure the route page actually loaded (otherwise missing KPIs is hard to diagnose).
-    await expect(sourceKpi).toBeVisible();
-    await expect(worstDestKpi).toBeVisible();
-
-    await expect(sourceKpi).toContainText(/\d[\d,]*\s*bps/);
-    await expect(worstDestKpi).toContainText(/\d[\d,]*\s*bps/);
 
     // Switch to Statistics and ensure we see a live bitrate cell (not N/A)
     await page.getByRole('tab', { name: 'Statistics' }).click();
@@ -208,4 +198,3 @@ test('route Overview/Statistics show live throughput (full-stack)', async ({ pag
     headers: { Authorization: `Bearer ${token}` },
   });
 });
-

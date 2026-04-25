@@ -101,7 +101,7 @@ vi.mock('../../../utils/api', () => {
 });
 
 describe('RouteItem stats tabs', () => {
-  it('Overview shows bitrate KPIs derived from stats payload', async () => {
+  it('Overview no longer shows the route statistics card', async () => {
     render(
       <MemoryRouter initialEntries={['/routes/r1']}>
         <Routes>
@@ -122,11 +122,9 @@ describe('RouteItem stats tabs', () => {
       });
     });
 
-    // 1000 B/s -> 8000 bps; worst dest is 10 B/s -> 80 bps
-    expect(screen.getByText('Route Statistics (Overview)')).toBeInTheDocument();
-    expect(screen.getAllByText(/Connected Callers/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/8000|8,000/)).toBeInTheDocument();
-    expect(screen.getByText(/80\b/)).toBeInTheDocument();
+    expect(screen.queryByText('Route Statistics (Overview)')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('kpi-source-bitrate')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('kpi-worst-dest-bitrate')).not.toBeInTheDocument();
   });
 
   it('Statistics tab shows per-destination live bitrate', async () => {
@@ -203,7 +201,7 @@ describe('RouteItem stats tabs', () => {
       fireEvent.click(stopButton);
     });
 
-    expect(screen.getByText('Stopped')).toBeInTheDocument();
+    expect(screen.getAllByText('Stopped').length).toBeGreaterThan(0);
   });
 
   it('shows destination runtime status in the destinations table', async () => {
@@ -216,5 +214,22 @@ describe('RouteItem stats tabs', () => {
     );
 
     expect(await screen.findAllByText('Processing')).not.toHaveLength(0);
+  });
+
+  it('shows a unified Endpoints table with Source first', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Endpoints')).toBeInTheDocument();
+    expect(screen.getByText('Source')).toBeInTheDocument();
+    expect(screen.getAllByText('Destination').length).toBeGreaterThan(0);
+
+    const endpointLinks = screen.getAllByRole('link');
+    expect(endpointLinks[0]).toHaveTextContent('Route 1');
   });
 });
