@@ -42,7 +42,10 @@ web_app/test-results
 
 rs-native/target
 priv/native/
+# TODO: make it open
+/deployment/
 deployment/env/hydra_srt.env
 deployment/opentofu/.terraform/
 deployment/opentofu/.env
 deployment/opentofu/terraform.tfvars
+deployment/opentofu/terraform.tfstate
