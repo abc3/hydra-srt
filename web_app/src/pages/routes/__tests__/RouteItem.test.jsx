@@ -57,6 +57,7 @@ vi.mock('../../../utils/api', () => {
             {
               id: 'd1',
               name: 'Dest 1',
+              enabled: true,
               status: 'processing',
               schema: 'UDP',
               schema_options: { host: '127.0.0.1', port: 9999 },
@@ -65,6 +66,7 @@ vi.mock('../../../utils/api', () => {
             {
               id: 'd2',
               name: 'Dest 2',
+              enabled: false,
               status: 'processing',
               schema: 'SRT',
               schema_options: { localaddress: '127.0.0.1', localport: 8888, mode: 'caller' },
@@ -183,10 +185,10 @@ describe('RouteItem stats tabs', () => {
       statsCallback?.({ schema_status: 'reconnecting', 'connected-callers': 0 });
     });
 
-    expect(screen.getByText('Reconnecting')).toBeInTheDocument();
+    expect(screen.getAllByText('Reconnecting').length).toBeGreaterThanOrEqual(2);
   });
 
-  it('immediately shows Stopped after Stop is clicked (optimistic update)', async () => {
+  it('keeps the current runtime status visible until refreshed after Stop is clicked', async () => {
     render(
       <MemoryRouter initialEntries={['/routes/r1']}>
         <Routes>
@@ -201,7 +203,31 @@ describe('RouteItem stats tabs', () => {
       fireEvent.click(stopButton);
     });
 
-    expect(screen.getAllByText('Stopped').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Processing').length).toBeGreaterThan(0);
+  });
+
+  it('does not let live stats overwrite local stopping state after Stop is clicked', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const stopButton = await screen.findByRole('button', { name: /stop/i });
+
+    await act(async () => {
+      fireEvent.click(stopButton);
+    });
+
+    expect(await screen.findAllByText('Stopping')).not.toHaveLength(0);
+
+    await act(async () => {
+      statsCallback?.({ schema_status: 'processing', 'connected-callers': 1 });
+    });
+
+    expect(screen.getAllByText('Stopping').length).toBeGreaterThan(0);
   });
 
   it('shows destination runtime status in the destinations table', async () => {
@@ -213,7 +239,61 @@ describe('RouteItem stats tabs', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findAllByText('Processing')).not.toHaveLength(0);
+    expect(await screen.findByText('Status')).toBeInTheDocument();
+    expect(screen.getAllByText('Processing').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('shows destination enabled state in the endpoints table', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Enabled')).toBeInTheDocument();
+    expect(screen.getAllByText('Yes').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('No')).toBeInTheDocument();
+  });
+
+  it('disables route delete while the route is started', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const deleteButtonLabel = await screen.findByText('Delete');
+    const deleteButton = deleteButtonLabel.closest('button');
+    expect(deleteButton).not.toBeNull();
+    expect(deleteButton).toBeDisabled();
+  });
+
+  it('disables destination delete action while the route is started', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const destinationActionsButton = await screen.findByRole('button', { name: 'Actions for Dest 1' });
+
+    await act(async () => {
+      fireEvent.click(destinationActionsButton);
+    });
+
+    const deleteLabels = await screen.findAllByText('Delete');
+    const deleteMenuItem = deleteLabels.find((element) =>
+      element.closest('[aria-disabled="true"]')
+    );
+
+    expect(deleteMenuItem).toBeTruthy();
+    expect(deleteMenuItem.closest('[aria-disabled="true"]')).not.toBeNull();
   });
 
   it('shows a unified Endpoints table with Source first', async () => {

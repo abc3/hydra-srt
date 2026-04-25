@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { Typography, Button, Card, Space, message, Tabs, Modal } from 'antd';
 import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import { backupApi } from '../utils/api';
+import { ROUTES } from '../utils/constants';
 
 const { Title } = Typography;
 
@@ -17,14 +18,13 @@ const Settings = () => {
   // Set breadcrumb items for the Settings page
   useEffect(() => {
     if (window.setBreadcrumbItems) {
-      window.breadcrumbSet = true;
       window.setBreadcrumbItems([
         {
-          href: '/',
+          href: ROUTES.ROUTES,
           title: <HomeOutlined />,
         },
         {
-          href: '/settings',
+          href: ROUTES.SETTINGS,
           title: 'Settings',
         }
       ]);

@@ -2,6 +2,7 @@ defmodule HydraSrtTest do
   use HydraSrt.DataCase, async: true
 
   import HydraSrt.ApiFixtures
+  alias HydraSrt.Db
 
   test "set_route_status/2 sets started_at and clears stopped_at when route starts" do
     route =
@@ -43,5 +44,26 @@ defmodule HydraSrtTest do
     assert updated["started_at"] == started_at
     assert DateTime.compare(updated["stopped_at"], before) in [:eq, :gt]
     assert DateTime.compare(updated["stopped_at"], after_ts) in [:eq, :lt]
+  end
+
+  test "mark_route_stopped/1 sets schema status and stops destinations" do
+    route =
+      route_fixture(%{
+        status: "started",
+        schema_status: "starting",
+        stopped_at: nil
+      })
+
+    destination_fixture(route, %{status: "starting", enabled: true})
+    destination_fixture(route, %{status: "processing", enabled: false})
+
+    assert {:ok, updated} = HydraSrt.mark_route_stopped(route.id)
+    assert updated["status"] == "stopped"
+    assert updated["schema_status"] == "stopped"
+
+    assert {:ok, reloaded_route} = Db.get_route(route.id, true)
+
+    assert reloaded_route["schema_status"] == "stopped"
+    assert Enum.all?(reloaded_route["destinations"], &(&1["status"] == "stopped"))
   end
 end

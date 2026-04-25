@@ -42,9 +42,9 @@ export const AUTH_USER_KEY = 'user';
 // Routes
 export const ROUTES = {
   LOGIN: '/login',
-  DASHBOARD: '/',
+  HOME: '/',
   ROUTES: '/routes',
   SETTINGS: '/settings',
   SYSTEM_PIPELINES: '/system/pipelines',
   SYSTEM_NODES: '/system/nodes',
-}; 
+};

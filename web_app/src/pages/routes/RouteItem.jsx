@@ -14,7 +14,8 @@ import {
   Input,
   Tabs,
   Statistic,
-  Dropdown
+  Dropdown,
+  Tooltip as AntTooltip
 } from 'antd';
 import {
   PlayCircleOutlined,
@@ -26,13 +27,20 @@ import {
   HomeOutlined,
   LoadingOutlined,
   SearchOutlined,
-  HolderOutlined
+  HolderOutlined,
+  ArrowLeftOutlined
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { routesApi, destinationsApi } from '../../utils/api';
 import { Socket } from "phoenix";
-import { API_BASE_URL } from "../../utils/constants";
+import { API_BASE_URL, ROUTES } from "../../utils/constants";
 import { getToken } from "../../utils/auth";
+import {
+  ACTIVE_ROUTE_STATUSES,
+  formatStatusLabel,
+  isRouteBusy,
+  resolvePendingRouteStatus,
+} from "../../utils/routes";
 import {
   LineChart,
   Line,
@@ -46,6 +54,8 @@ import {
 } from 'recharts';
 
 const { Title, Text } = Typography;
+const ROUTE_ACTION_POLL_ATTEMPTS = 5;
+const ROUTE_ACTION_POLL_DELAY_MS = 250;
 
 const getRuntimeStatusMeta = (status) => {
   switch ((status || '').toLowerCase()) {
@@ -53,6 +63,7 @@ const getRuntimeStatusMeta = (status) => {
     case 'started':
       return { color: 'success', label: status };
     case 'starting':
+    case 'stopping':
     case 'reconnecting':
       return { color: 'processing', label: status };
     case 'failed':
@@ -142,6 +153,18 @@ const renderProtocolTag = (schema) => {
   }
 };
 
+const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const hasRouteReachedActionResult = (route, action) => {
+  const runtimeStatus = ((route?.schema_status || route?.status) || '').toLowerCase();
+
+  if (action === 'start') {
+    return ACTIVE_ROUTE_STATUSES.has(runtimeStatus);
+  }
+
+  return runtimeStatus === 'stopped' || runtimeStatus === 'failed';
+};
+
 const RouteItem = () => {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -153,6 +176,7 @@ const RouteItem = () => {
   const [stats, setStats] = useState(null);
   const [statsHistory, setStatsHistory] = useState([]);
   const [activeStatsTab, setActiveStatsTab] = useState('overview');
+  const [pendingAction, setPendingAction] = useState(null);
 
   // Phoenix Channel connection
   useEffect(() => {
@@ -183,7 +207,16 @@ const RouteItem = () => {
       console.log("Received stats:", stats);
       setStats(stats);
       if (stats?.schema_status) {
-        setRouteData(prev => prev ? { ...prev, schema_status: stats.schema_status } : prev);
+        setRouteData((prev) => {
+          if (!prev) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            schema_status: resolvePendingRouteStatus(prev.schema_status, stats.schema_status, pendingAction),
+          };
+        });
       }
       // Add timestamp to stats for charts
       const timestamp = new Date().toLocaleTimeString();
@@ -201,19 +234,18 @@ const RouteItem = () => {
       socket.disconnect();
       console.log("Channel cleanup completed");
     };
-  }, [id, messageApi]);
+  }, [id, messageApi, pendingAction]);
 
   // Breadcrumb setup
   useEffect(() => {
     if (window.setBreadcrumbItems) {
-      window.breadcrumbSet = true;
       window.setBreadcrumbItems([
         {
-          href: '/',
+          href: ROUTES.ROUTES,
           title: <HomeOutlined />,
         },
         {
-          href: '/routes',
+          href: ROUTES.ROUTES,
           title: 'Routes',
         },
         {
@@ -256,6 +288,31 @@ const RouteItem = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchRouteDataSnapshot = async () => {
+    const result = await routesApi.getById(id);
+    return result.data;
+  };
+
+  const refreshRouteUntilStable = async (action) => {
+    for (let attempt = 0; attempt < ROUTE_ACTION_POLL_ATTEMPTS; attempt += 1) {
+      const nextRoute = await fetchRouteDataSnapshot();
+      setRouteData((prev) => ({
+        ...nextRoute,
+        schema_status: resolvePendingRouteStatus(prev?.schema_status, nextRoute?.schema_status, pendingAction || action),
+      }));
+
+      if (hasRouteReachedActionResult(nextRoute, action)) {
+        return true;
+      }
+
+      if (attempt < ROUTE_ACTION_POLL_ATTEMPTS - 1) {
+        await sleep(ROUTE_ACTION_POLL_DELAY_MS);
+      }
+    }
+
+    return false;
   };
 
   // Status color and button mapping
@@ -312,6 +369,8 @@ const RouteItem = () => {
     rowType: 'source',
     name: routeData.name || 'Source',
   } : null;
+  const routeBusy = isRouteBusy(routeData);
+  const deleteDisabledMessage = 'If you want to delete it, stop the route first';
 
   // Filter destinations
   const filteredDestinations = routeData?.destinations.filter(dest =>
@@ -360,6 +419,47 @@ const RouteItem = () => {
       ),
     },
     {
+      title: 'Enabled',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      width: 120,
+      render: (enabled) => (
+        <Tag color={enabled ? 'success' : 'default'}>
+          {enabled ? 'Yes' : 'No'}
+        </Tag>
+      ),
+      filters: [
+        { text: 'Enabled', value: true },
+        { text: 'Disabled', value: false },
+      ],
+      onFilter: (value, record) => record.enabled === value,
+    },
+    {
+      title: 'Status',
+      key: 'status',
+      width: 160,
+      render: (_, record) => {
+        const endpointStatus =
+          record.rowType === 'source' ? (record.schema_status || record.status) : record.status;
+        const { color, label } = getRuntimeStatusMeta(endpointStatus);
+
+        return <Tag color={color}>{formatStatusLabel(label)}</Tag>;
+      },
+      filters: [
+        { text: 'Started', value: 'started' },
+        { text: 'Processing', value: 'processing' },
+        { text: 'Reconnecting', value: 'reconnecting' },
+        { text: 'Failed', value: 'failed' },
+        { text: 'Stopped', value: 'stopped' },
+      ],
+      onFilter: (value, record) => {
+        const endpointStatus =
+          record.rowType === 'source' ? (record.schema_status || record.status) : record.status;
+
+        return (endpointStatus || '').toLowerCase() === value;
+      },
+    },
+    {
       title: 'Schema',
       dataIndex: 'schema',
       key: 'schema',
@@ -405,8 +505,13 @@ const RouteItem = () => {
             ? [{
                 key: 'delete',
                 icon: <DeleteOutlined />,
-                label: 'Delete',
+                label: routeBusy ? (
+                  <AntTooltip title={deleteDisabledMessage}>
+                    <span>Delete</span>
+                  </AntTooltip>
+                ) : 'Delete',
                 danger: true,
+                disabled: routeBusy,
               }]
             : []),
         ];
@@ -430,7 +535,10 @@ const RouteItem = () => {
             }}
             trigger={['click']}
           >
-            <Button icon={<HolderOutlined />} aria-label={`Actions for ${record.name}`} />
+            <Button
+              icon={<HolderOutlined />}
+              aria-label={`Actions for ${record.name}`}
+            />
           </Dropdown>
         );
       },
@@ -710,55 +818,27 @@ const RouteItem = () => {
   const runtimeStatus = routeData?.schema_status || routeData?.status;
   const runtimeStatusMeta = getRuntimeStatusMeta(runtimeStatus);
 
-  // Helper function to check if route is started
-  const isRouteStarted = routeData && routeData.status && routeData.status.toLowerCase() === 'started';
-
   // Route status toggle handler
   const handleRouteStatusToggle = async () => {
     try {
-      let result;
-      if (routeData.status && routeData.status.toLowerCase() === 'started') {
-        // If the route is started, stop it
-        result = await routesApi.stop(id);
-
-        // Only update if result has data
-        if (result && result.data) {
-          setRouteData(prev => ({
-            ...prev,
-            status: result.data.status,
-            schema_status: 'stopped'
-          }));
-        } else {
-          // If no data is returned, assume the route is stopped
-          setRouteData(prev => ({
-            ...prev,
-            status: 'stopped',
-            schema_status: 'stopped'
-          }));
-        }
-
+      if (routeBusy) {
+        setPendingAction('stop');
+        setRouteData((prev) => prev ? { ...prev, schema_status: 'stopping' } : prev);
+        await routesApi.stop(id);
+        const settled = await refreshRouteUntilStable('stop');
         messageApi.success('Route stopped successfully');
-      } else {
-        // If the route is not started, start it
-        result = await routesApi.start(id);
-
-        // Only update if result has data
-        if (result && result.data) {
-          setRouteData(prev => ({
-            ...prev,
-            status: result.data.status,
-            schema_status: null
-          }));
-        } else {
-          // If no data is returned, assume the route is started
-          setRouteData(prev => ({
-            ...prev,
-            status: 'started',
-            schema_status: null
-          }));
+        if (settled === false) {
+          messageApi.warning('Route is still stopping. Refresh in a moment if it does not update.');
         }
-
+      } else {
+        setPendingAction('start');
+        setRouteData((prev) => prev ? { ...prev, schema_status: 'starting' } : prev);
+        await routesApi.start(id);
+        const settled = await refreshRouteUntilStable('start');
         messageApi.success('Route started successfully');
+        if (settled === false) {
+          messageApi.warning('Route is still starting. Refresh in a moment if it does not update.');
+        }
       }
     } catch (error) {
       // Handle specific error cases
@@ -773,13 +853,7 @@ const RouteItem = () => {
         }));
       } else if (error.message && error.message.includes('not_found')) {
         messageApi.info('Route process not found. It may have already been stopped.');
-
-        // Update the UI to reflect that the route is stopped
-        setRouteData(prev => ({
-          ...prev,
-          status: 'stopped',
-          schema_status: 'stopped'
-        }));
+        await fetchRouteData();
       } else if (error.response && error.response.status === 422) {
         // Handle 422 Unprocessable Entity error
         messageApi.error('Invalid request. The server could not process the request.');
@@ -787,10 +861,12 @@ const RouteItem = () => {
         // Keep the current state
         console.error('422 Error:', error);
       } else {
-        const action = isRouteStarted ? 'stop' : 'start';
+        const action = routeBusy ? 'stop' : 'start';
         messageApi.error(`Failed to ${action} route: ${error.message}`);
       }
       console.error('Error:', error);
+    } finally {
+      setPendingAction(null);
     }
   };
 
@@ -825,58 +901,66 @@ const RouteItem = () => {
     <Space
       direction="vertical"
       size="large"
-      style={{
-        width: '100%',
-        padding: '0 24px',
-        '@media(maxWidth: 768px)': {
-          padding: '0 12px'
-        }
-      }}
+      style={{ width: '100%', maxWidth: 1200, margin: '0 auto' }}
     >
       {contextHolder}
       {modalContextHolder}
 
-      {/* Route Info Card */}
-      <Card style={{ marginBottom: 24 }}>
-        <Row justify="space-between" align="middle">
-          <Col>
-            <Space direction="vertical" size="small">
-              <Title level={4} style={{ margin: 0 }}>{routeData.name}</Title>
-              <Space>
-                <Tag color={runtimeStatusMeta.color}>
-                  {runtimeStatus ? runtimeStatus.charAt(0).toUpperCase() + runtimeStatus.slice(1) : 'Unknown'}
-                </Tag>
-                {routeData?.status && routeData?.schema_status && routeData.status !== routeData.schema_status && (
-                  <Tag color={statusDetails.color}>
-                    Route {routeData.status.charAt(0).toUpperCase() + routeData.status.slice(1)}
-                  </Tag>
-                )}
-                <Text type="secondary">
-                  Last Updated: {new Date(routeData.updated_at).toLocaleString()}
-                </Text>
-              </Space>
-            </Space>
-          </Col>
-          <Col>
-            <Space>
+      <Row justify="space-between" align="middle" gutter={[16, 16]}>
+        <Col flex="auto">
+          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+            <Space align="center" size="middle" wrap>
               <Button
-                type={statusDetails.buttonType}
-                icon={statusDetails.buttonIcon}
-                onClick={handleRouteStatusToggle}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  minWidth: '80px'
-                }}
+                icon={<ArrowLeftOutlined />}
+                onClick={() => navigate(ROUTES.ROUTES)}
               >
-                {statusDetails.buttonText}
+                Back
               </Button>
+              <Title level={3} style={{ margin: 0, fontSize: '1.75rem', fontWeight: 600 }}>
+                {routeData.name}
+              </Title>
+            </Space>
+
+            <Space size="small" wrap>
+              <Tag color={runtimeStatusMeta.color}>
+                {formatStatusLabel(runtimeStatus)}
+              </Tag>
+              {routeData?.status && routeData?.schema_status && routeData.status !== routeData.schema_status && (
+                <Tag color={statusDetails.color}>
+                  Route {formatStatusLabel(routeData.status)}
+                </Tag>
+              )}
+              <Text type="secondary">
+                Last Updated: {new Date(routeData.updated_at).toLocaleString()}
+              </Text>
+            </Space>
+          </Space>
+        </Col>
+
+        <Col>
+          <Space wrap>
+            <Button
+              type={statusDetails.buttonType}
+              icon={statusDetails.buttonIcon}
+              onClick={handleRouteStatusToggle}
+              loading={pendingAction != null}
+              disabled={pendingAction != null}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                minWidth: '80px'
+              }}
+            >
+              {statusDetails.buttonText}
+            </Button>
+            <AntTooltip title={routeBusy ? deleteDisabledMessage : null}>
               <Button
                 danger
                 type="primary"
                 icon={<DeleteOutlined />}
                 onClick={handleRouteDelete}
+                disabled={routeBusy || pendingAction != null}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -886,10 +970,10 @@ const RouteItem = () => {
               >
                 Delete
               </Button>
-            </Space>
-          </Col>
-        </Row>
-      </Card>
+            </AntTooltip>
+          </Space>
+        </Col>
+      </Row>
 
       <Tabs
         activeKey={activeStatsTab}

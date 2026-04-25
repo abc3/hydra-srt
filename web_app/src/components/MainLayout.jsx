@@ -3,7 +3,6 @@ import PropTypes from 'prop-types';
 import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  DashboardOutlined,
   CompassOutlined,
   SettingOutlined,
   UserOutlined,
@@ -24,6 +23,72 @@ import React from 'react';
 const { Header, Sider, Content } = Layout;
 const { useBreakpoint } = Grid;
 
+const getDefaultBreadcrumbItems = (path) => {
+  if (path.startsWith(ROUTES.ROUTES)) {
+    if (path === ROUTES.ROUTES) {
+      return [
+        {
+          href: ROUTES.ROUTES,
+          title: <HomeOutlined />,
+        },
+        {
+          title: 'Routes',
+        }
+      ];
+    }
+
+    return [
+      {
+        href: ROUTES.ROUTES,
+        title: <HomeOutlined />,
+      }
+    ];
+  }
+
+  if (path.startsWith(ROUTES.SETTINGS)) {
+    return [
+      {
+        href: ROUTES.ROUTES,
+        title: <HomeOutlined />,
+      },
+      {
+        title: 'Settings',
+      }
+    ];
+  }
+
+  if (path.startsWith(ROUTES.SYSTEM_PIPELINES)) {
+    return [
+      {
+        href: ROUTES.ROUTES,
+        title: <HomeOutlined />,
+      },
+      {
+        title: 'System Pipelines',
+      }
+    ];
+  }
+
+  if (path.startsWith(ROUTES.SYSTEM_NODES)) {
+    return [
+      {
+        href: ROUTES.ROUTES,
+        title: <HomeOutlined />,
+      },
+      {
+        title: 'System Nodes',
+      }
+    ];
+  }
+
+  return [
+    {
+      href: ROUTES.ROUTES,
+      title: <HomeOutlined />,
+    }
+  ];
+};
+
 const MainLayout = ({ children }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [user, setUser] = useState(null);
@@ -38,11 +103,9 @@ const MainLayout = ({ children }) => {
   // Expose setBreadcrumbItems to window object for child components
   useEffect(() => {
     window.setBreadcrumbItems = setBreadcrumbItems;
-    window.breadcrumbSet = false;
-    
+
     return () => {
       delete window.setBreadcrumbItems;
-      delete window.breadcrumbSet;
     };
   }, []);
 
@@ -56,89 +119,9 @@ const MainLayout = ({ children }) => {
     setUser(userData);
   }, []);
 
-  // Reset breadcrumb items when location changes
   useEffect(() => {
-    // Set default breadcrumb based on current path
-    const path = location.pathname;
-    
-    // Reset breadcrumbs immediately when navigating to root
-    if (path === ROUTES.DASHBOARD) {
-      setBreadcrumbItems([
-        {
-          title: <HomeOutlined />,
-        }
-      ]);
-      window.breadcrumbSet = false;
-      return;
-    }
-    
-    // For other paths, wait a bit to allow components to set their own breadcrumbs
-    const timer = setTimeout(() => {
-      // Check if we need to set default breadcrumbs for known routes
-      if (!window.breadcrumbSet) {
-        if (path.startsWith(ROUTES.ROUTES)) {
-          if (path === ROUTES.ROUTES) {
-            setBreadcrumbItems([
-              {
-                href: ROUTES.DASHBOARD,
-                title: <HomeOutlined />,
-              },
-              {
-                title: 'Routes',
-              }
-            ]);
-          }
-          // Don't set default breadcrumbs for child routes - let the components handle it
-        } else if (path.startsWith(ROUTES.SETTINGS)) {
-          setBreadcrumbItems([
-            {
-              href: ROUTES.DASHBOARD,
-              title: <HomeOutlined />,
-            },
-            {
-              title: 'Settings',
-            }
-          ]);
-        } else if (path.startsWith(ROUTES.SYSTEM_PIPELINES)) {
-          setBreadcrumbItems([
-            {
-              href: ROUTES.DASHBOARD,
-              title: <HomeOutlined />,
-            },
-            {
-              title: 'System Pipelines',
-            }
-          ]);
-        } else if (path.startsWith(ROUTES.SYSTEM_NODES)) {
-          setBreadcrumbItems([
-            {
-              href: ROUTES.DASHBOARD,
-              title: <HomeOutlined />,
-            },
-            {
-              title: 'System Nodes',
-            }
-          ]);
-        }
-      }
-      
-      // Reset the flag after setting breadcrumbs
-      window.breadcrumbSet = false;
-    }, 10);
-    
-    return () => clearTimeout(timer);
-  }, [location.pathname]); // Remove breadcrumbItems from dependencies
-
-  // Default breadcrumb with home icon - only run once on mount
-  useEffect(() => {
-    const defaultItems = [
-      {
-        title: <HomeOutlined />,
-      }
-    ];
-    
-    setBreadcrumbItems(defaultItems);
-  }, []); // Empty dependency array - only run once on mount
+    setBreadcrumbItems(getDefaultBreadcrumbItems(location.pathname));
+  }, [location.pathname]);
 
   const handleLogout = () => {
     // Use the logout function from auth.js
@@ -158,11 +141,6 @@ const MainLayout = ({ children }) => {
   };
 
   const menuItems = [
-    {
-      key: ROUTES.DASHBOARD,
-      icon: <DashboardOutlined />,
-      label: 'Dashboard',
-    },
     {
       key: ROUTES.ROUTES,
       icon: <CompassOutlined />,
@@ -234,7 +212,7 @@ const MainLayout = ({ children }) => {
               alignItems: 'center',
               cursor: 'pointer' 
             }}
-            onClick={() => navigate('/')}
+            onClick={() => navigate(ROUTES.ROUTES)}
           >
             <img src="/logo2.webp" alt="HydraSRT Logo" style={{ width: '20px', height: '20px', marginRight: '8px' }} />
             {!collapsed && 'HydraSRT'}
@@ -266,10 +244,10 @@ const MainLayout = ({ children }) => {
             mode="inline"
             selectedKeys={[
               // Keep parent route selected when on child routes
-              location.pathname.startsWith('/routes/') ? ROUTES.ROUTES : 
-              location.pathname.startsWith('/settings/') ? ROUTES.SETTINGS : 
-              location.pathname.startsWith('/system/pipelines') ? ROUTES.SYSTEM_PIPELINES :
-              location.pathname.startsWith('/system/nodes') ? ROUTES.SYSTEM_NODES :
+              location.pathname.startsWith(`${ROUTES.ROUTES}/`) ? ROUTES.ROUTES : 
+              location.pathname.startsWith(`${ROUTES.SETTINGS}/`) ? ROUTES.SETTINGS : 
+              location.pathname.startsWith(ROUTES.SYSTEM_PIPELINES) ? ROUTES.SYSTEM_PIPELINES :
+              location.pathname.startsWith(ROUTES.SYSTEM_NODES) ? ROUTES.SYSTEM_NODES :
               location.pathname
             ]}
             items={menuItems.map(item => ({
@@ -278,17 +256,7 @@ const MainLayout = ({ children }) => {
                 style: { fontSize: '16px' }
               })
             }))}
-            onClick={({ key }) => {
-              // Reset breadcrumb immediately for home navigation
-              if (key === ROUTES.DASHBOARD) {
-                setBreadcrumbItems([
-                  {
-                    title: <HomeOutlined />,
-                  }
-                ]);
-              }
-              navigate(key);
-            }}
+            onClick={({ key }) => navigate(key)}
             style={{ 
               padding: '0 8px',
               background: 'transparent',
@@ -408,14 +376,6 @@ const MainLayout = ({ children }) => {
                   e.preventDefault();
                   const href = target.getAttribute('href');
                   if (href) {
-                    // Reset breadcrumb immediately for home navigation
-                    if (href === ROUTES.DASHBOARD) {
-                      setBreadcrumbItems([
-                        {
-                          title: <HomeOutlined />,
-                        }
-                      ]);
-                    }
                     navigate(href);
                   }
                 }

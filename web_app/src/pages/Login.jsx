@@ -24,6 +24,14 @@ const { useToken } = theme;
 const { useBreakpoint } = Grid;
 const { Title, Text, Link } = Typography;
 
+const getPostLoginTarget = (pathname) => {
+  if (!pathname || pathname === ROUTES.HOME) {
+    return ROUTES.ROUTES;
+  }
+
+  return pathname;
+};
+
 const Login = () => {
   const { token } = useToken();
   const screens = useBreakpoint();
@@ -34,7 +42,7 @@ const Login = () => {
   // Redirect if already authenticated
   useEffect(() => {
     if (isAuthenticated()) {
-      const from = location.state?.from?.pathname || ROUTES.DASHBOARD;
+      const from = getPostLoginTarget(location.state?.from?.pathname);
       navigate(from, { replace: true });
     }
   }, [navigate, location]);
@@ -48,8 +56,8 @@ const Login = () => {
       
       message.success('Login successful!');
       
-      // Redirect to the page the user was trying to access, or to the dashboard
-      const from = location.state?.from?.pathname || ROUTES.DASHBOARD;
+      // Redirect to the page the user was trying to access, or to routes
+      const from = getPostLoginTarget(location.state?.from?.pathname);
       navigate(from, { replace: true });
     } catch (error) {
       console.error('Login error:', error);

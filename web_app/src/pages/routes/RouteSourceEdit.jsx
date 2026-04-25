@@ -1,9 +1,10 @@
 import { Form, Input, Radio, Card, Space, InputNumber, Switch, Select, Button, Row, Col, message, Typography, Modal, Descriptions } from 'antd';
-import { InfoCircleOutlined, SaveOutlined, CloseOutlined, HomeOutlined, LoadingOutlined, ApiOutlined } from '@ant-design/icons';
+import { InfoCircleOutlined, SaveOutlined, ArrowLeftOutlined, HomeOutlined, LoadingOutlined, ApiOutlined } from '@ant-design/icons';
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { routesApi } from '../../utils/api';
+import { ROUTES } from '../../utils/constants';
 
 const { Title } = Typography;
 
@@ -21,14 +22,13 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
   // Set breadcrumb items for the RouteSourceEdit page
   useEffect(() => {
     if (window.setBreadcrumbItems) {
-      window.breadcrumbSet = true;
       window.setBreadcrumbItems([
         {
-          href: '/',
+          href: ROUTES.ROUTES,
           title: <HomeOutlined />,
         },
         {
-          href: '/routes',
+          href: ROUTES.ROUTES,
           title: 'Routes',
         },
         ...(id !== 'new' ? [
@@ -107,8 +107,8 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
       });
   };
 
-  const handleCancel = () => {
-    navigate(id === 'new' ? '/routes' : `/routes/${id}`);
+  const handleBack = () => {
+    navigate(id === 'new' ? ROUTES.ROUTES : `/routes/${id}`);
   };
 
   const openProbeResultModal = (probeResult) => {
@@ -225,17 +225,6 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
       {contextHolder}
       {modalContextHolder}
 
-      <Title
-        level={3}
-        style={{
-          margin: '0 0 24px 0',
-          fontSize: '1.75rem',
-          fontWeight: 600
-        }}
-      >
-        {id === 'new' ? 'Add Source' : 'Edit Source'}
-      </Title>
-
       {id === 'new' && (
         <Card 
           style={{ marginBottom: '24px', backgroundColor: '#141414', border: '1px solid #303030' }}
@@ -267,6 +256,25 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         onValuesChange={handleValuesChange}
       >
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
+          <Space align="center" size="middle">
+            <Button
+              icon={<ArrowLeftOutlined />}
+              onClick={handleBack}
+            >
+              Back
+            </Button>
+            <Title
+              level={3}
+              style={{
+                margin: 0,
+                fontSize: '1.75rem',
+                fontWeight: 600
+              }}
+            >
+              {id === 'new' ? 'Add Source' : 'Edit Source'}
+            </Title>
+          </Space>
+
           <Row gutter={24}>
             <Col style={{ width: '100%', maxWidth: '1200px' }}>
               <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -580,10 +588,10 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
               <Row justify="end" style={{ marginTop: '24px' }}>
                 <Space>
                   <Button
-                    icon={<CloseOutlined />}
-                    onClick={handleCancel}
+                    icon={<ArrowLeftOutlined />}
+                    onClick={handleBack}
                   >
-                    Cancel
+                    Back
                   </Button>
                   <Button
                     icon={<ApiOutlined />}

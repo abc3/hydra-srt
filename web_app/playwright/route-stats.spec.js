@@ -128,7 +128,7 @@ test('route Statistics tab shows live throughput (full-stack)', async ({ page, r
   await page.getByPlaceholder('Username').fill('admin');
   await page.getByPlaceholder('Password').fill('password123');
   await page.getByRole('button', { name: 'Sign In' }).click();
-  await expect(page.getByRole('heading', { name: /Dashboard/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Routes/i })).toBeVisible();
 
   // Token is stored by the UI in localStorage under key "token"
   const token = await page.evaluate(() => window.localStorage.getItem('token'));
