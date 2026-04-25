@@ -129,6 +129,36 @@ defmodule HydraSrt.RouteHandlerTest do
     assert sink["hydra_destination_schema"] == "UDP"
   end
 
+  test "sinks_from_record skips disabled destinations" do
+    record = %{
+      "destinations" => [
+        %{
+          "id" => "dest-enabled",
+          "enabled" => true,
+          "name" => "Enabled destination",
+          "schema" => "UDP",
+          "schema_options" => %{
+            "host" => "127.0.0.1",
+            "port" => 4203
+          }
+        },
+        %{
+          "id" => "dest-disabled",
+          "enabled" => false,
+          "name" => "Disabled destination",
+          "schema" => "UDP",
+          "schema_options" => %{
+            "host" => "127.0.0.1",
+            "port" => 4204
+          }
+        }
+      ]
+    }
+
+    assert {:ok, [sink]} = RouteHandler.sinks_from_record(record)
+    assert sink["hydra_destination_id"] == "dest-enabled"
+  end
+
   test "callback_mode returns handle_event_function" do
     assert RouteHandler.callback_mode() == [:handle_event_function]
   end

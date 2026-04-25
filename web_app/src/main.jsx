@@ -3,7 +3,6 @@ import { ConfigProvider, theme } from 'antd';
 import { StrictMode, useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import MainLayout from './components/MainLayout';
-import Dashboard from './pages/Dashboard';
 import R from './pages/routes/Routes';
 import Settings from './pages/Settings';
 import RouteItem from './pages/routes/RouteItem';
@@ -92,11 +91,9 @@ const App = () => {
       <Routes>
         <Route path={ROUTES.LOGIN} element={<Login />} />
 
-        <Route path={ROUTES.DASHBOARD} element={
+        <Route path={ROUTES.HOME} element={
           <ProtectedRoute>
-            <MainLayout>
-              <Dashboard />
-            </MainLayout>
+            <Navigate to={ROUTES.ROUTES} replace />
           </ProtectedRoute>
         } />
 

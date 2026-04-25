@@ -14,10 +14,9 @@ const SystemNodes = () => {
   // Set breadcrumb items for the System Nodes page
   useEffect(() => {
     if (window.setBreadcrumbItems) {
-      window.breadcrumbSet = true;
       window.setBreadcrumbItems([
         {
-          href: ROUTES.DASHBOARD,
+          href: ROUTES.ROUTES,
           title: <HomeOutlined />,
         },
         {

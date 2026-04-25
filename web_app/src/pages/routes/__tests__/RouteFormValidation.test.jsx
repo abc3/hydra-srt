@@ -29,7 +29,6 @@ describe('Route form validation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.setBreadcrumbItems = vi.fn();
-    window.breadcrumbSet = false;
 
     mockRoutesApi.getById.mockResolvedValue({
       data: {

@@ -299,7 +299,12 @@ defmodule HydraSrt.RouteHandler do
     HydraSrt.mark_route_terminated(route_id)
   end
 
-  defp mark_route_terminated(route_id, reason) when reason in [:normal, {:port_exit, 0}] do
+  defp mark_route_terminated(route_id, reason)
+       when reason in [:normal, :shutdown, {:port_exit, 0}] do
+    HydraSrt.mark_route_stopped(route_id)
+  end
+
+  defp mark_route_terminated(route_id, {:shutdown, _reason}) do
     HydraSrt.mark_route_stopped(route_id)
   end
 
@@ -320,6 +325,7 @@ defmodule HydraSrt.RouteHandler do
       when is_list(destinations) and destinations != [] do
     sinks =
       destinations
+      |> Enum.filter(&destination_enabled?/1)
       |> Enum.reduce([], fn destination, acc ->
         case sink_from_record(destination) do
           {:ok, sink} ->
@@ -341,6 +347,9 @@ defmodule HydraSrt.RouteHandler do
     Logger.warning("RouteHandler: sinks_from_record: no destinations")
     {:ok, []}
   end
+
+  defp destination_enabled?(%{"enabled" => false}), do: false
+  defp destination_enabled?(_), do: true
 
   @doc false
   def build_srt_uri(opts) when is_map(opts) do

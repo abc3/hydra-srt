@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Table, Card, Button, Tag, Space, Typography, message, Modal, Dropdown, Tooltip } from 'antd';
+import { Table, Card, Button, Tag, Space, Typography, message, Modal, Dropdown, Tooltip, Input } from 'antd';
 import {
   PlusOutlined,
   EditOutlined,
@@ -12,15 +12,28 @@ import {
   CheckCircleOutlined,
   ExclamationCircleOutlined,
   CopyOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
+import { ROUTES } from '../../utils/constants';
+import {
+  ACTIVE_ROUTE_STATUSES,
+  compareUptime,
+  formatStatusLabel,
+  getRouteRuntimeStatus,
+  isRouteBusy,
+} from '../../utils/routes';
 
 const { Title } = Typography;
 const ONE_MINUTE_SECONDS = 60;
 const ONE_HOUR_SECONDS = 60 * ONE_MINUTE_SECONDS;
 const ONE_DAY_SECONDS = 24 * ONE_HOUR_SECONDS;
 const ONE_MONTH_SECONDS = 30 * ONE_DAY_SECONDS;
+const DELETE_DISABLED_MESSAGE = 'If you want to delete it, stop the route first';
+const TRANSITIONAL_ROUTE_STATUSES = new Set(['starting', 'stopping', 'processing', 'reconnecting']);
+const ROUTE_ACTION_POLL_ATTEMPTS = 5;
+const ROUTE_ACTION_POLL_DELAY_MS = 250;
 
 const getStatusMeta = (status) => {
   switch ((status || '').toLowerCase()) {
@@ -28,6 +41,7 @@ const getStatusMeta = (status) => {
     case 'started':
       return { color: 'success', label: status, icon: <CheckCircleOutlined /> };
     case 'starting':
+    case 'stopping':
     case 'reconnecting':
       return { color: 'processing', label: status, icon: null };
     case 'failed':
@@ -44,9 +58,26 @@ const renderStatusTag = (status) => {
 
   return (
     <Tag color={color} icon={icon} variant="outlined">
-      {label}
+      {formatStatusLabel(label)}
     </Tag>
   );
+};
+
+const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const hasRouteReachedActionResult = (route, action) => {
+  const runtimeStatus = (getRouteRuntimeStatus(route) || '').toLowerCase();
+
+  if (action === 'start') {
+    return ACTIVE_ROUTE_STATUSES.has(runtimeStatus);
+  }
+
+  return runtimeStatus === 'stopped' || runtimeStatus === 'failed';
+};
+
+const getUpdatedAtMs = (value) => {
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
 };
 
 const formatUptime = (startedAt, status, nowMs) => {
@@ -225,20 +256,20 @@ const Routes = () => {
   const [routes, setRoutes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [pendingRouteActions, setPendingRouteActions] = useState({});
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
   const navigate = useNavigate();
 
   useEffect(() => {
     if (window.setBreadcrumbItems) {
-      window.breadcrumbSet = true;
       window.setBreadcrumbItems([
         {
-          href: '/',
+          href: ROUTES.ROUTES,
           title: <HomeOutlined />,
         },
         {
-          href: '/routes',
+          href: ROUTES.ROUTES,
           title: 'Routes',
         }
       ]);
@@ -270,6 +301,29 @@ const Routes = () => {
     }
   };
 
+  const fetchRoutesData = async () => {
+    const result = await routesApi.getAll();
+    return result.data;
+  };
+
+  const refreshRoutesUntilStable = async (routeId, action) => {
+    for (let attempt = 0; attempt < ROUTE_ACTION_POLL_ATTEMPTS; attempt += 1) {
+      const nextRoutes = await fetchRoutesData();
+      setRoutes(nextRoutes);
+
+      const nextRoute = nextRoutes.find((route) => route.id === routeId);
+      if (!nextRoute || hasRouteReachedActionResult(nextRoute, action)) {
+        return true;
+      }
+
+      if (attempt < ROUTE_ACTION_POLL_ATTEMPTS - 1) {
+        await sleep(ROUTE_ACTION_POLL_DELAY_MS);
+      }
+    }
+
+    return false;
+  };
+
   const showDeleteConfirm = (record) => {
     modal.confirm({
       title: 'Are you sure you want to delete this route?',
@@ -297,24 +351,33 @@ const Routes = () => {
 
   const handleRouteStatus = async (id, action) => {
     try {
-      const result = action === 'start'
-        ? await routesApi.start(id)
-        : await routesApi.stop(id);
-
-      setRoutes(routes.map(route =>
+      setPendingRouteActions((prev) => ({ ...prev, [id]: action }));
+      setRoutes((prev) => prev.map((route) => (
         route.id === id
           ? {
               ...route,
-              status: result.data.status,
-              schema_status: action === 'stop' ? 'stopped' : null,
+              schema_status: action === 'start' ? 'starting' : 'stopping',
             }
           : route
-      ));
+      )));
+
+      await (action === 'start' ? routesApi.start(id) : routesApi.stop(id));
+      const settled = await refreshRoutesUntilStable(id, action);
 
       messageApi.success(`Route ${action}ed successfully`);
+      if (settled === false) {
+        messageApi.warning(`Route is still ${action === 'start' ? 'starting' : 'stopping'}. Refresh in a moment if it does not update.`);
+      }
     } catch (error) {
+      await fetchRoutes();
       messageApi.error(`Failed to ${action} route: ${error.message}`);
       console.error('Error:', error);
+    } finally {
+      setPendingRouteActions((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
     }
   };
 
@@ -332,11 +395,90 @@ const Routes = () => {
     }
   };
 
+  const getNameColumnSearchProps = () => ({
+    filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
+      <div style={{ padding: 8 }}>
+        <Input
+          placeholder="Search name"
+          value={selectedKeys[0]}
+          onChange={(event) => {
+            const value = event.target.value;
+            setSelectedKeys(value ? [value] : []);
+          }}
+          onPressEnter={() => confirm()}
+          style={{ marginBottom: 8, display: 'block', width: 200 }}
+        />
+        <Space>
+          <Button
+            type="primary"
+            icon={<SearchOutlined />}
+            size="small"
+            onClick={() => confirm()}
+          >
+            Search
+          </Button>
+          <Button
+            size="small"
+            onClick={() => {
+              clearFilters?.();
+              confirm();
+            }}
+          >
+            Reset
+          </Button>
+        </Space>
+      </div>
+    ),
+    filterIcon: (filtered) => <SearchOutlined style={{ color: filtered ? '#1677ff' : undefined }} />,
+    onFilter: (value, record) => (record.name || '').toLowerCase().includes(String(value).toLowerCase()),
+  });
+
+  const getSourceColumnSearchProps = () => ({
+    filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
+      <div style={{ padding: 8 }}>
+        <Input
+          placeholder="Search source"
+          value={selectedKeys[0]}
+          onChange={(event) => {
+            const value = event.target.value;
+            setSelectedKeys(value ? [value] : []);
+          }}
+          onPressEnter={() => confirm()}
+          style={{ marginBottom: 8, display: 'block', width: 200 }}
+        />
+        <Space>
+          <Button
+            type="primary"
+            icon={<SearchOutlined />}
+            size="small"
+            onClick={() => confirm()}
+          >
+            Search
+          </Button>
+          <Button
+            size="small"
+            onClick={() => {
+              clearFilters?.();
+              confirm();
+            }}
+          >
+            Reset
+          </Button>
+        </Space>
+      </div>
+    ),
+    filterIcon: (filtered) => <SearchOutlined style={{ color: filtered ? '#1677ff' : undefined }} />,
+    onFilter: (value, record) =>
+      formatSourceLabel(record).toLowerCase().includes(String(value).toLowerCase()),
+  });
+
   const columns = [
     {
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
+      sorter: (a, b) => (a.name || '').localeCompare(b.name || ''),
+      ...getNameColumnSearchProps(),
       render: (text, record) => {
         return (
           <Space>
@@ -351,6 +493,12 @@ const Routes = () => {
       title: 'Source',
       dataIndex: 'input',
       key: 'input',
+      ...getSourceColumnSearchProps(),
+      filters: [
+        { text: 'SRT', value: 'SRT' },
+        { text: 'UDP', value: 'UDP' },
+      ],
+      onFilter: (value, record) => record.schema === value,
       render: (_, record) => {
         const sourcePath = formatFullSourcePath(record);
         const srtModeTag =
@@ -422,6 +570,11 @@ const Routes = () => {
       title: 'Enabled',
       dataIndex: 'enabled',
       key: 'enabled',
+      filters: [
+        { text: 'Enabled', value: true },
+        { text: 'Disabled', value: false },
+      ],
+      onFilter: (value, record) => record.enabled === value,
       render: (enabled) => (
         <Tag color={enabled ? 'green' : 'gray'}>
           {enabled ? 'yes' : 'no'}
@@ -432,28 +585,44 @@ const Routes = () => {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      render: (_, record) => renderStatusTag(record.schema_status || record.status),
+      filters: [
+        { text: 'Started', value: 'started' },
+        { text: 'Processing', value: 'processing' },
+        { text: 'Reconnecting', value: 'reconnecting' },
+        { text: 'Failed', value: 'failed' },
+        { text: 'Stopped', value: 'stopped' },
+      ],
+      onFilter: (value, record) => (getRouteRuntimeStatus(record) || '').toLowerCase() === value,
+      render: (_, record) => renderStatusTag(getRouteRuntimeStatus(record)),
     },
     {
       title: 'Uptime',
       key: 'uptime',
+      sorter: (a, b, sortOrder) => compareUptime(a, b, sortOrder, nowMs),
       render: (_, record) => formatUptime(record.started_at, record.status, nowMs),
     },
     {
       title: 'Updated',
       dataIndex: 'updated_at',
       key: 'updated_at',
+      sorter: (a, b) => getUpdatedAtMs(a.updated_at) - getUpdatedAtMs(b.updated_at),
       render: (date) => formatLastUpdated(date),
     },
     {
       title: 'Actions',
       key: 'actions',
       render: (_, record) => {
+        const pendingAction = pendingRouteActions[record.id];
+        const routeBusy = isRouteBusy(record);
+        const runtimeStatus = getRouteRuntimeStatus(record);
+        const canStop = ACTIVE_ROUTE_STATUSES.has((runtimeStatus || '').toLowerCase());
+        const actionsDisabled = !!pendingAction || TRANSITIONAL_ROUTE_STATUSES.has((runtimeStatus || '').toLowerCase());
         const items = [
           {
             key: 'toggle-status',
-            icon: record.status === 'started' ? <StopOutlined /> : <CaretRightOutlined />,
-            label: record.status === 'started' ? 'Stop' : 'Start',
+            icon: canStop ? <StopOutlined /> : <CaretRightOutlined />,
+            label: canStop ? 'Stop' : 'Start',
+            disabled: actionsDisabled,
           },
           {
             key: 'edit',
@@ -463,14 +632,19 @@ const Routes = () => {
           {
             key: 'delete',
             icon: <DeleteOutlined />,
-            label: 'Delete',
+            label: routeBusy ? (
+              <Tooltip title={DELETE_DISABLED_MESSAGE}>
+                <span>Delete</span>
+              </Tooltip>
+            ) : 'Delete',
             danger: true,
+            disabled: routeBusy || !!pendingAction,
           },
         ];
 
         const handleMenuClick = ({ key }) => {
           if (key === 'toggle-status') {
-            handleRouteStatus(record.id, record.status === 'started' ? 'stop' : 'start');
+            handleRouteStatus(record.id, canStop ? 'stop' : 'start');
             return;
           }
 

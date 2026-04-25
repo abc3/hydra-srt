@@ -15,10 +15,9 @@ const SystemPipelines = () => {
   // Set breadcrumb items for the System Pipelines page
   useEffect(() => {
     if (window.setBreadcrumbItems) {
-      window.breadcrumbSet = true;
       window.setBreadcrumbItems([
         {
-          href: ROUTES.DASHBOARD,
+          href: ROUTES.ROUTES,
           title: <HomeOutlined />,
         },
         {

@@ -5,12 +5,13 @@ import {
     Switch, Select, Button,
     Row, Col, message, Typography
 } from 'antd';
-import { InfoCircleOutlined, SaveOutlined, CloseOutlined, HomeOutlined, LoadingOutlined } from '@ant-design/icons';
+import { InfoCircleOutlined, SaveOutlined, ArrowLeftOutlined, HomeOutlined, LoadingOutlined } from '@ant-design/icons';
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { destinationsApi, routesApi } from '../../utils/api';
 import React from 'react';
+import { ROUTES } from '../../utils/constants';
 
 const { Title } = Typography;
 
@@ -28,14 +29,13 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
     // Set breadcrumb items for the RouteDestEdit page
     useEffect(() => {
         if (window.setBreadcrumbItems) {
-            window.breadcrumbSet = true;
             window.setBreadcrumbItems([
                 {
-                    href: '/',
+                    href: ROUTES.ROUTES,
                     title: <HomeOutlined />,
                 },
                 {
-                    href: '/routes',
+                    href: ROUTES.ROUTES,
                     title: 'Routes',
                 },
                 {
@@ -130,25 +130,13 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
             });
     };
 
-    const handleCancel = () => {
+    const handleBack = () => {
         navigate(`/routes/${routeId}`);
     };
 
     return (
         <div>
             {contextHolder}
-            {/* Page Title */}
-            <Title 
-                level={3} 
-                style={{ 
-                    margin: '0 0 24px 0', 
-                    fontSize: '1.75rem', 
-                    fontWeight: 600 
-                }}
-            >
-                {destId === 'new' ? 'Add Destination' : 'Edit Destination'}
-            </Title>
-
             <Form
                 form={form}
                 layout="vertical"
@@ -163,6 +151,25 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                 onValuesChange={handleValuesChange}
             >
                 <Space direction="vertical" size="large" style={{ width: '100%' }}>
+                    <Space align="center" size="middle">
+                        <Button
+                            icon={<ArrowLeftOutlined />}
+                            onClick={handleBack}
+                        >
+                            Back
+                        </Button>
+                        <Title 
+                            level={3} 
+                            style={{ 
+                                margin: 0, 
+                                fontSize: '1.75rem', 
+                                fontWeight: 600 
+                            }}
+                        >
+                            {destId === 'new' ? 'Add Destination' : 'Edit Destination'}
+                        </Title>
+                    </Space>
+
                     <Row gutter={24}>
                         <Col style={{ width: '100%', maxWidth: '1200px' }}>
                             <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -176,6 +183,15 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         rules={[{ required: true, message: 'Please enter a destination name' }]}
                                     >
                                         <Input placeholder="Enter destination name" />
+                                    </Form.Item>
+
+                                    <Form.Item
+                                        label="Enabled"
+                                        name="enabled"
+                                        valuePropName="checked"
+                                        extra="Disabled destinations stay in the route config but are skipped when the route starts"
+                                    >
+                                        <Switch />
                                     </Form.Item>
                                 </Card>
 
@@ -355,10 +371,10 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                             <Row justify="end" style={{ marginTop: '24px' }}>
                                 <Space>
                                     <Button 
-                                        icon={<CloseOutlined />} 
-                                        onClick={handleCancel}
+                                        icon={<ArrowLeftOutlined />} 
+                                        onClick={handleBack}
                                     >
-                                        Cancel
+                                        Back
                                     </Button>
                                     <Button 
                                         type="primary" 
