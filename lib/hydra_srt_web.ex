@@ -18,7 +18,8 @@ defmodule HydraSrtWeb do
   """
 
   def static_paths,
-    do: ~w(assets fonts images js css favicon.ico robots.txt index.html logo.webp logo2.webp)
+    do:
+      ~w(assets fonts images js css favicon.ico favicon.svg robots.txt index.html logo.webp logo2.webp)
 
   def router do
     quote do
