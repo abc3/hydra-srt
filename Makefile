@@ -9,6 +9,7 @@ dev:
 	METRICS_JWT_SECRET=dev \
 	API_AUTH_USERNAME=admin \
 	API_AUTH_PASSWORD=password123 \
+	ANALYTICS_DATABASE_PATH=./hydra_srt_analytics.duckdb \
 	ERL_AFLAGS="-kernel shell_history enabled +zdbbl 2097151" \
 	iex --name hydra@127.0.0.1 --cookie cookie -S mix phx.server --no-halt
 
@@ -42,7 +43,7 @@ dev_play:
 dev_play1:
 	srt-live-transmit "srt://127.0.0.1:4202?mode=caller" udp://:4203 -v -statspf default -stats 1000
 
-dev_udp1:
+dev_udp2:
 	ffmpeg -hide_banner -loglevel error \
 	-i "srt://127.0.0.1:4210?mode=listener" \
 	-f mpegts "udp://127.0.0.1:1234?pkt_size=1316"
@@ -124,3 +125,7 @@ test_all:
 	@$(MAKE) test_web_unit
 	@echo "Running: web e2e tests (playwright)"
 	@$(MAKE) test_web_e2e
+
+.PHONY: drop_analytics_db
+drop_analytics_db:
+	rm -f hydra_srt_analytics.*

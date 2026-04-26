@@ -9,6 +9,7 @@ import Config
 # - SECRET_KEY_BASE: required in prod; optional in dev/test (defaults exist)
 # - API_AUTH_USERNAME / API_AUTH_PASSWORD: required in prod; optional in dev
 # - DATABASE_PATH: required in prod; optional in dev (overrides dev DB path)
+# - ANALYTICS_DATABASE_PATH: required in prod and dev
 # - POOL_SIZE: Ecto pool size (prod default 5)
 # - PORT / PHX_HOST: HTTP listen port and URL host
 
@@ -67,6 +68,15 @@ case config_env() do
       pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5"),
       journal_mode: :wal
 
+    analytics_database_path =
+      System.get_env("ANALYTICS_DATABASE_PATH") ||
+        raise """
+        environment variable ANALYTICS_DATABASE_PATH is missing.
+        For example: /etc/hydra_srt/hydra_srt_analytics.duckdb
+        """
+
+    config :hydra_srt, analytics_database_path: analytics_database_path
+
     host = System.get_env("PHX_HOST") || "example.com"
     port = String.to_integer(System.get_env("PORT") || "4000")
 
@@ -90,6 +100,15 @@ case config_env() do
         database: path,
         pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5")
     end
+
+    analytics_database_path =
+      System.get_env("ANALYTICS_DATABASE_PATH") ||
+        raise """
+        environment variable ANALYTICS_DATABASE_PATH is missing.
+        For example: /tmp/hydra_srt_analytics.duckdb
+        """
+
+    config :hydra_srt, analytics_database_path: analytics_database_path
 
     if u = System.get_env("API_AUTH_USERNAME") do
       config :hydra_srt, api_auth_username: u
