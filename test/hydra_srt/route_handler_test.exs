@@ -216,7 +216,7 @@ defmodule HydraSrt.RouteHandlerTest do
              )
   end
 
-  test "stats_events extracts input and destination output bytes per second" do
+  test "stats_events includes snapshot and extracts input and destination output bytes per second" do
     stats = %{
       "source" => %{"bytes_in_per_sec" => 191_572},
       "destinations" => [
@@ -228,6 +228,11 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert RouteHandler.stats_events(stats, "route-1") == [
+             %{
+               route_id: "route-1",
+               metric: "snapshot",
+               stats: stats
+             },
              %{
                route_id: "route-1",
                direction: "in",
@@ -251,14 +256,23 @@ defmodule HydraSrt.RouteHandlerTest do
            ]
   end
 
-  test "publish_stats broadcasts bytes per second on stats topics" do
+  test "publish_stats broadcasts snapshot and bytes per second on stats topics" do
     Phoenix.PubSub.subscribe(HydraSrt.PubSub, "stats")
 
+    stats = %{
+      "source" => %{"bytes_in_per_sec" => 191_572},
+      "destinations" => [%{"id" => "dest-1", "bytes_out_per_sec" => 186_684}]
+    }
+
     assert :ok =
-             RouteHandler.publish_stats("route-1", %{
-               "source" => %{"bytes_in_per_sec" => 191_572},
-               "destinations" => [%{"id" => "dest-1", "bytes_out_per_sec" => 186_684}]
-             })
+             RouteHandler.publish_stats("route-1", stats)
+
+    assert_receive {:stats,
+                    %{
+                      route_id: "route-1",
+                      metric: "snapshot",
+                      stats: ^stats
+                    }}
 
     assert_receive {:stats,
                     %{
