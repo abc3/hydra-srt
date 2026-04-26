@@ -3,6 +3,7 @@ defmodule HydraSrt.RouteHandler do
 
   require Logger
   @behaviour :gen_statem
+  @normal_port_exit_reasons [:normal, :epipe]
 
   alias HydraSrt.Db
   alias HydraSrt.Helpers
@@ -32,6 +33,7 @@ defmodule HydraSrt.RouteHandler do
 
   @impl true
   def handle_event(:internal, :start, _state, data) do
+    Logger.info("RouteHandler: starting route #{data.id}")
     port = start_native_pipeline(data.route)
     Logger.info("RouteHandler: Started port: #{inspect(port)}")
 
@@ -42,7 +44,8 @@ defmodule HydraSrt.RouteHandler do
 
       {:error, reason} ->
         Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
-        {:stop, reason, data}
+        kill_stale_pipeline_processes(data.id, "failed_start")
+        {:stop, :normal, %{data | shutdown_reason: {:startup_failed, reason}}}
     end
   end
 
@@ -78,8 +81,12 @@ defmodule HydraSrt.RouteHandler do
   def handle_event(:info, {:EXIT, port, reason}, _state, %{port: port} = data) do
     Logger.info("RouteHandler: port exit #{inspect(reason)}")
 
-    if reason == :normal do
-      {:stop, :normal, %{data | shutdown_reason: {:port_exit, :normal}}}
+    if reason == :epipe do
+      kill_stale_pipeline_processes(data.id, "epipe")
+    end
+
+    if reason in @normal_port_exit_reasons do
+      {:stop, :normal, %{data | shutdown_reason: {:port_exit, reason}}}
     else
       {:stop, {:port_exit, reason}, data}
     end
@@ -341,7 +348,17 @@ defmodule HydraSrt.RouteHandler do
   end
 
   defp mark_route_terminated(route_id, reason)
-       when reason in [:normal, :shutdown, {:port_exit, 0}] do
+       when reason in [
+              :normal,
+              :shutdown,
+              {:port_exit, 0},
+              {:port_exit, :normal},
+              {:port_exit, :epipe}
+            ] do
+    HydraSrt.mark_route_stopped(route_id)
+  end
+
+  defp mark_route_terminated(route_id, {:startup_failed, _reason}) do
     HydraSrt.mark_route_stopped(route_id)
   end
 
@@ -351,6 +368,18 @@ defmodule HydraSrt.RouteHandler do
 
   defp mark_route_terminated(route_id, _reason) do
     HydraSrt.mark_route_terminated(route_id)
+  end
+
+  defp kill_stale_pipeline_processes(route_id, context) do
+    case HydraSrt.ProcessMonitor.kill_pipeline_processes_for_route(route_id) do
+      {:ok, _results} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "RouteHandler: failed to kill stale pipeline processes route_id=#{route_id} context=#{context} reason=#{inspect(reason)}"
+        )
+    end
   end
 
   def route_data_to_params(route_id) do

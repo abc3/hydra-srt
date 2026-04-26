@@ -93,6 +93,25 @@ defmodule HydraSrt.MonitoringTest do
     end
   end
 
+  test "ProcessMonitor matches pipeline processes by exact route id argument" do
+    processes = [
+      %{
+        pid: 111,
+        command:
+          "/Users/sts/dev/hydra/_build/dev/lib/hydra_srt/priv/native/hydra_srt_pipeline route-1"
+      },
+      %{
+        pid: 222,
+        command:
+          "/Users/sts/dev/hydra/_build/dev/lib/hydra_srt/priv/native/hydra_srt_pipeline route-10"
+      },
+      %{pid: 333, command: "grep route-1"},
+      %{pid: 444, command: "/bin/other route-1"}
+    ]
+
+    assert [%{pid: 111}] = ProcessMonitor.route_pipeline_processes("route-1", processes)
+  end
+
   test "ProcessMonitor handles different operating systems" do
     case :os.type() do
       {:unix, :darwin} ->

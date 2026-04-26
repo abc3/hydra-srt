@@ -1,6 +1,7 @@
 defmodule HydraSrtTest do
   use HydraSrt.DataCase, async: true
 
+  import ExUnit.CaptureLog
   import HydraSrt.ApiFixtures
   alias HydraSrt.Db
 
@@ -71,5 +72,38 @@ defmodule HydraSrtTest do
 
     assert {true, "stopped"} in statuses_by_enabled
     assert {false, "processing"} in statuses_by_enabled
+  end
+
+  test "startup recovery logs stale statuses and stops all routes and destinations" do
+    route =
+      route_fixture(%{
+        enabled: false,
+        status: "started",
+        schema_status: "processing",
+        stopped_at: nil
+      })
+
+    enabled_destination = destination_fixture(route, %{status: "starting", enabled: true})
+    disabled_destination = destination_fixture(route, %{status: "processing", enabled: false})
+
+    log =
+      capture_log(fn ->
+        assert :ok = HydraSrt.Application.recover_routes_after_startup()
+      end)
+
+    assert log =~ "found stale route status route_id=#{route.id}"
+    assert log =~ "found stale destination status destination_id=#{enabled_destination.id}"
+    assert log =~ "found stale destination status destination_id=#{disabled_destination.id}"
+
+    assert {:ok, reloaded_route} = Db.get_route(route.id, true)
+    assert reloaded_route["status"] == "stopped"
+    assert reloaded_route["schema_status"] == "stopped"
+
+    statuses_by_id =
+      reloaded_route["destinations"]
+      |> Map.new(&{&1["id"], &1["status"]})
+
+    assert statuses_by_id[enabled_destination.id] == "stopped"
+    assert statuses_by_id[disabled_destination.id] == "stopped"
   end
 end

@@ -75,6 +75,55 @@ defmodule HydraSrt.Db do
     :ok
   end
 
+  @spec list_routes_with_stale_runtime_status() :: list(%Route{})
+  def list_routes_with_stale_runtime_status do
+    from(r in Route, where: r.status != "stopped" or is_nil(r.status))
+    |> Repo.all()
+  end
+
+  @spec list_destinations_with_stale_runtime_status() :: list(%Destination{})
+  def list_destinations_with_stale_runtime_status do
+    from(d in Destination, where: d.status != "stopped" or is_nil(d.status))
+    |> Repo.all()
+  end
+
+  @spec list_enabled_routes() :: list(%Route{})
+  def list_enabled_routes do
+    from(r in Route, where: r.enabled == true, order_by: [asc: r.inserted_at])
+    |> Repo.all()
+  end
+
+  @spec reset_runtime_statuses_to_stopped() :: %{
+          routes: non_neg_integer(),
+          destinations: non_neg_integer()
+        }
+  def reset_runtime_statuses_to_stopped do
+    now = DateTime.utc_now(:second)
+
+    {routes_count, _} =
+      from(r in Route)
+      |> Repo.update_all(
+        set: [
+          status: "stopped",
+          schema_status: "stopped",
+          stopped_at: now,
+          updated_at: now
+        ]
+      )
+
+    {destinations_count, _} =
+      from(d in Destination)
+      |> Repo.update_all(
+        set: [
+          status: "stopped",
+          stopped_at: now,
+          updated_at: now
+        ]
+      )
+
+    %{routes: routes_count, destinations: destinations_count}
+  end
+
   @spec update_route_runtime_status(String.t(), String.t() | nil) ::
           {:ok, map()} | {:error, any()}
   def update_route_runtime_status(route_id, status) when is_binary(route_id) do

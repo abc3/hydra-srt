@@ -31,7 +31,6 @@ const ONE_HOUR_SECONDS = 60 * ONE_MINUTE_SECONDS;
 const ONE_DAY_SECONDS = 24 * ONE_HOUR_SECONDS;
 const ONE_MONTH_SECONDS = 30 * ONE_DAY_SECONDS;
 const DELETE_DISABLED_MESSAGE = 'If you want to delete it, stop the route first';
-const TRANSITIONAL_ROUTE_STATUSES = new Set(['starting', 'stopping', 'reconnecting']);
 const ROUTE_THROUGHPUT_STATUSES = new Set(['started', 'processing']);
 const ROUTE_ACTION_POLL_ATTEMPTS = 5;
 const ROUTE_ACTION_POLL_DELAY_MS = 250;
@@ -563,13 +562,15 @@ const Routes = () => {
         const pendingAction = pendingRouteActions[record.id];
         const routeBusy = isRouteBusy(record);
         const runtimeStatus = getRouteRuntimeStatus(record);
-        const canStop = ACTIVE_ROUTE_STATUSES.has((runtimeStatus || '').toLowerCase());
-        const actionsDisabled = !!pendingAction || TRANSITIONAL_ROUTE_STATUSES.has((runtimeStatus || '').toLowerCase());
+        const runtimeStatusLower = (runtimeStatus || '').toLowerCase();
+        const canStart = runtimeStatusLower === 'stopped';
+        const routeAction = canStart ? 'start' : 'stop';
+        const actionsDisabled = !!pendingAction;
         const items = [
           {
             key: 'toggle-status',
-            icon: canStop ? <StopOutlined /> : <CaretRightOutlined />,
-            label: canStop ? 'Stop' : 'Start',
+            icon: canStart ? <CaretRightOutlined /> : <StopOutlined />,
+            label: canStart ? 'Start' : 'Stop',
             disabled: actionsDisabled,
           },
           {
@@ -592,7 +593,7 @@ const Routes = () => {
 
         const handleMenuClick = ({ key }) => {
           if (key === 'toggle-status') {
-            handleRouteStatus(record.id, canStop ? 'stop' : 'start');
+            handleRouteStatus(record.id, routeAction);
             return;
           }
 
@@ -614,7 +615,7 @@ const Routes = () => {
             }}
             trigger={['click']}
           >
-            <Button icon={<HolderOutlined />} />
+            <Button aria-label={`Route actions for ${record.name || record.id}`} icon={<HolderOutlined />} />
           </Dropdown>
         );
       },
