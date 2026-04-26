@@ -7,7 +7,7 @@ defmodule HydraSrtWeb.RouteController do
   action_fallback HydraSrtWeb.FallbackController
 
   def index(conn, _params) do
-    with {:ok, routes} <- Db.get_all_routes() do
+    with {:ok, routes} <- Db.get_all_routes(true) do
       data(conn, routes)
     else
       error ->
