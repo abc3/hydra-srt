@@ -6,7 +6,7 @@ defmodule HydraSrt.Api.Route do
   @foreign_key_type :binary_id
   schema "routes" do
     # We keep compatibility with the admin UI payload keys (camelCase) at the changeset layer.
-    field :enabled, :boolean, default: true
+    field :enabled, :boolean, default: false
     field :name, :string
     field :status, :string
     field :schema_status, :string

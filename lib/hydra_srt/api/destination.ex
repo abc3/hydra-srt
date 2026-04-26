@@ -5,7 +5,7 @@ defmodule HydraSrt.Api.Destination do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "destinations" do
-    field :enabled, :boolean, default: true
+    field :enabled, :boolean, default: false
     field :name, :string
     field :status, :string
     field :schema, :string

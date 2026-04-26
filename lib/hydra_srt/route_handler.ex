@@ -381,8 +381,9 @@ defmodule HydraSrt.RouteHandler do
     {:ok, []}
   end
 
-  defp destination_enabled?(%{"enabled" => false}), do: false
-  defp destination_enabled?(_), do: true
+  defp destination_enabled?(destination) when is_map(destination) do
+    destination["enabled"] == true or destination[:enabled] == true
+  end
 
   @doc false
   def build_srt_uri(opts) when is_map(opts) do
