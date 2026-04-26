@@ -54,8 +54,7 @@ defmodule HydraSrt.MixProject do
       {:meck, "~> 1.0", only: [:dev, :test], override: true},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:benchee, "~> 1.3", only: :dev},
-      {:instream, "~> 2.0"}
+      {:benchee, "~> 1.3", only: :dev}
     ]
   end
 

@@ -51,7 +51,6 @@ config :hydra_srt, HydraSrtWeb.Endpoint,
 config :hydra_srt,
   api_auth_username: "admin",
   api_auth_password: "password123",
-  export_metrics?: false,
   default_bind_ip: "127.0.0.1"
 
 # Print only warnings and errors during test

@@ -77,8 +77,6 @@ if not e2e_mode_enabled? do
 end
 
 if e2e_mode_enabled? do
-  Application.put_env(:hydra_srt, :stats_persist_async?, false)
-
   # E2E suite needs the real HTTP server + API auth
   HydraSrt.TestSupport.E2EHelpers.ensure_e2e_prereqs!()
 
@@ -91,6 +89,4 @@ if e2e_mode_enabled? do
   end
 
   ExUnit.after_suite(fn _ -> HydraSrt.TestSupport.E2EHelpers.kill_all_pipelines!() end)
-else
-  Application.put_env(:hydra_srt, :stats_persist_async?, true)
 end

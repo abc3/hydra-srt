@@ -11,13 +11,6 @@ defmodule HydraSrtWeb.Endpoint do
     same_site: "Lax"
   ]
 
-  socket "/socket", HydraSrtWeb.UserSocket,
-    websocket: [
-      connect_info: [:user_agent],
-      check_origin: false
-    ],
-    longpoll: false
-
   # Serve at "/" the static files from "priv/static" directory.
   #
   # You should set gzip to true if you are running phx.digest

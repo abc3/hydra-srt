@@ -14,7 +14,6 @@ defmodule HydraSrt.ApiFixtures do
         alias: "some alias",
         enabled: true,
         name: "some name",
-        exportStats: false,
         schema: "UDP",
         schema_status: nil,
         schema_options: %{},

@@ -171,10 +171,42 @@ defmodule HydraSrt.RouteHandlerTest do
   end
 
   test "parse_native_json_line keeps stats payloads separate" do
-    assert :stats =
+    assert {:stats, %{"source" => %{"bytes_in_per_sec" => 123}, "destinations" => []}} =
              RouteHandler.parse_native_json_line(
                ~s({"source":{"bytes_in_per_sec":123},"destinations":[]})
              )
+  end
+
+  test "stats_events extracts input and destination output bytes per second" do
+    stats = %{
+      "source" => %{"bytes_in_per_sec" => 191_572},
+      "destinations" => [
+        %{"id" => "dest-1", "bytes_out_per_sec" => 186_684},
+        %{"id" => "dest-2", "bytes_out_per_sec" => 92_000},
+        %{"id" => "dest-ignored"},
+        %{"bytes_out_per_sec" => 1_000}
+      ]
+    }
+
+    assert RouteHandler.stats_events(stats, "route-1") == [
+             {"stats:route-1:in:bytes_per_sec", 191_572},
+             {"stats:route-1:out:dest-1:bytes_per_sec", 186_684},
+             {"stats:route-1:out:dest-2:bytes_per_sec", 92_000}
+           ]
+  end
+
+  test "publish_stats broadcasts bytes per second on stats topics" do
+    Phoenix.PubSub.subscribe(HydraSrt.PubSub, "stats:route-1:in:bytes_per_sec")
+    Phoenix.PubSub.subscribe(HydraSrt.PubSub, "stats:route-1:out:dest-1:bytes_per_sec")
+
+    assert :ok =
+             RouteHandler.publish_stats("route-1", %{
+               "source" => %{"bytes_in_per_sec" => 191_572},
+               "destinations" => [%{"id" => "dest-1", "bytes_out_per_sec" => 186_684}]
+             })
+
+    assert_receive {:stats, "stats:route-1:in:bytes_per_sec", 191_572}
+    assert_receive {:stats, "stats:route-1:out:dest-1:bytes_per_sec", 186_684}
   end
 
   test "parse_native_json_line keeps status reason when present" do

@@ -6,7 +6,6 @@ defmodule HydraSrt.RouteHandler do
 
   alias HydraSrt.Db
   alias HydraSrt.Helpers
-  alias HydraSrt.StatsProcessor
 
   def start_link(args), do: :gen_statem.start_link(__MODULE__, args, [])
 
@@ -25,8 +24,6 @@ defmodule HydraSrt.RouteHandler do
       port: nil,
       route: route,
       port_buffer: "",
-      source_stream_id: nil,
-      pipeline_status: nil,
       shutdown_reason: nil
     }
 
@@ -225,10 +222,7 @@ defmodule HydraSrt.RouteHandler do
     data
   end
 
-  defp process_port_line("stats_source_stream_id:" <> stream_id, data) do
-    Logger.info("RouteHandler: stats_source_stream_id: #{stream_id}")
-    %{data | source_stream_id: stream_id}
-  end
+  defp process_port_line("stats_source_stream_id:" <> _stream_id, data), do: data
 
   defp process_port_line("{" <> _ = json, data) do
     case parse_native_json_line(json) do
@@ -238,28 +232,14 @@ defmodule HydraSrt.RouteHandler do
         case normalize_runtime_status(status, reason) do
           {:update, normalized_status} ->
             HydraSrt.set_route_runtime_status(data.id, normalized_status)
-
-            StatsProcessor.process_pipeline_status(%{
-              route_id: data.id,
-              route_record: data.route,
-              source_stream_id: data.source_stream_id,
-              pipeline_status: normalized_status
-            })
-
-            %{data | pipeline_status: normalized_status}
+            data
 
           :ignore ->
             data
         end
 
       :stats ->
-        StatsProcessor.process_stats_json(json, %{
-          route_id: data.id,
-          route_record: data.route,
-          source_stream_id: data.source_stream_id,
-          pipeline_status: data.pipeline_status
-        })
-
+        Logger.info("RouteHandler: pipeline stats: #{json}")
         data
 
       :unknown ->

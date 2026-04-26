@@ -3,39 +3,6 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import RouteItem from '../RouteItem';
 
-let statsCallback;
-
-vi.mock('phoenix', () => {
-  return {
-    Socket: class {
-      connect() {}
-      disconnect() {}
-      channel() {
-        return {
-          join() {
-            return {
-              receive() {
-                return this;
-              },
-            };
-          },
-          on(event, cb) {
-            if (event === 'stats') statsCallback = cb;
-          },
-          off() {},
-          leave() {},
-        };
-      }
-    },
-  };
-});
-
-vi.mock('../../../utils/auth', () => {
-  return {
-    getToken: () => 'Bearer test',
-  };
-});
-
 vi.mock('../../../utils/api', () => {
   return {
     routesApi: {
@@ -49,7 +16,6 @@ vi.mock('../../../utils/api', () => {
           schema_status: 'processing',
           updated_at: new Date().toISOString(),
           enabled: true,
-          exportStats: false,
           schema: 'SRT',
           schema_options: { localaddress: '127.0.0.1', localport: 1234, mode: 'listener' },
           node: 'node@host',
@@ -73,26 +39,6 @@ vi.mock('../../../utils/api', () => {
               updated_at: new Date().toISOString(),
             },
           ],
-          stats: {
-            source: { bytes_in_per_sec: 1000, bytes_in_total: 5000 },
-            destinations: [
-              { id: 'd1', name: 'Dest 1', schema: 'UDP', bytes_out_per_sec: 10, bytes_out_total: 100 },
-            ],
-            'connected-callers': 1,
-          },
-          stats_history: [
-            {
-              id: 'rs1',
-              inserted_at: new Date().toISOString(),
-              stats: {
-                source: { bytes_in_per_sec: 1000, bytes_in_total: 5000 },
-                destinations: [
-                  { id: 'd1', name: 'Dest 1', schema: 'UDP', bytes_out_per_sec: 10, bytes_out_total: 100 },
-                ],
-                'connected-callers': 1,
-              },
-            },
-          ],
         },
       }),
     },
@@ -102,8 +48,8 @@ vi.mock('../../../utils/api', () => {
   };
 });
 
-describe('RouteItem stats tabs', () => {
-  it('Overview no longer shows the route statistics card', async () => {
+describe('RouteItem', () => {
+  it('does not show route statistics UI', async () => {
     render(
       <MemoryRouter initialEntries={['/routes/r1']}>
         <Routes>
@@ -112,80 +58,11 @@ describe('RouteItem stats tabs', () => {
       </MemoryRouter>,
     );
 
-    // Emit a live stats payload to drive the UI
-    await act(async () => {
-      statsCallback?.({
-        source: { bytes_in_per_sec: 1000, bytes_in_total: 5000 },
-        destinations: [
-          { id: 'd1', name: 'Dest 1', schema: 'UDP', bytes_out_per_sec: 10, bytes_out_total: 100 },
-          { id: 'd2', name: 'Dest 2', schema: 'SRT', bytes_out_per_sec: 20, bytes_out_total: 200 },
-        ],
-        'connected-callers': 1,
-      });
-    });
-
-    expect(screen.queryByText('Route Statistics (Overview)')).not.toBeInTheDocument();
+    expect(await screen.findByText('Endpoints')).toBeInTheDocument();
+    expect(screen.queryByText('Route Metrics (Overview)')).not.toBeInTheDocument();
     expect(screen.queryByTestId('kpi-source-bitrate')).not.toBeInTheDocument();
     expect(screen.queryByTestId('kpi-worst-dest-bitrate')).not.toBeInTheDocument();
-  });
-
-  it('Statistics tab shows per-destination live bitrate', async () => {
-    render(
-      <MemoryRouter initialEntries={['/routes/r1']}>
-        <Routes>
-          <Route path="/routes/:id" element={<RouteItem />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    await act(async () => {
-      statsCallback?.({
-        source: { bytes_in_per_sec: 1000, bytes_in_total: 5000 },
-        destinations: [
-          { id: 'd1', name: 'Dest 1', schema: 'UDP', bytes_out_per_sec: 10, bytes_out_total: 100 },
-        ],
-        'connected-callers': 1,
-      });
-    });
-
-    fireEvent.click(screen.getByRole('tab', { name: 'Statistics' }));
-
-    expect(screen.getByText('80 bps')).toBeInTheDocument(); // 10 B/s -> 80 bps
-  });
-
-  it('Statistics tab initializes from persisted stats returned by the route API', async () => {
-    render(
-      <MemoryRouter initialEntries={['/routes/r1']}>
-        <Routes>
-          <Route path="/routes/:id" element={<RouteItem />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    fireEvent.click(await screen.findByRole('tab', { name: 'Statistics' }));
-
-    expect(await screen.findByText('80 bps')).toBeInTheDocument();
-    expect(screen.queryByText('Waiting for statistics...')).not.toBeInTheDocument();
-  });
-
-  it('updates status tag when schema_status arrives via Phoenix Channel', async () => {
-    render(
-      <MemoryRouter initialEntries={['/routes/r1']}>
-        <Routes>
-          <Route path="/routes/:id" element={<RouteItem />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    // Wait for initial render (route schema_status 'processing' is visible)
-    expect(await screen.findAllByText('Processing')).not.toHaveLength(0);
-
-    // Live stats push carrying a new schema_status
-    await act(async () => {
-      statsCallback?.({ schema_status: 'reconnecting', 'connected-callers': 0 });
-    });
-
-    expect(screen.getAllByText('Reconnecting').length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByRole('tab', { name: 'Metrics' })).not.toBeInTheDocument();
   });
 
   it('keeps the current runtime status visible until refreshed after Stop is clicked', async () => {
@@ -203,10 +80,10 @@ describe('RouteItem stats tabs', () => {
       fireEvent.click(stopButton);
     });
 
-    expect(screen.getAllByText('Processing').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('running').length).toBeGreaterThan(0);
   });
 
-  it('does not let live stats overwrite local stopping state after Stop is clicked', async () => {
+  it('keeps local stopping state after Stop is clicked', async () => {
     render(
       <MemoryRouter initialEntries={['/routes/r1']}>
         <Routes>
@@ -221,13 +98,9 @@ describe('RouteItem stats tabs', () => {
       fireEvent.click(stopButton);
     });
 
-    expect(await screen.findAllByText('Stopping')).not.toHaveLength(0);
+    expect(await screen.findAllByText('stopping')).not.toHaveLength(0);
 
-    await act(async () => {
-      statsCallback?.({ schema_status: 'processing', 'connected-callers': 1 });
-    });
-
-    expect(screen.getAllByText('Stopping').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('stopping').length).toBeGreaterThan(0);
   });
 
   it('shows destination runtime status in the destinations table', async () => {
@@ -240,7 +113,7 @@ describe('RouteItem stats tabs', () => {
     );
 
     expect(await screen.findByText('Status')).toBeInTheDocument();
-    expect(screen.getAllByText('Processing').length).toBeGreaterThanOrEqual(3);
+    expect(screen.getAllByText('running').length).toBeGreaterThanOrEqual(3);
   });
 
   it('shows destination enabled state in the endpoints table', async () => {

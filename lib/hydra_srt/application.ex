@@ -5,8 +5,6 @@ defmodule HydraSrt.Application do
 
   @impl true
   def start(_type, _args) do
-    :ok = HydraSrt.StatsStore.ensure_table()
-
     :ok =
       :gen_event.swap_sup_handler(
         :erl_signal_server,
@@ -27,21 +25,13 @@ defmodule HydraSrt.Application do
       HydraSrt.Repo,
       HydraSrt.AuthCleanup,
       {Task.Supervisor, name: HydraSrt.TaskSupervisor},
-      HydraSrt.StatsRetention,
       # {Ecto.Migrator,
       #  repos: Application.fetch_env!(:hydra_srt, :ecto_repos), skip: skip_migrations?()},
       {Phoenix.PubSub, name: HydraSrt.PubSub, partitions: runtime_schedulers},
       HydraSrtWeb.Endpoint
     ]
 
-    children =
-      if Application.get_env(:hydra_srt, :export_metrics?, true) do
-        children ++ [HydraSrt.Metrics.Connection]
-      else
-        children
-      end
-
-    # Cachex is used by API auth and websocket auth; keep it always available.
+    # Cachex is used by API auth; keep it always available.
     children = [{Cachex, name: HydraSrt.Cache} | children]
 
     opts = [strategy: :one_for_one, name: HydraSrt.Supervisor]

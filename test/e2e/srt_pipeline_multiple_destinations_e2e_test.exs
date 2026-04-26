@@ -31,7 +31,6 @@ defmodule HydraSrt.E2E.SrtPipelineMultipleDestinationsE2ETest do
     route_id =
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_srt_multiple_destinations",
-        "exportStats" => false,
         "schema" => "SRT",
         "schema_options" => %{
           "localaddress" => "127.0.0.1",
@@ -65,8 +64,6 @@ defmodule HydraSrt.E2E.SrtPipelineMultipleDestinationsE2ETest do
           "mode" => "caller"
         }
       })
-
-    Phoenix.PubSub.subscribe(HydraSrt.PubSub, "stats:#{route_id}")
 
     srt_rx =
       E2EHelpers.start_port_logged!(
@@ -135,17 +132,6 @@ defmodule HydraSrt.E2E.SrtPipelineMultipleDestinationsE2ETest do
       E2EHelpers.kill_port(tx)
       E2EHelpers.kill_port(srt_rx)
     end)
-
-    assert_receive {:stats, stats}, 10_000
-    assert length(stats["destinations"]) == 2
-
-    assert Enum.any?(stats["destinations"], fn destination ->
-             destination["schema"] == "UDP"
-           end)
-
-    assert Enum.any?(stats["destinations"], fn destination ->
-             destination["schema"] == "SRT"
-           end)
 
     E2EHelpers.wait_until(
       fn ->

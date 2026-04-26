@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Table, Card, Button, Tag, Space, Typography, message, Modal, Dropdown, Tooltip, Input } from 'antd';
+import { Table, Card, Button, Tag, Space, Typography, message, Modal, Dropdown, Tooltip, Input, Badge } from 'antd';
 import {
   PlusOutlined,
   EditOutlined,
@@ -9,8 +9,6 @@ import {
   StopOutlined,
   HomeOutlined,
   HolderOutlined,
-  CheckCircleOutlined,
-  ExclamationCircleOutlined,
   CopyOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
@@ -31,36 +29,32 @@ const ONE_HOUR_SECONDS = 60 * ONE_MINUTE_SECONDS;
 const ONE_DAY_SECONDS = 24 * ONE_HOUR_SECONDS;
 const ONE_MONTH_SECONDS = 30 * ONE_DAY_SECONDS;
 const DELETE_DISABLED_MESSAGE = 'If you want to delete it, stop the route first';
-const TRANSITIONAL_ROUTE_STATUSES = new Set(['starting', 'stopping', 'processing', 'reconnecting']);
+const TRANSITIONAL_ROUTE_STATUSES = new Set(['starting', 'stopping', 'reconnecting']);
 const ROUTE_ACTION_POLL_ATTEMPTS = 5;
 const ROUTE_ACTION_POLL_DELAY_MS = 250;
 
 const getStatusMeta = (status) => {
   switch ((status || '').toLowerCase()) {
     case 'processing':
+      return { badgeStatus: 'processing', label: 'running' };
     case 'started':
-      return { color: 'success', label: status, icon: <CheckCircleOutlined /> };
+      return { badgeStatus: 'success', label: status };
     case 'starting':
     case 'stopping':
     case 'reconnecting':
-      return { color: 'processing', label: status, icon: null };
+      return { badgeStatus: 'processing', label: status };
     case 'failed':
-      return { color: 'error', label: status, icon: <ExclamationCircleOutlined /> };
+      return { badgeStatus: 'error', label: status };
     case 'stopped':
-      return { color: 'default', label: status, icon: null };
+      return { badgeStatus: 'error', label: status };
     default:
-      return { color: 'default', label: status || 'unknown', icon: null };
+      return { badgeStatus: 'default', label: status || 'unknown' };
   }
 };
 
-const renderStatusTag = (status) => {
-  const { color, label, icon } = getStatusMeta(status);
-
-  return (
-    <Tag color={color} icon={icon} variant="outlined">
-      {formatStatusLabel(label)}
-    </Tag>
-  );
+const renderStatusBadge = (status) => {
+  const { badgeStatus, label } = getStatusMeta(status);
+  return <Badge status={badgeStatus} text={formatStatusLabel(label).toLowerCase()} />;
 };
 
 const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -593,7 +587,7 @@ const Routes = () => {
         { text: 'Stopped', value: 'stopped' },
       ],
       onFilter: (value, record) => (getRouteRuntimeStatus(record) || '').toLowerCase() === value,
-      render: (_, record) => renderStatusTag(getRouteRuntimeStatus(record)),
+      render: (_, record) => renderStatusBadge(getRouteRuntimeStatus(record)),
     },
     {
       title: 'Uptime',
