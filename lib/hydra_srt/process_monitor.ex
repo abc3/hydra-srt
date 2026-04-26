@@ -1,5 +1,8 @@
 defmodule HydraSrt.ProcessMonitor do
   @moduledoc false
+  require Logger
+
+  alias HydraSrt.Helpers
 
   def list_pipeline_processes do
     case :os.type() do
@@ -16,6 +19,45 @@ defmodule HydraSrt.ProcessMonitor do
       _ -> {:error, "Unsupported operating system"}
     end
   end
+
+  def kill_pipeline_processes_for_route(route_id) when is_binary(route_id) do
+    case route_pipeline_processes(route_id) do
+      {:error, _reason} = error ->
+        error
+
+      processes ->
+        results =
+          Enum.map(processes, fn %{pid: pid, command: command} ->
+            Logger.error(
+              "Killing stale hydra_srt_pipeline process for route_id=#{route_id} pid=#{pid} command=#{inspect(command)}"
+            )
+
+            {pid, Helpers.sys_kill(pid)}
+          end)
+
+        {:ok, results}
+    end
+  end
+
+  @doc false
+  def route_pipeline_processes(route_id, processes \\ list_pipeline_processes())
+
+  def route_pipeline_processes(_route_id, {:error, _reason} = error), do: error
+
+  def route_pipeline_processes(route_id, processes)
+      when is_binary(route_id) and is_list(processes) do
+    Enum.filter(processes, &route_pipeline_process?(&1, route_id))
+  end
+
+  @doc false
+  def route_pipeline_process?(%{command: command}, route_id)
+      when is_binary(command) and is_binary(route_id) do
+    args = String.split(command, ~r/\s+/, trim: true)
+
+    Enum.any?(args, &(Path.basename(&1) == "hydra_srt_pipeline")) and route_id in args
+  end
+
+  def route_pipeline_process?(_process, _route_id), do: false
 
   defp list_pipeline_processes_darwin do
     {output, 0} = System.cmd("ps", ["-eo", "pid,%cpu,%mem,vsz,rss,user,lstart,command", "-ww"])

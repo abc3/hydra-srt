@@ -37,6 +37,7 @@ defmodule HydraSrt.Application do
     opts = [strategy: :one_for_one, name: HydraSrt.Supervisor]
     {:ok, pid} = Supervisor.start_link(children, opts)
     :ok = HydraSrt.Auth.startup_cleanup()
+    :ok = recover_routes_after_startup()
     {:ok, pid}
   end
 
@@ -49,5 +50,71 @@ defmodule HydraSrt.Application do
   @impl true
   def stop(_state) do
     Logger.info("Stopping application")
+  end
+
+  @doc false
+  def recover_routes_after_startup do
+    log_stale_runtime_statuses()
+    kill_stale_pipeline_processes()
+
+    reset_counts = HydraSrt.Db.reset_runtime_statuses_to_stopped()
+
+    Logger.info(
+      "Startup route recovery reset #{reset_counts.routes} routes and #{reset_counts.destinations} destinations to stopped"
+    )
+
+    HydraSrt.Db.list_enabled_routes()
+    |> Enum.each(&start_enabled_route/1)
+
+    :ok
+  end
+
+  defp log_stale_runtime_statuses do
+    HydraSrt.Db.list_routes_with_stale_runtime_status()
+    |> Enum.each(fn route ->
+      Logger.error(
+        "Startup route recovery found stale route status route_id=#{route.id} status=#{inspect(route.status)}"
+      )
+    end)
+
+    HydraSrt.Db.list_destinations_with_stale_runtime_status()
+    |> Enum.each(fn destination ->
+      Logger.error(
+        "Startup route recovery found stale destination status destination_id=#{destination.id} route_id=#{destination.route_id} status=#{inspect(destination.status)}"
+      )
+    end)
+  end
+
+  defp kill_stale_pipeline_processes do
+    {:ok, routes} = HydraSrt.Db.get_all_routes(false)
+
+    Enum.each(routes, fn %{"id" => route_id} ->
+      case HydraSrt.ProcessMonitor.kill_pipeline_processes_for_route(route_id) do
+        {:ok, _results} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.error(
+            "Startup route recovery failed to kill stale pipeline processes route_id=#{route_id} reason=#{inspect(reason)}"
+          )
+      end
+    end)
+  end
+
+  defp start_enabled_route(route) do
+    Logger.info("Startup route recovery starting enabled route route_id=#{route.id}")
+
+    case HydraSrt.start_route(route.id) do
+      {:ok, _pid} ->
+        :ok
+
+      {:error, {:already_started, _pid}} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "Startup route recovery failed to start enabled route route_id=#{route.id} reason=#{inspect(reason)}"
+        )
+    end
   end
 end
