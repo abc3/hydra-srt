@@ -8,6 +8,7 @@ defmodule HydraSrt.Stats.Collector do
 
   @default_flush_interval_ms 15_000
   @default_max_batch_size 10_000
+  @default_downsample_interval_ms 10_000
 
   @spec start_link(map()) :: GenServer.on_start()
   def start_link(opts \\ %{}) when is_map(opts) do
@@ -24,6 +25,7 @@ defmodule HydraSrt.Stats.Collector do
   def init(opts) when is_map(opts) do
     flush_interval_ms = opts[:flush_interval_ms] || @default_flush_interval_ms
     max_batch_size = opts[:max_batch_size] || @default_max_batch_size
+    downsample_interval_ms = opts[:downsample_interval_ms] || @default_downsample_interval_ms
 
     case Duckdb.ensure_schema() do
       :ok ->
@@ -31,10 +33,11 @@ defmodule HydraSrt.Stats.Collector do
 
         {:ok,
          %{
-           rows_rev: [],
+           rows_by_bucket_and_series: %{},
            row_count: 0,
            flush_interval_ms: flush_interval_ms,
-           max_batch_size: max_batch_size
+           max_batch_size: max_batch_size,
+           downsample_interval_ms: downsample_interval_ms
          }}
 
       {:error, reason} ->
@@ -52,32 +55,45 @@ defmodule HydraSrt.Stats.Collector do
     }
 
     selected_rows = MetricSelector.select_rows(envelope)
-    selected_rows_count = length(selected_rows)
-    rows_rev = selected_rows ++ state.rows_rev
-    row_count = state.row_count + selected_rows_count
+
+    rows_by_bucket_and_series =
+      merge_rows(
+        state.rows_by_bucket_and_series,
+        selected_rows,
+        state.downsample_interval_ms
+      )
+
+    row_count = map_size(rows_by_bucket_and_series)
 
     if row_count >= state.max_batch_size do
-      {rows_after_flush, row_count_after_flush, flush_result} = flush_rows(rows_rev, row_count)
+      {rows_after_flush, row_count_after_flush, flush_result} =
+        flush_rows(rows_by_bucket_and_series, row_count)
+
       log_flush_error(flush_result)
-      {:noreply, %{state | rows_rev: rows_after_flush, row_count: row_count_after_flush}}
+
+      {:noreply,
+       %{state | rows_by_bucket_and_series: rows_after_flush, row_count: row_count_after_flush}}
     else
-      {:noreply, %{state | rows_rev: rows_rev, row_count: row_count}}
+      {:noreply,
+       %{state | rows_by_bucket_and_series: rows_by_bucket_and_series, row_count: row_count}}
     end
   end
 
   def handle_info(:flush, state) do
     {rows_after_flush, row_count_after_flush, flush_result} =
-      flush_rows(state.rows_rev, state.row_count)
+      flush_rows(state.rows_by_bucket_and_series, state.row_count)
 
     log_flush_error(flush_result)
     schedule_flush(state.flush_interval_ms)
-    {:noreply, %{state | rows_rev: rows_after_flush, row_count: row_count_after_flush}}
+
+    {:noreply,
+     %{state | rows_by_bucket_and_series: rows_after_flush, row_count: row_count_after_flush}}
   end
 
   @impl true
   def terminate(_reason, state) do
     {_rows_after_flush, _row_count_after_flush, flush_result} =
-      flush_rows(state.rows_rev, state.row_count)
+      flush_rows(state.rows_by_bucket_and_series, state.row_count)
 
     log_flush_error(flush_result)
     :ok
@@ -89,17 +105,85 @@ defmodule HydraSrt.Stats.Collector do
     Process.send_after(self(), :flush, flush_interval_ms)
   end
 
-  @spec flush_rows([map()], non_neg_integer()) ::
-          {[map()], non_neg_integer(), :ok | {:error, term()}}
-  def flush_rows([], 0), do: {[], 0, :ok}
+  @spec merge_rows(map(), [map()], pos_integer()) :: map()
+  def merge_rows(rows_by_bucket_and_series, rows, downsample_interval_ms)
+      when is_map(rows_by_bucket_and_series) and is_list(rows) and
+             is_integer(downsample_interval_ms) and downsample_interval_ms > 0 do
+    Enum.reduce(rows, rows_by_bucket_and_series, fn row, acc ->
+      key = row_bucket_and_series_key(row, downsample_interval_ms)
+      Map.put(acc, key, row)
+    end)
+  end
 
-  def flush_rows(rows_rev, row_count)
-      when is_list(rows_rev) and is_integer(row_count) and row_count >= 0 do
-    rows = Enum.reverse(rows_rev)
+  @spec row_bucket_and_series_key(map(), pos_integer()) :: tuple()
+  def row_bucket_and_series_key(row, downsample_interval_ms)
+      when is_map(row) and is_integer(downsample_interval_ms) and downsample_interval_ms > 0 do
+    {
+      row_bucket_start_ms(row, downsample_interval_ms),
+      row_series_key(row)
+    }
+  end
 
-    case Duckdb.insert_rows(rows) do
-      :ok -> {[], 0, :ok}
-      {:error, reason} -> {rows_rev, row_count, {:error, reason}}
+  @spec row_bucket_start_ms(map(), pos_integer()) :: non_neg_integer()
+  def row_bucket_start_ms(row, downsample_interval_ms)
+      when is_map(row) and is_integer(downsample_interval_ms) and downsample_interval_ms > 0 do
+    ts_unix_ms = row_ts_unix_ms(row)
+    div(ts_unix_ms, downsample_interval_ms) * downsample_interval_ms
+  end
+
+  @spec row_series_key(map()) :: tuple()
+  def row_series_key(row) when is_map(row) do
+    {
+      Map.get(row, :route_id),
+      Map.get(row, :entity_type),
+      Map.get(row, :entity_id),
+      Map.get(row, :metric_key),
+      Map.get(row, :value_type)
+    }
+  end
+
+  @spec row_ts_unix_ms(map()) :: non_neg_integer()
+  def row_ts_unix_ms(row) when is_map(row) do
+    case Map.get(row, :ts) do
+      %DateTime{} = ts ->
+        DateTime.to_unix(ts, :millisecond)
+
+      %NaiveDateTime{} = ts ->
+        ts |> DateTime.from_naive!("Etc/UTC") |> DateTime.to_unix(:millisecond)
+
+      _ ->
+        DateTime.utc_now() |> DateTime.to_unix(:millisecond)
+    end
+  end
+
+  @spec flush_rows(map(), non_neg_integer(), ([map()] -> :ok | {:error, term()})) ::
+          {map(), non_neg_integer(), :ok | {:error, term()}}
+  def flush_rows(rows_by_bucket_and_series, row_count, insert_rows_fun \\ &Duckdb.insert_rows/1)
+
+  def flush_rows(rows_by_bucket_and_series, 0, _insert_rows_fun)
+      when is_map(rows_by_bucket_and_series) and map_size(rows_by_bucket_and_series) == 0 do
+    {%{}, 0, :ok}
+  end
+
+  def flush_rows(rows_by_bucket_and_series, row_count, insert_rows_fun)
+      when is_map(rows_by_bucket_and_series) and is_integer(row_count) and row_count >= 0 and
+             is_function(insert_rows_fun, 1) do
+    rows =
+      rows_by_bucket_and_series
+      |> Map.values()
+      |> Enum.sort_by(fn row ->
+        {
+          row_ts_unix_ms(row),
+          Map.get(row, :route_id),
+          Map.get(row, :entity_type),
+          Map.get(row, :entity_id),
+          Map.get(row, :metric_key)
+        }
+      end)
+
+    case insert_rows_fun.(rows) do
+      :ok -> {%{}, 0, :ok}
+      {:error, reason} -> {rows_by_bucket_and_series, row_count, {:error, reason}}
     end
   end
 
