@@ -69,7 +69,7 @@ defmodule HydraSrt.Db do
 
   @spec update_destinations_status(String.t(), String.t() | nil) :: :ok
   def update_destinations_status(route_id, status) when is_binary(route_id) do
-    from(d in Destination, where: d.route_id == ^route_id)
+    from(d in Destination, where: d.route_id == ^route_id and d.enabled == true)
     |> Repo.update_all(set: [status: status, updated_at: DateTime.utc_now(:second)])
 
     :ok

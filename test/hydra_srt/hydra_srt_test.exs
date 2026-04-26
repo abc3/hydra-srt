@@ -46,7 +46,7 @@ defmodule HydraSrtTest do
     assert DateTime.compare(updated["stopped_at"], after_ts) in [:eq, :lt]
   end
 
-  test "mark_route_stopped/1 sets schema status and stops destinations" do
+  test "mark_route_stopped/1 sets schema status and stops only enabled destinations" do
     route =
       route_fixture(%{
         status: "started",
@@ -64,6 +64,12 @@ defmodule HydraSrtTest do
     assert {:ok, reloaded_route} = Db.get_route(route.id, true)
 
     assert reloaded_route["schema_status"] == "stopped"
-    assert Enum.all?(reloaded_route["destinations"], &(&1["status"] == "stopped"))
+
+    statuses_by_enabled =
+      reloaded_route["destinations"]
+      |> Enum.map(&{&1["enabled"], &1["status"]})
+
+    assert {true, "stopped"} in statuses_by_enabled
+    assert {false, "processing"} in statuses_by_enabled
   end
 end
