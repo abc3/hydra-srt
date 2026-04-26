@@ -1,8 +1,6 @@
 defmodule HydraSrtWeb.RouteControllerTest do
   use HydraSrtWeb.ConnCase
 
-  alias HydraSrt.StatsHistory
-
   import HydraSrt.ApiFixtures
 
   @create_attrs %{
@@ -111,32 +109,6 @@ defmodule HydraSrtWeb.RouteControllerTest do
     test "renders errors when data is invalid", %{conn: conn, route: %{id: id}} do
       conn = put(conn, ~p"/api/routes/#{id}", route: @invalid_attrs)
       assert json_response(conn, 422)["errors"] != %{}
-    end
-  end
-
-  describe "show route with stats history" do
-    setup [:create_route]
-
-    test "returns persisted stats snapshots including runtime schema_status", %{
-      conn: conn,
-      route: %{id: id}
-    } do
-      assert {:ok, _snapshot} =
-               StatsHistory.insert_snapshot(id, "stream_1", %{
-                 "schema_status" => "processing",
-                 "source" => %{"bytes_in_per_sec" => 123},
-                 "destinations" => [%{"id" => "d1", "status" => "processing"}]
-               })
-
-      conn = get(conn, ~p"/api/routes/#{id}")
-      data = json_response(conn, 200)["data"]
-
-      assert data["stats"]["schema_status"] == "processing"
-      assert hd(data["stats_history"])["stats"]["schema_status"] == "processing"
-
-      assert hd(data["stats_history"])["stats"]["destinations"] == [
-               %{"id" => "d1", "status" => "processing"}
-             ]
     end
   end
 

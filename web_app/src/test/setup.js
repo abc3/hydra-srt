@@ -12,7 +12,6 @@ if (!window.matchMedia) {
   });
 }
 
-// recharts uses ResizeObserver via ResponsiveContainer
 if (!globalThis.ResizeObserver) {
   globalThis.ResizeObserver = class {
     observe() {}
@@ -25,4 +24,3 @@ if (!globalThis.ResizeObserver) {
 window.getComputedStyle = () => ({
   getPropertyValue: () => '',
 });
-

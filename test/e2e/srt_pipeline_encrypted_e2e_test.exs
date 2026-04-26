@@ -36,7 +36,6 @@ defmodule HydraSrt.E2E.SrtPipelineEncryptedE2ETest do
     route_id =
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_srt_enc_ok",
-        "exportStats" => false,
         "schema" => "SRT",
         "schema_options" => %{
           "localaddress" => "127.0.0.1",
@@ -158,7 +157,6 @@ defmodule HydraSrt.E2E.SrtPipelineEncryptedE2ETest do
     route_id =
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_srt_enc_wrong_pass",
-        "exportStats" => false,
         "schema" => "SRT",
         "schema_options" => %{
           "localaddress" => "127.0.0.1",

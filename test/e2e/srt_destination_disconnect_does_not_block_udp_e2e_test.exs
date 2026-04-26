@@ -31,7 +31,6 @@ defmodule HydraSrt.E2E.SrtDestinationDisconnectDoesNotBlockUdpE2ETest do
     route_id =
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_srt_disconnect_does_not_block_udp",
-        "exportStats" => false,
         "schema" => "SRT",
         "schema_options" => %{
           "localaddress" => "127.0.0.1",

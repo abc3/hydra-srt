@@ -10,7 +10,6 @@ defmodule HydraSrt.Api.Route do
     field :name, :string
     field :status, :string
     field :schema_status, :string
-    field :export_stats, :boolean, default: false
     field :schema, :string
     field :schema_options, :map
     field :node, :string
@@ -36,7 +35,6 @@ defmodule HydraSrt.Api.Route do
       :alias,
       :status,
       :schema_status,
-      :export_stats,
       :schema,
       :schema_options,
       :node,
@@ -53,14 +51,10 @@ defmodule HydraSrt.Api.Route do
 
   @doc false
   def normalize_attrs(attrs) when is_map(attrs) do
-    atom_keys? = Enum.any?(Map.keys(attrs), &is_atom/1)
-
-    export_stats_key = if atom_keys?, do: :export_stats, else: "export_stats"
-    gst_debug_key = if atom_keys?, do: :gst_debug, else: "gst_debug"
+    gst_debug_key =
+      if Enum.any?(Map.keys(attrs), &is_atom/1), do: :gst_debug, else: "gst_debug"
 
     attrs
-    |> normalize_key("exportStats", export_stats_key)
-    |> normalize_key(:exportStats, export_stats_key)
     |> normalize_key("gstDebug", gst_debug_key)
     |> normalize_key(:gstDebug, gst_debug_key)
   end

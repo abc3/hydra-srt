@@ -10,7 +10,6 @@ import Config
 # - API_AUTH_USERNAME / API_AUTH_PASSWORD: required in prod; optional in dev
 # - DATABASE_PATH: required in prod; optional in dev (overrides dev DB path)
 # - POOL_SIZE: Ecto pool size (prod default 5)
-# - VICTORIOMETRICS_HOST / VICTORIOMETRICS_PORT: enable metrics export + Instream
 # - PORT / PHX_HOST: HTTP listen port and URL host
 
 present? = fn
@@ -44,20 +43,8 @@ secret_key_base =
 config :hydra_srt, HydraSrtWeb.Endpoint, secret_key_base: secret_key_base
 
 unless config_env() == :test do
-  vm_host = System.get_env("VICTORIOMETRICS_HOST")
-  vm_port = System.get_env("VICTORIOMETRICS_PORT")
-  export_metrics? = present?.(vm_host) && present?.(vm_port)
-
   config :hydra_srt,
-    export_metrics?: export_metrics?,
     default_bind_ip: System.get_env("HYDRA_DEFAULT_BIND_IP") || "127.0.0.1"
-
-  if export_metrics? do
-    config :hydra_srt, HydraSrt.Metrics.Connection,
-      host: String.trim(vm_host),
-      port: String.to_integer(String.trim(vm_port)),
-      version: :v2
-  end
 end
 
 case config_env() do

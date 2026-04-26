@@ -7,8 +7,6 @@ dev:
 	VAULT_ENC_KEY="12345678901234567890123456789012" \
 	API_JWT_SECRET=dev \
 	METRICS_JWT_SECRET=dev \
-	VICTORIOMETRICS_HOST=localhost \
-	VICTORIOMETRICS_PORT=8428 \
 	API_AUTH_USERNAME=admin \
 	API_AUTH_PASSWORD=password123 \
 	ERL_AFLAGS="-kernel shell_history enabled +zdbbl 2097151" \
@@ -36,13 +34,13 @@ dev_udp:
 	-f lavfi -i "sine=frequency=440:sample_rate=48000" \
 	-c:v libx264 -preset veryfast -tune zerolatency -b:v 2000k \
 	-c:a aac -b:a 128k \
-	-f mpegts "srt://127.0.0.1:4201?mode=caller"
+	-f mpegts "srt://127.0.0.1:4201?mode=listener"
 
 dev_play:
 	ffplay -hide_banner "udp://127.0.0.1:1234"
 
 dev_play1:
-	srt-live-transmit "srt://127.0.0.1:4201?mode=listener" udp://:1234 -v -statspf default -stats 1000
+	srt-live-transmit "srt://127.0.0.1:4202?mode=caller" udp://:4203 -v -statspf default -stats 1000
 
 dev_udp1:
 	ffmpeg -hide_banner -loglevel error \

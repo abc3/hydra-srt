@@ -245,7 +245,6 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         initialValues={{
           enabled: true,
           node: 'self',
-          exportStats: true,
           schema: 'SRT',
           schema_options: {
             'auto-reconnect': true,
@@ -295,15 +294,6 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                     name="enabled"
                     valuePropName="checked"
                     extra="Auto start after server reboot"
-                  >
-                    <Switch />
-                  </Form.Item>
-
-                  <Form.Item
-                    label="Export stats"
-                    name="exportStats"
-                    valuePropName="checked"
-                    extra="Export stats to VictoriaMetrics/InfluxDB/Prometheus"
                   >
                     <Switch />
                   </Form.Item>

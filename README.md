@@ -67,8 +67,6 @@ Coming soon...
   - [x] Caller
   - [x] Rendezvous
 - [x] SRT Authentication
-- [x] SRT Source Statistics
-- [ ] SRT Destination Statistics
 - [x] UDP Support:
   - [x] Source
   - [x] Destination
@@ -223,8 +221,6 @@ Configure HydraSRT using the following environment variables:
 | `RELEASE_COOKIE`       | Erlang distribution cookie              | (auto-generated) |
 | `DATABASE_PATH`        | Path to SQLite database file            | (required)       |
 | `POOL_SIZE`            | DB pool size                            | 5                |
-| `VICTORIAMETRICS_HOST` | Host for VictoriaMetrics metrics export | (optional)       |
-| `VICTORIAMETRICS_PORT` | Port for VictoriaMetrics metrics export | (optional)       |
 
 ### Troubleshooting
 
@@ -241,12 +237,6 @@ Configure HydraSRT using the following environment variables:
 3. **Elixir Application Issues**:
 
    - Ensure all required environment variables are set
-
-4. **Metrics Monitoring**:
-
-   - To enable metrics export to VictoriaMetrics, set both `VICTORIAMETRICS_HOST` and `VICTORIAMETRICS_PORT` environment variables
-   - Example: `VICTORIAMETRICS_HOST=localhost VICTORIAMETRICS_PORT=8428 API_AUTH_USERNAME=admin API_AUTH_PASSWORD=password _build/prod/rel/hydra_srt/bin/hydra_srt start_iex`
-   - You can visualize these metrics using Grafana or any other compatible dashboard tool
 
 ## Running with Docker
 

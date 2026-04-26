@@ -32,7 +32,6 @@ defmodule HydraSrt.ApiTest do
       valid_attrs = %{
         alias: "some alias",
         enabled: true,
-        exportStats: false,
         name: "some name",
         schema: "UDP",
         schema_options: %{},
@@ -62,7 +61,6 @@ defmodule HydraSrt.ApiTest do
       update_attrs = %{
         alias: "some updated alias",
         enabled: false,
-        exportStats: true,
         name: "some updated name",
         schema: "SRT",
         schema_options: %{"mode" => "listener"},
