@@ -413,7 +413,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                           </Form.Item>
 
                           <Form.Item
-                            label="Latency"
+                            label="Latency, ms"
                             name={['schema_options', 'latency']}
                             extra='The maximum accepted transmission latency.'
                           >
@@ -421,7 +421,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                               style={{ width: '150px' }}
                               min={20}
                               max={8000}
-                              placeholder="Default: 125ms"
+                              placeholder="125"
                             />
                           </Form.Item>
 
