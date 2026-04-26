@@ -324,6 +324,8 @@ defmodule HydraSrt.RouteHandler do
       Phoenix.PubSub.broadcast(HydraSrt.PubSub, "stats", {:stats, event})
     end)
 
+    HydraSrt.Stats.Collector.ingest(route_id, stats)
+
     :ok
   end
 

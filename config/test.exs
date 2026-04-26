@@ -40,6 +40,13 @@ config :hydra_srt, HydraSrt.Repo,
   queue_target: if(e2e_mode_enabled?, do: 5_000, else: 50),
   queue_interval: if(e2e_mode_enabled?, do: 5_000, else: 1_000)
 
+config :hydra_srt,
+  analytics_database_path:
+    Path.join(
+      System.tmp_dir!(),
+      "hydra_srt_analytics_test_#{System.unique_integer([:positive])}.duckdb"
+    )
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :hydra_srt, HydraSrtWeb.Endpoint,

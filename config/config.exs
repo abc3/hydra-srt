@@ -12,6 +12,8 @@ config :hydra_srt,
   ecto_repos: [HydraSrt.Repo],
   generators: [timestamp_type: :utc_datetime, binary_id: true]
 
+config :adbc, :drivers, [:duckdb]
+
 # Configures the endpoint
 config :hydra_srt, HydraSrtWeb.Endpoint,
   url: [host: "localhost"],

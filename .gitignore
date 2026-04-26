@@ -52,3 +52,5 @@ deployment/opentofu/terraform.tfstate
 
 priv/static/assets/
 priv/static/index.html
+
+hydra_srt_analytics.*
