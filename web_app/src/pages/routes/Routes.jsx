@@ -32,7 +32,6 @@ const ONE_HOUR_SECONDS = 60 * ONE_MINUTE_SECONDS;
 const ONE_DAY_SECONDS = 24 * ONE_HOUR_SECONDS;
 const ONE_MONTH_SECONDS = 30 * ONE_DAY_SECONDS;
 const DELETE_DISABLED_MESSAGE = 'If you want to delete it, stop the route first';
-const ROUTE_THROUGHPUT_STATUSES = new Set(['started', 'processing']);
 const ROUTE_ACTION_POLL_ATTEMPTS = 5;
 const ROUTE_ACTION_POLL_DELAY_MS = 250;
 
@@ -539,7 +538,7 @@ const Routes = () => {
       render: (_, record) => {
         const runtime = (getRouteRuntimeStatus(record) || '').toLowerCase();
 
-        if (!ROUTE_THROUGHPUT_STATUSES.has(runtime)) {
+        if (runtime === 'stopped') {
           return <span>- / -</span>;
         }
 
@@ -567,14 +566,21 @@ const Routes = () => {
       title: 'Stats',
       key: 'stats',
       align: 'center',
-      render: (_, record) => (
-        <Tooltip title="Stats">
-          <Button
-            icon={<BarChartOutlined />}
-            onClick={() => setStatsDrawerRouteId(record.id)}
-          />
-        </Tooltip>
-      ),
+      render: (_, record) => {
+        const runtime = (getRouteRuntimeStatus(record) || '').toLowerCase();
+        const statsDisabled = runtime === 'stopped';
+
+        return (
+          <Tooltip title={statsDisabled ? 'Stats are available when the route is not stopped' : 'Stats'}>
+            <Button
+              aria-label={`Route stats for ${record.name || record.id}`}
+              icon={<BarChartOutlined />}
+              disabled={statsDisabled}
+              onClick={() => setStatsDrawerRouteId(record.id)}
+            />
+          </Tooltip>
+        );
+      },
     },
     {
       title: 'Actions',
