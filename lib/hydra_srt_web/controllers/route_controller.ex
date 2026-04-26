@@ -49,7 +49,7 @@ defmodule HydraSrtWeb.RouteController do
       {:ok, _pid} ->
         conn
         |> put_status(:ok)
-        |> data(%{status: "started", route_id: route_id})
+        |> data(%{status: "starting", route_id: route_id})
 
       {:error, reason} ->
         conn

@@ -32,7 +32,10 @@ defmodule HydraSrt.ProcessMonitor do
               "Killing stale hydra_srt_pipeline process for route_id=#{route_id} pid=#{pid} command=#{inspect(command)}"
             )
 
-            {pid, Helpers.sys_kill(pid)}
+            kill_result = Helpers.sys_kill(pid)
+            wait_result = Helpers.wait_for_process_exit(pid)
+
+            {pid, kill_result, wait_result}
           end)
 
         {:ok, results}
@@ -100,11 +103,7 @@ defmodule HydraSrt.ProcessMonitor do
     swap_percent =
       if vsz > 0, do: "#{Float.round(swap_bytes / (1024 * 1024 * 1024) * 100, 1)}%", else: "0.0%"
 
-    start_time_parts = Enum.slice(parts, 6..11)
-    start_time = Enum.join(start_time_parts, " ")
-
-    command_parts = Enum.slice(parts, 12..(length(parts) - 1))
-    command = Enum.join(command_parts, " ")
+    {start_time, command} = split_lstart_and_command(parts, 6)
 
     %{
       pid: pid,
@@ -143,11 +142,7 @@ defmodule HydraSrt.ProcessMonitor do
     ppid = Enum.at(parts, 7) |> String.to_integer()
     user = Enum.at(parts, 8)
 
-    start_time_parts = Enum.slice(parts, 9..14)
-    start_time = Enum.join(start_time_parts, " ")
-
-    command_parts = Enum.slice(parts, 15..(length(parts) - 1))
-    command = Enum.join(command_parts, " ")
+    {start_time, command} = split_lstart_and_command(parts, 9)
 
     %{
       pid: pid,
@@ -209,11 +204,7 @@ defmodule HydraSrt.ProcessMonitor do
     swap_percent =
       if vsz > 0, do: "#{Float.round(swap_bytes / (1024 * 1024 * 1024) * 100, 1)}%", else: "0.0%"
 
-    start_time_parts = Enum.slice(parts, 6..11)
-    start_time = Enum.join(start_time_parts, " ")
-
-    command_parts = Enum.slice(parts, 12..(length(parts) - 1))
-    command = Enum.join(command_parts, " ")
+    {start_time, command} = split_lstart_and_command(parts, 6)
 
     %{
       pid: pid,
@@ -252,11 +243,7 @@ defmodule HydraSrt.ProcessMonitor do
     ppid = Enum.at(parts, 7) |> String.to_integer()
     user = Enum.at(parts, 8)
 
-    start_time_parts = Enum.slice(parts, 9..14)
-    start_time = Enum.join(start_time_parts, " ")
-
-    command_parts = Enum.slice(parts, 15..(length(parts) - 1))
-    command = Enum.join(command_parts, " ")
+    {start_time, command} = split_lstart_and_command(parts, 9)
 
     %{
       pid: pid,
@@ -283,5 +270,19 @@ defmodule HydraSrt.ProcessMonitor do
       bytes > 1_024 -> "#{Float.round(bytes / 1_024, 2)} KB"
       true -> "#{bytes} B"
     end
+  end
+
+  defp split_lstart_and_command(parts, lstart_index) when is_list(parts) do
+    start_time =
+      parts
+      |> Enum.slice(lstart_index, 5)
+      |> Enum.join(" ")
+
+    command =
+      parts
+      |> Enum.drop(lstart_index + 5)
+      |> Enum.join(" ")
+
+    {start_time, command}
   end
 end

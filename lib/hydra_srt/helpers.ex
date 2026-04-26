@@ -17,4 +17,32 @@ defmodule HydraSrt.Helpers do
   def sys_kill(process_id) do
     System.cmd("kill", ["-9", "#{process_id}"])
   end
+
+  def wait_for_process_exit(process_id, timeout_ms \\ 500)
+
+  def wait_for_process_exit(process_id, timeout_ms) when is_integer(process_id) do
+    process_id
+    |> Integer.to_string()
+    |> wait_for_process_exit(timeout_ms)
+  end
+
+  def wait_for_process_exit(process_id, timeout_ms) when is_binary(process_id) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_process_exit(process_id, deadline)
+  end
+
+  defp do_wait_for_process_exit(process_id, deadline) do
+    case System.cmd("kill", ["-0", process_id], stderr_to_stdout: true) do
+      {_output, 0} ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          {:error, :timeout}
+        else
+          Process.sleep(25)
+          do_wait_for_process_exit(process_id, deadline)
+        end
+
+      _not_alive ->
+        :ok
+    end
+  end
 end

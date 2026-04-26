@@ -74,8 +74,8 @@ defmodule HydraSrt do
     with {:ok, route} <-
            Db.update_route(
              id,
-             route_runtime_status_attrs("started")
-             |> Map.put("schema_status", nil)
+             route_runtime_status_attrs("starting")
+             |> Map.put("schema_status", "starting")
            ) do
       :ok = broadcast_route_items_status(id)
       {:ok, route}
@@ -141,7 +141,7 @@ defmodule HydraSrt do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     case String.downcase(status) do
-      "started" ->
+      status when status in ["started", "starting"] ->
         %{
           "status" => status,
           "started_at" => now,
