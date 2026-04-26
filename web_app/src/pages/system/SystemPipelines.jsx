@@ -4,7 +4,7 @@ import { ReloadOutlined, StopOutlined, ExclamationCircleFilled, HomeOutlined } f
 import { systemPipelinesApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
 const SystemPipelines = () => {
   const [pipelines, setPipelines] = useState([]);
@@ -83,6 +83,35 @@ const SystemPipelines = () => {
     return parseFloat((bytes / Math.pow(1024, i)).toFixed(decimals)) + ' ' + sizes[i];
   };
 
+  const parseStartTimeAndExecPath = (startTimeValue) => {
+    if (!startTimeValue || typeof startTimeValue !== 'string') {
+      return { startTime: startTimeValue, execPath: null };
+    }
+
+    const separatorIndex = startTimeValue.indexOf(' /');
+    if (separatorIndex === -1) {
+      return { startTime: startTimeValue, execPath: null };
+    }
+
+    return {
+      startTime: startTimeValue.slice(0, separatorIndex).trim(),
+      execPath: startTimeValue.slice(separatorIndex + 1).trim(),
+    };
+  };
+
+  const formatStartTimeLikeRoutes = (startTimeValue) => {
+    if (!startTimeValue) {
+      return '-';
+    }
+
+    const parsedDate = new Date(startTimeValue);
+    if (Number.isNaN(parsedDate.getTime())) {
+      return startTimeValue;
+    }
+
+    return parsedDate.toLocaleString();
+  };
+
   const columns = [
     {
       title: 'PID',
@@ -133,17 +162,7 @@ const SystemPipelines = () => {
       title: 'Start Time',
       dataIndex: 'start_time',
       key: 'start_time',
-    },
-    {
-      title: 'Command',
-      dataIndex: 'command',
-      key: 'command',
-      ellipsis: true,
-      render: (text) => (
-        <Tooltip title={text}>
-          {text}
-        </Tooltip>
-      ),
+      render: (text) => formatStartTimeLikeRoutes(parseStartTimeAndExecPath(text).startTime),
     },
     {
       title: 'Actions',
@@ -162,17 +181,23 @@ const SystemPipelines = () => {
   ];
 
   const expandedRowRender = (record) => {
+    const { startTime, execPath } = parseStartTimeAndExecPath(record.start_time);
+
     const items = [
       { label: 'PID', value: record.pid },
       { label: 'CPU Usage', value: record.cpu },
       { label: 'Memory Usage', value: `${record.memory} (${record.memory_percent})` },
       { label: 'Memory in Bytes', value: record.memory_bytes.toLocaleString() },
-      { label: 'Swap Usage', value: `${formatBytes(record.swap_bytes)} (${record.swap_percent})` },
+      { label: 'Swap Usage', value: formatBytes(record.swap_bytes) },
       { label: 'Swap in Bytes', value: record.swap_bytes.toLocaleString() },
       { label: 'User', value: record.user },
-      { label: 'Start Time', value: record.start_time },
-      { label: 'Command', value: record.command },
+      { label: 'Start Time', value: formatStartTimeLikeRoutes(startTime) },
+      { label: 'Item ID', value: record.command },
     ];
+
+    if (execPath) {
+      items.push({ label: 'Exec Path', value: execPath });
+    }
 
     if (record.virtual_memory) {
       items.push({ label: 'Virtual Memory', value: record.virtual_memory });
@@ -201,7 +226,12 @@ const SystemPipelines = () => {
       {modalContextHolder}
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Title level={3} style={{ margin: 0, fontSize: '2rem', fontWeight: 600 }}>System Pipelines</Title>
+          <div>
+            <Title level={3} style={{ margin: 0, fontSize: '2rem', fontWeight: 600 }}>System Pipelines</Title>
+            <Text type="secondary">
+              Quick live overview of the pipeline processes currently running in the system.
+            </Text>
+          </div>
           <Button
             type="primary"
             icon={<ReloadOutlined />}
