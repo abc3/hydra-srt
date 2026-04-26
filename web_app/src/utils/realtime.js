@@ -10,7 +10,11 @@ let channelJoinInFlight = false;
 let statsSubscribed = false;
 let statsSubscribePending = false;
 let statsSubscribedOnServer = false;
+let systemPipelinesSubscribed = false;
+let systemPipelinesSubscribePending = false;
+let systemPipelinesSubscribedOnServer = false;
 const statsListeners = new Set();
+const systemPipelinesListeners = new Set();
 const itemSubscriptions = new Map();
 const itemSubscriptionsOnServer = new Set();
 
@@ -76,6 +80,44 @@ const pushStatsUnsubscription = () => {
     })
     .receive('error', (error) => {
       console.error('[realtime] stats unsubscribe failed', error);
+    });
+};
+
+const pushSystemPipelinesSubscription = () => {
+  if (!channel || !systemPipelinesSubscribed) {
+    return;
+  }
+
+  if (!channelJoined || channelJoinInFlight) {
+    systemPipelinesSubscribePending = true;
+    return;
+  }
+
+  systemPipelinesSubscribePending = false;
+  channel
+    .push('system_pipelines:subscribe', {})
+    .receive('ok', () => {
+      systemPipelinesSubscribedOnServer = true;
+    })
+    .receive('error', (error) => {
+      console.error('[realtime] system pipelines subscribe failed', error);
+    });
+};
+
+const pushSystemPipelinesUnsubscription = () => {
+  systemPipelinesSubscribePending = false;
+
+  if (!channel || !channelJoined || !systemPipelinesSubscribedOnServer) {
+    return;
+  }
+
+  channel
+    .push('system_pipelines:unsubscribe', {})
+    .receive('ok', () => {
+      systemPipelinesSubscribedOnServer = false;
+    })
+    .receive('error', (error) => {
+      console.error('[realtime] system pipelines unsubscribe failed', error);
     });
 };
 
@@ -156,6 +198,25 @@ const pushAllItemSubscriptions = () => {
   });
 };
 
+const closeRealtimeTransport = () => {
+  if (channel) {
+    channel.leave();
+  }
+
+  if (socket) {
+    socket.disconnect();
+  }
+
+  socket = null;
+  channel = null;
+  currentToken = null;
+  channelJoined = false;
+  channelJoinInFlight = false;
+  statsSubscribedOnServer = false;
+  systemPipelinesSubscribedOnServer = false;
+  itemSubscriptionsOnServer.clear();
+};
+
 export const connectRealtime = () => {
   const token = getToken();
 
@@ -168,7 +229,7 @@ export const connectRealtime = () => {
     return channel;
   }
 
-  disconnectRealtime();
+  closeRealtimeTransport();
   currentToken = token;
   socket = new Socket(getSocketEndpoint(), { params: { token } });
   channel = socket.channel('realtime');
@@ -178,6 +239,10 @@ export const connectRealtime = () => {
 
   channel.on('stats', (payload) => {
     statsListeners.forEach((listener) => listener(payload));
+  });
+
+  channel.on('system_pipelines', (payload) => {
+    systemPipelinesListeners.forEach((listener) => listener(payload));
   });
 
   channel.on('item_status', (payload) => {
@@ -204,6 +269,7 @@ export const connectRealtime = () => {
     channelJoined = false;
     channelJoinInFlight = false;
     statsSubscribedOnServer = false;
+    systemPipelinesSubscribedOnServer = false;
     itemSubscriptionsOnServer.clear();
   });
 
@@ -219,6 +285,7 @@ export const connectRealtime = () => {
     channelJoined = false;
     channelJoinInFlight = false;
     statsSubscribedOnServer = false;
+    systemPipelinesSubscribedOnServer = false;
     itemSubscriptionsOnServer.clear();
   });
 
@@ -234,6 +301,10 @@ export const connectRealtime = () => {
         pushStatsSubscription();
       }
 
+      if (systemPipelinesSubscribePending || systemPipelinesSubscribed) {
+        pushSystemPipelinesSubscription();
+      }
+
       pushAllItemSubscriptions();
     })
     .receive('error', (error) => {
@@ -245,23 +316,15 @@ export const connectRealtime = () => {
 };
 
 export const disconnectRealtime = () => {
-  if (channel) {
-    channel.leave();
-  }
-
-  if (socket) {
-    socket.disconnect();
-  }
-
-  socket = null;
-  channel = null;
-  currentToken = null;
-  channelJoined = false;
-  channelJoinInFlight = false;
+  closeRealtimeTransport();
   statsSubscribed = false;
   statsSubscribePending = false;
   statsSubscribedOnServer = false;
+  systemPipelinesSubscribed = false;
+  systemPipelinesSubscribePending = false;
+  systemPipelinesSubscribedOnServer = false;
   statsListeners.clear();
+  systemPipelinesListeners.clear();
   itemSubscriptions.clear();
   itemSubscriptionsOnServer.clear();
 };
@@ -283,6 +346,27 @@ export const subscribeToStats = (listener) => {
     if (statsListeners.size === 0) {
       statsSubscribed = false;
       pushStatsUnsubscription();
+    }
+  };
+};
+
+export const subscribeToSystemPipelines = (listener) => {
+  if (typeof listener === 'function') {
+    systemPipelinesListeners.add(listener);
+  }
+
+  systemPipelinesSubscribed = true;
+  connectRealtime();
+  pushSystemPipelinesSubscription();
+
+  return () => {
+    if (typeof listener === 'function') {
+      systemPipelinesListeners.delete(listener);
+    }
+
+    if (systemPipelinesListeners.size === 0) {
+      systemPipelinesSubscribed = false;
+      pushSystemPipelinesUnsubscription();
     }
   };
 };

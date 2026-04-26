@@ -1,9 +1,15 @@
 defmodule HydraSrtWeb.RealtimeChannel do
   use HydraSrtWeb, :channel
 
+  @system_pipelines_interval_ms 5_000
+
   @impl true
   def join("realtime", _payload, socket) do
-    {:ok, assign(socket, :stats_subscribed, false) |> assign(:item_topics, MapSet.new())}
+    {:ok,
+     socket
+     |> assign(:stats_subscribed, false)
+     |> assign(:system_pipelines_subscribed, false)
+     |> assign(:item_topics, MapSet.new())}
   end
 
   @impl true
@@ -21,6 +27,26 @@ defmodule HydraSrtWeb.RealtimeChannel do
     if socket.assigns[:stats_subscribed] do
       Phoenix.PubSub.unsubscribe(HydraSrt.PubSub, "stats")
       {:reply, :ok, assign(socket, :stats_subscribed, false)}
+    else
+      {:reply, :ok, socket}
+    end
+  end
+
+  @impl true
+  def handle_in("system_pipelines:subscribe", _payload, socket) do
+    if socket.assigns[:system_pipelines_subscribed] do
+      {:reply, :ok, socket}
+    else
+      push(socket, "system_pipelines", system_pipelines_snapshot())
+      Process.send_after(self(), :push_system_pipelines, @system_pipelines_interval_ms)
+      {:reply, :ok, assign(socket, :system_pipelines_subscribed, true)}
+    end
+  end
+
+  @impl true
+  def handle_in("system_pipelines:unsubscribe", _payload, socket) do
+    if socket.assigns[:system_pipelines_subscribed] do
+      {:reply, :ok, assign(socket, :system_pipelines_subscribed, false)}
     else
       {:reply, :ok, socket}
     end
@@ -70,5 +96,35 @@ defmodule HydraSrtWeb.RealtimeChannel do
   def handle_info({:item_status, event}, socket) when is_map(event) do
     push(socket, "item_status", event)
     {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info(:push_system_pipelines, socket) do
+    if socket.assigns[:system_pipelines_subscribed] do
+      push(socket, "system_pipelines", system_pipelines_snapshot())
+      Process.send_after(self(), :push_system_pipelines, @system_pipelines_interval_ms)
+    end
+
+    {:noreply, socket}
+  end
+
+  defp system_pipelines_snapshot do
+    %{
+      pipelines: system_pipelines(),
+      routes: routes()
+    }
+  end
+
+  defp system_pipelines do
+    case HydraSrt.ProcessMonitor.list_pipeline_processes() do
+      pipelines when is_list(pipelines) -> pipelines
+      {:error, _reason} -> []
+    end
+  end
+
+  defp routes do
+    case HydraSrt.Db.get_all_routes(false) do
+      {:ok, routes} -> routes
+    end
   end
 end

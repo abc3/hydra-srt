@@ -1,13 +1,26 @@
 import { useEffect, useState } from 'react';
 import { Table, Card, Button, Space, Typography, message, Modal, Tooltip, Tag } from 'antd';
-import { ReloadOutlined, StopOutlined, ExclamationCircleFilled, HomeOutlined } from '@ant-design/icons';
+import { StopOutlined, ExclamationCircleFilled, HomeOutlined } from '@ant-design/icons';
 import { systemPipelinesApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
+import { subscribeToSystemPipelines } from '../../utils/realtime';
 
 const { Title, Text } = Typography;
 
+const getPipelineOwnerRoute = (command, routesById) => {
+  if (!command || typeof command !== 'string') {
+    return null;
+  }
+
+  const args = command.split(/\s+/).filter(Boolean);
+  const routeId = args.find((arg) => routesById[arg]);
+
+  return routeId ? routesById[routeId] : null;
+};
+
 const SystemPipelines = () => {
   const [pipelines, setPipelines] = useState([]);
+  const [routesById, setRoutesById] = useState({});
   const [loading, setLoading] = useState(true);
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
@@ -29,26 +42,17 @@ const SystemPipelines = () => {
   }, []);
 
   useEffect(() => {
-    fetchPipelines();
-    // Set up auto-refresh every 5 seconds
-    const intervalId = setInterval(fetchPipelines, 5000);
-    
-    // Clean up interval on component unmount
-    return () => clearInterval(intervalId);
-  }, []);
-
-  const fetchPipelines = async () => {
-    try {
-      setLoading(true);
-      const data = await systemPipelinesApi.getAll();
-      setPipelines(data);
-    } catch (error) {
-      messageApi.error(`Failed to fetch pipeline processes: ${error.message}`);
-      console.error('Error:', error);
-    } finally {
+    return subscribeToSystemPipelines((payload) => {
+      setPipelines(Array.isArray(payload?.pipelines) ? payload.pipelines : []);
+      setRoutesById(
+        (payload?.routes || []).reduce((acc, route) => {
+          acc[route.id] = route;
+          return acc;
+        }, {})
+      );
       setLoading(false);
-    }
-  };
+    });
+  }, []);
 
   const showKillConfirm = (record) => {
     modal.confirm({
@@ -68,7 +72,6 @@ const SystemPipelines = () => {
     try {
       await systemPipelinesApi.kill(pid);
       messageApi.success('Pipeline process killed successfully');
-      fetchPipelines(); // Refresh the list
     } catch (error) {
       messageApi.error(`Failed to kill process: ${error.message}`);
       console.error('Error:', error);
@@ -99,7 +102,7 @@ const SystemPipelines = () => {
     };
   };
 
-  const formatStartTimeLikeRoutes = (startTimeValue) => {
+  const formatStartedAt = (startTimeValue) => {
     if (!startTimeValue) {
       return '-';
     }
@@ -109,10 +112,30 @@ const SystemPipelines = () => {
       return startTimeValue;
     }
 
-    return parsedDate.toLocaleString();
+    const pad = (value) => String(value).padStart(2, '0');
+    const hours = pad(parsedDate.getHours());
+    const minutes = pad(parsedDate.getMinutes());
+    const day = pad(parsedDate.getDate());
+    const month = pad(parsedDate.getMonth() + 1);
+    const year = parsedDate.getFullYear();
+
+    return `${hours}:${minutes} ${day}/${month}/${year}`;
   };
 
   const columns = [
+    {
+      title: 'Route',
+      key: 'owner',
+      render: (_, record) => {
+        const route = getPipelineOwnerRoute(record.command, routesById);
+
+        if (!route) {
+          return '-';
+        }
+
+        return <a href={`#/routes/${route.id}`}>{route.name || route.id}</a>;
+      },
+    },
     {
       title: 'PID',
       dataIndex: 'pid',
@@ -144,25 +167,15 @@ const SystemPipelines = () => {
       sorter: (a, b) => a.memory_bytes - b.memory_bytes,
     },
     {
-      title: 'Swap',
-      key: 'swap',
-      render: (_, record) => (
-        <Tooltip title={`${record.swap_bytes} bytes`}>
-          {formatBytes(record.swap_bytes)} ({record.swap_percent})
-        </Tooltip>
-      ),
-      sorter: (a, b) => a.swap_bytes - b.swap_bytes,
-    },
-    {
       title: 'User',
       dataIndex: 'user',
       key: 'user',
     },
     {
-      title: 'Start Time',
+      title: 'Started At',
       dataIndex: 'start_time',
       key: 'start_time',
-      render: (text) => formatStartTimeLikeRoutes(parseStartTimeAndExecPath(text).startTime),
+      render: (text) => formatStartedAt(parseStartTimeAndExecPath(text).startTime),
     },
     {
       title: 'Actions',
@@ -191,7 +204,7 @@ const SystemPipelines = () => {
       { label: 'Swap Usage', value: formatBytes(record.swap_bytes) },
       { label: 'Swap in Bytes', value: record.swap_bytes.toLocaleString() },
       { label: 'User', value: record.user },
-      { label: 'Start Time', value: formatStartTimeLikeRoutes(startTime) },
+      { label: 'Started At', value: formatStartedAt(startTime) },
       { label: 'Item ID', value: record.command },
     ];
 
@@ -232,13 +245,6 @@ const SystemPipelines = () => {
               Quick live overview of the pipeline processes currently running in the system.
             </Text>
           </div>
-          <Button
-            type="primary"
-            icon={<ReloadOutlined />}
-            onClick={fetchPipelines}
-          >
-            Refresh
-          </Button>
         </Space>
 
         <Card>

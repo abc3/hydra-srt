@@ -44,6 +44,21 @@ defmodule HydraSrtWeb.RealtimeChannelTest do
     }
   end
 
+  test "subscribes to system pipelines and pushes snapshot", %{token: token} do
+    assert {:ok, socket} = connect(HydraSrtWeb.UserSocket, %{"token" => token})
+    assert {:ok, _, socket} = subscribe_and_join(socket, HydraSrtWeb.RealtimeChannel, "realtime")
+
+    ref = push(socket, "system_pipelines:subscribe", %{})
+
+    assert_push "system_pipelines", %{pipelines: pipelines, routes: routes}
+    assert is_list(pipelines)
+    assert is_list(routes)
+    assert_reply ref, :ok
+
+    unsub_ref = push(socket, "system_pipelines:unsubscribe", %{})
+    assert_reply unsub_ref, :ok
+  end
+
   test "subscribes to item topic and pushes item status event", %{token: token} do
     assert {:ok, socket} = connect(HydraSrtWeb.UserSocket, %{"token" => token})
     assert {:ok, _, socket} = subscribe_and_join(socket, HydraSrtWeb.RealtimeChannel, "realtime")
