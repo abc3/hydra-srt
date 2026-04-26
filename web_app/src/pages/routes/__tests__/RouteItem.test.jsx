@@ -1,14 +1,16 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import RouteItem from '../RouteItem';
+import { subscribeToItemStatus, __emitItemStatus, __clearRealtimeMockState } from '../../../utils/realtime';
+import { routesApi } from '../../../utils/api';
 
 vi.mock('../../../utils/api', () => {
   return {
     routesApi: {
       stop: async () => ({ data: { status: 'stopped' } }),
       start: async () => ({ data: { status: 'started' } }),
-      getById: async () => ({
+      getById: vi.fn(async () => ({
         data: {
           id: 'r1',
           name: 'Route 1',
@@ -40,7 +42,7 @@ vi.mock('../../../utils/api', () => {
             },
           ],
         },
-      }),
+      })),
     },
     destinationsApi: {
       delete: async () => ({ data: {} }),
@@ -48,7 +50,151 @@ vi.mock('../../../utils/api', () => {
   };
 });
 
+vi.mock('../../../utils/realtime', () => {
+  const itemListeners = new Map();
+  const unsubscribeFns = new Map();
+
+  const subscribeToItemStatus = vi.fn((itemId, listener) => {
+    const listeners = itemListeners.get(itemId) || [];
+    listeners.push(listener);
+    itemListeners.set(itemId, listeners);
+
+    const unsubscribe = vi.fn(() => {
+      const current = itemListeners.get(itemId) || [];
+      itemListeners.set(
+        itemId,
+        current.filter((saved) => saved !== listener),
+      );
+    });
+
+    unsubscribeFns.set(listener, unsubscribe);
+    return unsubscribe;
+  });
+
+  const emitItemStatus = (itemId, status) => {
+    const listeners = itemListeners.get(itemId) || [];
+    listeners.forEach((listener) => listener({ item_id: itemId, status }));
+  };
+
+  return {
+    subscribeToItemStatus,
+    __emitItemStatus: emitItemStatus,
+    __clearRealtimeMockState: () => {
+      itemListeners.clear();
+      unsubscribeFns.clear();
+      subscribeToItemStatus.mockClear();
+    },
+  };
+});
+
 describe('RouteItem', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __clearRealtimeMockState();
+    routesApi.getById.mockResolvedValue({
+      data: {
+        id: 'r1',
+        name: 'Route 1',
+        status: 'started',
+        schema_status: 'processing',
+        updated_at: new Date().toISOString(),
+        enabled: true,
+        schema: 'SRT',
+        schema_options: { localaddress: '127.0.0.1', localport: 1234, mode: 'listener' },
+        node: 'node@host',
+        destinations: [
+          {
+            id: 'd1',
+            name: 'Dest 1',
+            enabled: true,
+            status: 'processing',
+            schema: 'UDP',
+            schema_options: { host: '127.0.0.1', port: 9999 },
+            updated_at: new Date().toISOString(),
+          },
+          {
+            id: 'd2',
+            name: 'Dest 2',
+            enabled: false,
+            status: 'processing',
+            schema: 'SRT',
+            schema_options: { localaddress: '127.0.0.1', localport: 8888, mode: 'caller' },
+            updated_at: new Date().toISOString(),
+          },
+        ],
+      },
+    });
+  });
+
+  it('subscribes to route and destination item status topics', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Endpoints');
+
+    expect(subscribeToItemStatus).toHaveBeenCalledWith('r1', expect.any(Function));
+    expect(subscribeToItemStatus).toHaveBeenCalledWith('d1', expect.any(Function));
+    expect(subscribeToItemStatus).toHaveBeenCalledWith('d2', expect.any(Function));
+  });
+
+  it('updates statuses when item status events arrive', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Endpoints');
+
+    await act(async () => {
+      __emitItemStatus('r1', 'stopped');
+      __emitItemStatus('d1', 'failed');
+    });
+
+    expect(await screen.findByText('failed')).toBeInTheDocument();
+    expect(screen.getAllByText('stopped').length).toBeGreaterThan(0);
+  });
+
+  it('switches Start button to Stop immediately after start click', async () => {
+    routesApi.getById.mockResolvedValue({
+      data: {
+        id: 'r1',
+        name: 'Route 1',
+        status: 'stopped',
+        schema_status: 'stopped',
+        updated_at: new Date().toISOString(),
+        enabled: true,
+        schema: 'SRT',
+        schema_options: { localaddress: '127.0.0.1', localport: 1234, mode: 'listener' },
+        node: 'node@host',
+        destinations: [],
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const startButton = await screen.findByRole('button', { name: /start/i });
+
+    await act(async () => {
+      fireEvent.click(startButton);
+    });
+
+    expect(await screen.findByRole('button', { name: /stop/i })).toBeInTheDocument();
+  });
+
   it('does not show route statistics UI', async () => {
     render(
       <MemoryRouter initialEntries={['/routes/r1']}>
@@ -184,5 +330,27 @@ describe('RouteItem', () => {
 
     const endpointLinks = screen.getAllByRole('link');
     expect(endpointLinks[0]).toHaveTextContent('Route 1');
+  });
+
+  it('unsubscribes from item topics on unmount', async () => {
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Endpoints');
+
+    const unsubs = subscribeToItemStatus.mock.results
+      .map((result) => result.value)
+      .filter((value) => typeof value === 'function');
+
+    unmount();
+
+    unsubs.forEach((unsubscribe) => {
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    });
   });
 });

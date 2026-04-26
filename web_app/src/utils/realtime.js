@@ -11,6 +11,8 @@ let statsSubscribed = false;
 let statsSubscribePending = false;
 let statsSubscribedOnServer = false;
 const statsListeners = new Set();
+const itemSubscriptions = new Map();
+const itemSubscriptionsOnServer = new Set();
 
 /**
  * Same rules as the pre-refactor UI (e.g. RouteItem): pass the HTTP `/socket`
@@ -77,6 +79,83 @@ const pushStatsUnsubscription = () => {
     });
 };
 
+const addItemListener = (itemId, listener) => {
+  const current = itemSubscriptions.get(itemId) || { listeners: new Set(), refCount: 0 };
+
+  if (typeof listener === 'function') {
+    current.listeners.add(listener);
+  }
+
+  current.refCount += 1;
+  itemSubscriptions.set(itemId, current);
+};
+
+const removeItemListener = (itemId, listener) => {
+  const current = itemSubscriptions.get(itemId);
+
+  if (!current) {
+    return 0;
+  }
+
+  if (typeof listener === 'function') {
+    current.listeners.delete(listener);
+  }
+
+  current.refCount = Math.max(0, current.refCount - 1);
+
+  if (current.refCount === 0) {
+    itemSubscriptions.delete(itemId);
+    return 0;
+  }
+
+  itemSubscriptions.set(itemId, current);
+  return current.refCount;
+};
+
+const pushItemSubscription = (itemId) => {
+  if (!channel || !itemId || !itemSubscriptions.has(itemId)) {
+    return;
+  }
+
+  if (!channelJoined || channelJoinInFlight) {
+    return;
+  }
+
+  if (itemSubscriptionsOnServer.has(itemId)) {
+    return;
+  }
+
+  channel
+    .push('item:subscribe', { item_id: itemId })
+    .receive('ok', () => {
+      itemSubscriptionsOnServer.add(itemId);
+    })
+    .receive('error', (error) => {
+      console.error('[realtime] item subscribe failed', itemId, error);
+    });
+};
+
+const pushItemUnsubscription = (itemId) => {
+  if (!channel || !channelJoined || !itemSubscriptionsOnServer.has(itemId)) {
+    return;
+  }
+
+  channel
+    .push('item:unsubscribe', { item_id: itemId })
+    .receive('ok', () => {
+      itemSubscriptionsOnServer.delete(itemId);
+    })
+    .receive('error', (error) => {
+      console.error('[realtime] item unsubscribe failed', itemId, error);
+    });
+};
+
+const pushAllItemSubscriptions = () => {
+  Array.from(itemSubscriptions.keys()).forEach((itemId) => {
+    pushItemSubscription(itemId);
+  });
+};
+
 export const connectRealtime = () => {
   const token = getToken();
 
@@ -101,6 +180,22 @@ export const connectRealtime = () => {
     statsListeners.forEach((listener) => listener(payload));
   });
 
+  channel.on('item_status', (payload) => {
+    const itemId = payload?.item_id;
+
+    if (!itemId) {
+      return;
+    }
+
+    const listeners = itemSubscriptions.get(itemId)?.listeners;
+
+    if (!listeners || listeners.size === 0) {
+      return;
+    }
+
+    listeners.forEach((listener) => listener(payload));
+  });
+
   channel.onError((error) => {
     console.error('[realtime] channel error', error);
   });
@@ -109,6 +204,7 @@ export const connectRealtime = () => {
     channelJoined = false;
     channelJoinInFlight = false;
     statsSubscribedOnServer = false;
+    itemSubscriptionsOnServer.clear();
   });
 
   socket.onOpen(() => {
@@ -123,6 +219,7 @@ export const connectRealtime = () => {
     channelJoined = false;
     channelJoinInFlight = false;
     statsSubscribedOnServer = false;
+    itemSubscriptionsOnServer.clear();
   });
 
   socket.connect();
@@ -136,6 +233,8 @@ export const connectRealtime = () => {
       if (statsSubscribePending || statsSubscribed) {
         pushStatsSubscription();
       }
+
+      pushAllItemSubscriptions();
     })
     .receive('error', (error) => {
       channelJoinInFlight = false;
@@ -163,6 +262,8 @@ export const disconnectRealtime = () => {
   statsSubscribePending = false;
   statsSubscribedOnServer = false;
   statsListeners.clear();
+  itemSubscriptions.clear();
+  itemSubscriptionsOnServer.clear();
 };
 
 export const subscribeToStats = (listener) => {
@@ -182,6 +283,24 @@ export const subscribeToStats = (listener) => {
     if (statsListeners.size === 0) {
       statsSubscribed = false;
       pushStatsUnsubscription();
+    }
+  };
+};
+
+export const subscribeToItemStatus = (itemId, listener) => {
+  if (typeof itemId !== 'string' || itemId.length === 0) {
+    return () => {};
+  }
+
+  addItemListener(itemId, listener);
+  connectRealtime();
+  pushItemSubscription(itemId);
+
+  return () => {
+    const remaining = removeItemListener(itemId, listener);
+
+    if (remaining === 0) {
+      pushItemUnsubscription(itemId);
     }
   };
 };

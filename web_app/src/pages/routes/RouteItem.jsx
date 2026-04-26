@@ -30,10 +30,12 @@ import {
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { routesApi, destinationsApi } from '../../utils/api';
+import { subscribeToItemStatus } from '../../utils/realtime';
 import { ROUTES } from "../../utils/constants";
 import {
   ACTIVE_ROUTE_STATUSES,
   formatStatusLabel,
+  getRouteRuntimeStatus,
   isRouteBusy,
   resolvePendingRouteStatus,
 } from "../../utils/routes";
@@ -165,6 +167,11 @@ const RouteItem = () => {
   const [modal, modalContextHolder] = Modal.useModal();
   const [destinationFilter, setDestinationFilter] = useState('');
   const [pendingAction, setPendingAction] = useState(null);
+  const destinationIdsSignature = (routeData?.destinations || [])
+    .map((destination) => destination?.id)
+    .filter(Boolean)
+    .sort()
+    .join('|');
 
   // Breadcrumb setup
   useEffect(() => {
@@ -189,6 +196,71 @@ const RouteItem = () => {
   useEffect(() => {
     fetchRouteData();
   }, [id]);
+
+  useEffect(() => {
+    if (!routeData?.id) {
+      return undefined;
+    }
+
+    const itemIds = [
+      routeData.id,
+      ...(routeData.destinations || []).map((destination) => destination.id).filter(Boolean),
+    ];
+
+    const uniqueItemIds = Array.from(new Set(itemIds));
+    const unsubscribers = uniqueItemIds.map((itemId) =>
+      subscribeToItemStatus(itemId, (payload) => {
+        const itemIdFromEvent = payload?.item_id;
+        const status = payload?.status;
+
+        if (!itemIdFromEvent || typeof status !== 'string' || status.length === 0) {
+          return;
+        }
+
+        setRouteData((prev) => {
+          if (!prev) {
+            return prev;
+          }
+
+          if (itemIdFromEvent === prev.id) {
+            return {
+              ...prev,
+              status,
+              schema_status: status,
+            };
+          }
+
+          let changed = false;
+          const nextDestinations = (prev.destinations || []).map((destination) => {
+            if (destination.id !== itemIdFromEvent) {
+              return destination;
+            }
+
+            changed = true;
+            return {
+              ...destination,
+              status,
+            };
+          });
+
+          if (!changed) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            destinations: nextDestinations,
+          };
+        });
+      })
+    );
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => {
+        unsubscribe?.();
+      });
+    };
+  }, [routeData?.id, destinationIdsSignature]);
 
   const fetchRouteData = async () => {
     try {
@@ -243,37 +315,26 @@ const RouteItem = () => {
       };
     }
 
-    // Check if status field exists and use it as the primary indicator
-    if (routeData.status) {
-      const isStarted = routeData.status.toLowerCase() === 'started';
+    const runtimeStatus = (getRouteRuntimeStatus(routeData) || '').toLowerCase();
+    const canStop = ACTIVE_ROUTE_STATUSES.has(runtimeStatus);
 
-      if (isStarted) {
-        return {
-          color: 'success',
-          buttonColor: 'default',
-          buttonIcon: <PauseCircleOutlined />,
-          buttonText: 'Stop',
-          buttonType: 'default'
-        };
-      } else {
-        return {
-          color: 'error',
-          buttonColor: 'primary',
-          buttonIcon: <PlayCircleOutlined />,
-          buttonText: 'Start',
-          buttonType: 'primary'
-        };
-      }
-    } else {
-      // Fallback if status field is not available (should not happen)
+    if (canStop) {
       return {
-        color: 'warning',
-        buttonColor: 'primary',
-        buttonIcon: <PlayCircleOutlined />,
-        buttonText: 'Start',
-        buttonType: 'primary'
+        color: 'success',
+        buttonColor: 'default',
+        buttonIcon: <PauseCircleOutlined />,
+        buttonText: 'Stop',
+        buttonType: 'default'
       };
     }
+
+    return {
+      color: 'error',
+      buttonColor: 'primary',
+      buttonIcon: <PlayCircleOutlined />,
+      buttonText: 'Start',
+      buttonType: 'primary'
+    };
   };
 
   const sourceRow = routeData ? {

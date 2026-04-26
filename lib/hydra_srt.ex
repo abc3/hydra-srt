@@ -49,6 +49,7 @@ defmodule HydraSrt do
   @spec set_route_status(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def set_route_status(id, status) do
     with {:ok, route} <- Db.update_route(id, route_runtime_status_attrs(status)) do
+      :ok = broadcast_route_items_status(id)
       {:ok, route}
     end
   end
@@ -60,7 +61,10 @@ defmodule HydraSrt do
 
   @spec set_route_runtime_status(String.t(), String.t() | nil) :: {:ok, map()} | {:error, term()}
   def set_route_runtime_status(id, status) do
-    Db.update_route_runtime_status(id, status)
+    with {:ok, route} <- Db.update_route_runtime_status(id, status) do
+      :ok = broadcast_route_items_status(id)
+      {:ok, route}
+    end
   end
 
   @spec mark_route_started(String.t()) :: {:ok, map()} | {:error, term()}
@@ -73,6 +77,7 @@ defmodule HydraSrt do
              route_runtime_status_attrs("started")
              |> Map.put("schema_status", nil)
            ) do
+      :ok = broadcast_route_items_status(id)
       {:ok, route}
     end
   end
@@ -87,6 +92,7 @@ defmodule HydraSrt do
              route_runtime_status_attrs("stopped")
              |> Map.put("schema_status", "stopped")
            ) do
+      :ok = broadcast_route_items_status(id)
       {:ok, route}
     end
   end
@@ -95,6 +101,41 @@ defmodule HydraSrt do
   def mark_route_terminated(id) do
     set_route_status(id, "stopped")
   end
+
+  @doc false
+  def broadcast_route_items_status(route_id) when is_binary(route_id) do
+    case Db.get_route(route_id, true) do
+      {:ok, route} ->
+        route_status = route["schema_status"] || route["status"]
+        :ok = broadcast_item_status(route_id, route_status)
+
+        route
+        |> Map.get("destinations", [])
+        |> Enum.each(fn destination ->
+          :ok = broadcast_item_status(destination["id"], destination["status"])
+        end)
+
+        :ok
+
+      {:error, _reason} ->
+        :ok
+    end
+  end
+
+  @doc false
+  def broadcast_item_status(item_id, status)
+      when is_binary(item_id) and is_binary(status) and status != "" do
+    Phoenix.PubSub.broadcast(
+      HydraSrt.PubSub,
+      "item:" <> item_id,
+      {:item_status, %{item_id: item_id, status: status}}
+    )
+
+    :ok
+  end
+
+  @doc false
+  def broadcast_item_status(_item_id, _status), do: :ok
 
   defp route_runtime_status_attrs(status) when is_binary(status) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
