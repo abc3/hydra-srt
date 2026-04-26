@@ -214,7 +214,7 @@ const MainLayout = ({ children }) => {
             }}
             onClick={() => navigate(ROUTES.ROUTES)}
           >
-            <img src="/logo2.webp" alt="HydraSRT Logo" style={{ width: '20px', height: '20px', marginRight: '8px' }} />
+            <img src="/favicon.svg" alt="HydraSRT Logo" style={{ width: '40px', height: '40px', marginRight: '8px' }} />
             {!collapsed && 'HydraSRT'}
           </div>
           {!screens.xs && (
