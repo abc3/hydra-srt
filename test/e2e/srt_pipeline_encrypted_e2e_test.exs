@@ -87,7 +87,7 @@ defmodule HydraSrt.E2E.SrtPipelineEncryptedE2ETest do
       )
 
     :ok = E2EHelpers.api_start_route!(base_url, token, route_id)
-    Process.sleep(750)
+    Process.sleep(E2EHelpers.e2e_startup_sleep_ms())
 
     tx =
       E2EHelpers.start_port_logged!(
@@ -136,6 +136,10 @@ defmodule HydraSrt.E2E.SrtPipelineEncryptedE2ETest do
       E2EHelpers.kill_port(tx)
       E2EHelpers.kill_port(rx)
     end)
+
+    E2EHelpers.wait_for_route_processing!(base_url, token, route_id,
+      expected_destination_count: 1
+    )
 
     Process.sleep(6_000)
     assert E2EHelpers.await_tag_exit_status("ffmpeg_tx_enc_ok", 10_000) == 0
@@ -208,7 +212,7 @@ defmodule HydraSrt.E2E.SrtPipelineEncryptedE2ETest do
       )
 
     :ok = E2EHelpers.api_start_route!(base_url, token, route_id)
-    Process.sleep(750)
+    Process.sleep(E2EHelpers.e2e_startup_sleep_ms())
 
     tx =
       E2EHelpers.start_port_logged!(

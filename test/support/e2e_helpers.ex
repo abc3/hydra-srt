@@ -6,6 +6,25 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
   @default_host "127.0.0.1"
   @default_port 4002
 
+  @doc false
+  def e2e_timeout_ms(ms) when is_integer(ms) and ms > 0 do
+    if System.get_env("CI") == "true" do
+      # GitHub-hosted runners are often CPU-starved; libx264 + SRT handshakes exceed laptop timings.
+      cond do
+        ms >= 8_000 -> min(ms * 4, 120_000)
+        ms >= 3_000 -> min(ms * 4, 90_000)
+        true -> min(ms * 3, 25_000)
+      end
+    else
+      ms
+    end
+  end
+
+  @doc false
+  def e2e_startup_sleep_ms do
+    if System.get_env("CI") == "true", do: 2_000, else: 750
+  end
+
   def ensure_e2e_prereqs! do
     kill_all_pipelines!()
     ensure_executables!()
@@ -263,6 +282,9 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
   end
 
   def api_create_route!(base_url, token, route_params) when is_map(route_params) do
+    # API schema defaults routes to disabled; E2E expects an active pipeline unless a test opts out.
+    route_params = Map.put_new(route_params, "enabled", true)
+
     body = Jason.encode!(%{"route" => route_params})
 
     {:ok, 201, _headers, resp} =
@@ -272,6 +294,9 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
   end
 
   def api_create_destination!(base_url, token, route_id, dest_params) when is_map(dest_params) do
+    # Destinations default to disabled; the native pipeline only loads enabled sinks.
+    dest_params = Map.put_new(dest_params, "enabled", true)
+
     body = Jason.encode!(%{"destination" => dest_params})
 
     {:ok, 201, _headers, _resp} =
@@ -310,6 +335,41 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  def wait_for_route_processing!(base_url, token, route_id, opts \\ [])
+      when is_binary(base_url) and is_binary(token) and is_binary(route_id) do
+    expected_dest_count = Keyword.get(opts, :expected_destination_count)
+    timeout_ms = Keyword.get(opts, :timeout_ms, 10_000)
+    interval_ms = Keyword.get(opts, :interval_ms, 250)
+
+    wait_until(
+      fn ->
+        case api_get_route(base_url, token, route_id) do
+          {:ok, route} ->
+            schema_ok = route["schema_status"] == "processing"
+            dests = Map.get(route, "destinations") || []
+
+            dest_ok =
+              cond do
+                is_integer(expected_dest_count) ->
+                  length(dests) == expected_dest_count and
+                    Enum.all?(dests, fn d -> d["status"] == "processing" end)
+
+                true ->
+                  dests != [] and
+                    Enum.all?(dests, fn d -> d["status"] == "processing" end)
+              end
+
+            schema_ok and dest_ok
+
+          _ ->
+            false
+        end
+      end,
+      timeout_ms,
+      interval_ms
+    )
   end
 
   def api_stop_route(base_url, token, route_id) do
@@ -439,11 +499,10 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
 
   def maybe_emit_srt_stats(tag, line, owner)
       when is_binary(tag) and is_binary(line) and is_pid(owner) do
-    # srt-live-transmit prints lines like:
+    # srt-live-transmit default stats (varies by srt-tools version / locale), e.g.:
     # "PACKETS     SENT:           0  RECEIVED:          1053"
-    if String.contains?(tag, "srt-live-transmit") and String.contains?(line, "PACKETS") and
-         String.contains?(line, "RECEIVED:") do
-      case Regex.run(~r/RECEIVED:\s+(\d+)/, line) do
+    if String.contains?(tag, "srt-live-transmit") and Regex.match?(~r/(?i)received:\s*\d+/, line) do
+      case Regex.run(~r/(?i)received:\s*(\d+)/, line) do
         [_, received_str] ->
           case Integer.parse(received_str) do
             {received, _} ->
@@ -486,7 +545,7 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
   def await_srt_packets_received(min_packets, timeout_ms)
       when is_integer(min_packets) and is_integer(timeout_ms) do
     start = System.monotonic_time(:millisecond)
-    do_await_srt_packets_received(min_packets, start, timeout_ms)
+    do_await_srt_packets_received(min_packets, start, e2e_timeout_ms(timeout_ms))
   end
 
   def do_await_srt_packets_received(min_packets, start_ms, timeout_ms) do
@@ -509,19 +568,23 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
   end
 
   def await_tag_exit_status(tag, timeout_ms) when is_binary(tag) and is_integer(timeout_ms) do
+    effective_ms = e2e_timeout_ms(timeout_ms)
+
     receive do
       {:port_exit_status, ^tag, status} -> status
     after
-      timeout_ms -> nil
+      effective_ms -> nil
     end
   end
 
   def await_exit_status!(%{port: port}, timeout_ms)
       when is_port(port) and is_integer(timeout_ms) do
+    effective_ms = e2e_timeout_ms(timeout_ms)
+
     receive do
       {^port, {:exit_status, status}} -> status
     after
-      timeout_ms -> nil
+      effective_ms -> nil
     end
   end
 
@@ -613,7 +676,8 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
 
   def wait_until(fun, timeout_ms, interval_ms) when is_function(fun, 0) do
     start = System.monotonic_time(:millisecond)
-    do_wait_until(fun, start, timeout_ms, interval_ms)
+    effective_ms = e2e_timeout_ms(timeout_ms)
+    do_wait_until(fun, start, effective_ms, interval_ms)
   end
 
   def do_wait_until(fun, start_ms, timeout_ms, interval_ms) do
