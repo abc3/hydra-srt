@@ -146,7 +146,7 @@ describe('Routes', () => {
     expect(await screen.findByText('running')).toBeInTheDocument();
   });
 
-  it('shows route in and out stats after the route reports processing', async () => {
+  it('shows route in and out stats while status is not stopped', async () => {
     render(
       <MemoryRouter>
         <Routes />
@@ -169,10 +169,22 @@ describe('Routes', () => {
         direction: 'out',
         value: 200,
       });
-      __emitItemStatus('starting-route', 'processing');
     });
 
     expect(await screen.findByText('800 bps / 1.60 Kbps')).toBeInTheDocument();
+  });
+
+  it('disables stats action for stopped routes', async () => {
+    render(
+      <MemoryRouter>
+        <Routes />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Stopped route');
+
+    expect(screen.getByRole('button', { name: /route stats for stopped route/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /route stats for starting route/i })).not.toBeDisabled();
   });
 
   it('shows uptime for routes that are starting or running', async () => {
