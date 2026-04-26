@@ -9,12 +9,12 @@ import {
   StopOutlined,
   HomeOutlined,
   HolderOutlined,
-  CopyOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
+import { subscribeToStats } from '../../utils/realtime';
 import {
   ACTIVE_ROUTE_STATUSES,
   compareUptime,
@@ -30,6 +30,7 @@ const ONE_DAY_SECONDS = 24 * ONE_HOUR_SECONDS;
 const ONE_MONTH_SECONDS = 30 * ONE_DAY_SECONDS;
 const DELETE_DISABLED_MESSAGE = 'If you want to delete it, stop the route first';
 const TRANSITIONAL_ROUTE_STATUSES = new Set(['starting', 'stopping', 'reconnecting']);
+const ROUTE_THROUGHPUT_STATUSES = new Set(['started', 'processing']);
 const ROUTE_ACTION_POLL_ATTEMPTS = 5;
 const ROUTE_ACTION_POLL_DELAY_MS = 250;
 
@@ -134,95 +135,6 @@ const formatUptime = (startedAt, status, nowMs) => {
   return parts.join('');
 };
 
-const formatSourceLabel = (record) => {
-  const schema = record?.schema;
-  const options = record?.schema_options || {};
-
-  switch (schema) {
-    case 'SRT': {
-      const host = options.localaddress;
-      const port = options.localport;
-
-      if (!host || !port) {
-        return 'N/A';
-      }
-
-      return `${host}:${port}`;
-    }
-
-    case 'UDP': {
-      const host = options.address || options.host;
-      const port = options.port;
-
-      if (!host || !port) {
-        return 'N/A';
-      }
-
-      return `${host}:${port}`;
-    }
-
-    default:
-      return 'Unknown';
-  }
-};
-
-const formatFullSourcePath = (record) => {
-  const schema = record?.schema;
-  const options = record?.schema_options || {};
-
-  switch (schema) {
-    case 'SRT': {
-      const host = options.localaddress;
-      const port = options.localport;
-
-      if (!host || !port) {
-        return null;
-      }
-
-      const query = options.mode ? `?mode=${options.mode}` : '';
-      return `srt://${host}:${port}${query}`;
-    }
-
-    case 'UDP': {
-      const host = options.address || options.host;
-      const port = options.port;
-
-      if (!host || !port) {
-        return null;
-      }
-
-      return `udp://${host}:${port}`;
-    }
-
-    default:
-      return null;
-  }
-};
-
-const renderSrtModeTag = (mode) => {
-  switch (mode) {
-    case 'listener':
-      return <Tag color="default">L</Tag>;
-    case 'caller':
-      return <Tag color="processing">C</Tag>;
-    case 'rendezvous':
-      return <Tag color="warning">R</Tag>;
-    default:
-      return null;
-  }
-};
-
-const renderProtocolTag = (schema) => {
-  switch (schema) {
-    case 'SRT':
-      return <Tag color="blue">SRT</Tag>;
-    case 'UDP':
-      return <Tag color="cyan">UDP</Tag>;
-    default:
-      return null;
-  }
-};
-
 const formatLastUpdated = (date) => {
   if (!date) {
     return '-';
@@ -246,8 +158,28 @@ const formatLastUpdated = (date) => {
   return `${hours}:${minutes}:${seconds} ${day}/${month}/${year}`;
 };
 
+const formatBitrate = (bytesPerSecond) => {
+  if (typeof bytesPerSecond !== 'number' || Number.isNaN(bytesPerSecond)) {
+    return '-';
+  }
+
+  const bitsPerSecond = bytesPerSecond * 8;
+  const units = ['bps', 'Kbps', 'Mbps', 'Gbps'];
+  let value = bitsPerSecond;
+  let unitIndex = 0;
+
+  while (value >= 1000 && unitIndex < units.length - 1) {
+    value /= 1000;
+    unitIndex += 1;
+  }
+
+  const digits = value >= 100 || unitIndex === 0 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
+};
+
 const Routes = () => {
   const [routes, setRoutes] = useState([]);
+  const [routeStats, setRouteStats] = useState({});
   const [loading, setLoading] = useState(true);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pendingRouteActions, setPendingRouteActions] = useState({});
@@ -272,6 +204,48 @@ const Routes = () => {
 
   useEffect(() => {
     fetchRoutes();
+  }, []);
+
+  useEffect(() => {
+    return subscribeToStats((payload) => {
+      console.log('[realtime:stats]', payload);
+      setRouteStats((prev) => {
+        const routeId = payload?.route_id;
+        const value = payload?.value;
+
+        if (!routeId || typeof value !== 'number') {
+          return prev;
+        }
+
+        const current = prev[routeId] || { outByDestination: {} };
+
+        if (payload.direction === 'in') {
+          return {
+            ...prev,
+            [routeId]: {
+              ...current,
+              in: value,
+              outByDestination: current.outByDestination || {},
+            },
+          };
+        }
+
+        if (payload.direction === 'out' && payload.destination_id) {
+          return {
+            ...prev,
+            [routeId]: {
+              ...current,
+              outByDestination: {
+                ...(current.outByDestination || {}),
+                [payload.destination_id]: value,
+              },
+            },
+          };
+        }
+
+        return prev;
+      });
+    });
   }, []);
 
   useEffect(() => {
@@ -375,20 +349,6 @@ const Routes = () => {
     }
   };
 
-  const handleCopySourcePath = async (sourcePath) => {
-    if (!sourcePath) {
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(sourcePath);
-      messageApi.success('Source path copied');
-    } catch (error) {
-      messageApi.error('Failed to copy source path');
-      console.error('Error:', error);
-    }
-  };
-
   const getNameColumnSearchProps = () => ({
     filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
       <div style={{ padding: 8 }}>
@@ -427,45 +387,6 @@ const Routes = () => {
     onFilter: (value, record) => (record.name || '').toLowerCase().includes(String(value).toLowerCase()),
   });
 
-  const getSourceColumnSearchProps = () => ({
-    filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }) => (
-      <div style={{ padding: 8 }}>
-        <Input
-          placeholder="Search source"
-          value={selectedKeys[0]}
-          onChange={(event) => {
-            const value = event.target.value;
-            setSelectedKeys(value ? [value] : []);
-          }}
-          onPressEnter={() => confirm()}
-          style={{ marginBottom: 8, display: 'block', width: 200 }}
-        />
-        <Space>
-          <Button
-            type="primary"
-            icon={<SearchOutlined />}
-            size="small"
-            onClick={() => confirm()}
-          >
-            Search
-          </Button>
-          <Button
-            size="small"
-            onClick={() => {
-              clearFilters?.();
-              confirm();
-            }}
-          >
-            Reset
-          </Button>
-        </Space>
-      </div>
-    ),
-    filterIcon: (filtered) => <SearchOutlined style={{ color: filtered ? '#1677ff' : undefined }} />,
-    onFilter: (value, record) =>
-      formatSourceLabel(record).toLowerCase().includes(String(value).toLowerCase()),
-  });
-
   const columns = [
     {
       title: 'Name',
@@ -480,83 +401,6 @@ const Routes = () => {
               {text}
             </a>
           </Space>
-        );
-      },
-    },
-    {
-      title: 'Source',
-      dataIndex: 'input',
-      key: 'input',
-      ...getSourceColumnSearchProps(),
-      filters: [
-        { text: 'SRT', value: 'SRT' },
-        { text: 'UDP', value: 'UDP' },
-      ],
-      onFilter: (value, record) => record.schema === value,
-      render: (_, record) => {
-        const sourcePath = formatFullSourcePath(record);
-        const srtModeTag =
-          record.schema === 'SRT' ? renderSrtModeTag(record?.schema_options?.mode) : null;
-
-        return (
-          <Tooltip
-            placement="topLeft"
-            color="#1f1f1f"
-            overlayStyle={{
-              maxWidth: 'none',
-              width: 'max-content',
-            }}
-            styles={{
-              body: {
-                maxWidth: 'none',
-                width: 'max-content',
-              },
-            }}
-            title={
-              sourcePath ? (
-                <div
-                  style={{
-                    display: 'inline-flex',
-                    flexDirection: 'column',
-                    gap: 8,
-                    width: 'max-content',
-                    maxWidth: 'none',
-                  }}
-                >
-                  <span
-                    style={{
-                      color: 'rgba(255, 255, 255, 0.88)',
-                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                      fontSize: 14,
-                      lineHeight: 1.4,
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {sourcePath}
-                  </span>
-                  <Button
-                    size="small"
-                    icon={<CopyOutlined />}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      handleCopySourcePath(sourcePath);
-                    }}
-                  >
-                    Copy
-                  </Button>
-                </div>
-              ) : (
-                'N/A'
-              )
-            }
-          >
-            <Space size="small">
-              {renderProtocolTag(record.schema)}
-              {srtModeTag}
-              <span>{formatSourceLabel(record)}</span>
-            </Space>
-          </Tooltip>
         );
       },
     },
@@ -588,6 +432,30 @@ const Routes = () => {
       ],
       onFilter: (value, record) => (getRouteRuntimeStatus(record) || '').toLowerCase() === value,
       render: (_, record) => renderStatusBadge(getRouteRuntimeStatus(record)),
+    },
+    {
+      title: 'In / Out',
+      key: 'throughput',
+      render: (_, record) => {
+        const runtime = (getRouteRuntimeStatus(record) || '').toLowerCase();
+
+        if (!ROUTE_THROUGHPUT_STATUSES.has(runtime)) {
+          return <span>- / -</span>;
+        }
+
+        const stats = routeStats[record.id] || {};
+        const outValues = Object.values(stats.outByDestination || {})
+          .filter((value) => typeof value === 'number' && !Number.isNaN(value));
+        const out = outValues.length > 0
+          ? outValues.reduce((sum, value) => sum + value, 0)
+          : null;
+
+        return (
+          <span>
+            {formatBitrate(stats.in)} / {formatBitrate(out)}
+          </span>
+        );
+      },
     },
     {
       title: 'Uptime',

@@ -13,6 +13,7 @@ import SystemNodes from './pages/system/SystemNodes';
 import Login from './pages/Login';
 import { isAuthenticated } from './utils/auth';
 import { ROUTES } from './utils/constants';
+import { connectRealtime, disconnectRealtime } from './utils/realtime';
 import './index.css';
 
 const config = {
@@ -73,6 +74,20 @@ const ProtectedRoute = ({ children }) => {
   return children;
 };
 
+const RealtimeConnection = () => {
+  const location = useLocation();
+
+  useEffect(() => {
+    if (isAuthenticated()) {
+      connectRealtime();
+    } else {
+      disconnectRealtime();
+    }
+  }, [location.pathname]);
+
+  return null;
+};
+
 // App component with authentication logic
 const App = () => {
   const [isLoading, setIsLoading] = useState(true);
@@ -88,6 +103,7 @@ const App = () => {
 
   return (
     <HashRouter>
+      <RealtimeConnection />
       <Routes>
         <Route path={ROUTES.LOGIN} element={<Login />} />
 

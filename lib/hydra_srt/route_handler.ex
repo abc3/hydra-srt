@@ -238,8 +238,9 @@ defmodule HydraSrt.RouteHandler do
             data
         end
 
-      :stats ->
-        Logger.info("RouteHandler: pipeline stats: #{json}")
+      {:stats, stats} ->
+        # Logger.info("RouteHandler: pipeline stats: #{json}")
+        publish_stats(data.id, stats)
         data
 
       :unknown ->
@@ -263,8 +264,8 @@ defmodule HydraSrt.RouteHandler do
       {:ok, %{"event" => _event}} ->
         :unknown
 
-      {:ok, %{} = _stats} ->
-        :stats
+      {:ok, %{} = stats} ->
+        {:stats, stats}
 
       _ ->
         :unknown
@@ -274,6 +275,58 @@ defmodule HydraSrt.RouteHandler do
   @doc false
   def normalize_runtime_status("stopped", "failure"), do: :ignore
   def normalize_runtime_status(status, _reason) when is_binary(status), do: {:update, status}
+
+  @doc false
+  def publish_stats(route_id, %{} = stats) when is_binary(route_id) do
+    stats
+    |> stats_events(route_id)
+    |> Enum.each(fn event ->
+      Phoenix.PubSub.broadcast(HydraSrt.PubSub, "stats", {:stats, event})
+    end)
+
+    :ok
+  end
+
+  @doc false
+  def stats_events(%{} = stats, route_id) when is_binary(route_id) do
+    in_events =
+      case get_in(stats, ["source", "bytes_in_per_sec"]) do
+        value when is_number(value) ->
+          [
+            %{
+              route_id: route_id,
+              direction: "in",
+              metric: "bytes_per_sec",
+              value: value
+            }
+          ]
+
+        _ ->
+          []
+      end
+
+    out_events =
+      stats
+      |> Map.get("destinations", [])
+      |> Enum.flat_map(fn
+        %{"id" => destination_id, "bytes_out_per_sec" => value}
+        when is_binary(destination_id) and is_number(value) ->
+          [
+            %{
+              route_id: route_id,
+              destination_id: destination_id,
+              direction: "out",
+              metric: "bytes_per_sec",
+              value: value
+            }
+          ]
+
+        _ ->
+          []
+      end)
+
+    in_events ++ out_events
+  end
 
   defp mark_route_terminated(route_id, {:port_exit, status}) when status not in [0, :normal] do
     HydraSrt.mark_route_terminated(route_id)
