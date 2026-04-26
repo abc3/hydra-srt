@@ -2,7 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import RouteItem from '../RouteItem';
-import { subscribeToItemStatus, __emitItemStatus, __clearRealtimeMockState } from '../../../utils/realtime';
+import {
+  subscribeToItemStatus,
+  subscribeToStats,
+  __emitItemStatus,
+  __clearRealtimeMockState,
+} from '../../../utils/realtime';
 import { routesApi } from '../../../utils/api';
 
 vi.mock('../../../utils/api', () => {
@@ -10,6 +15,15 @@ vi.mock('../../../utils/api', () => {
     routesApi: {
       stop: async () => ({ data: { status: 'stopped' } }),
       start: async () => ({ data: { status: 'starting' } }),
+      getAnalytics: vi.fn(async () => ({
+        data: {
+          points: [],
+          meta: {
+            window: 'last_hour',
+            bucket_ms: 10_000,
+          },
+        },
+      })),
       getById: vi.fn(async () => ({
         data: {
           id: 'r1',
@@ -53,6 +67,7 @@ vi.mock('../../../utils/api', () => {
 vi.mock('../../../utils/realtime', () => {
   const itemListeners = new Map();
   const unsubscribeFns = new Map();
+  const statsListeners = new Set();
 
   const subscribeToItemStatus = vi.fn((itemId, listener) => {
     const listeners = itemListeners.get(itemId) || [];
@@ -76,13 +91,28 @@ vi.mock('../../../utils/realtime', () => {
     listeners.forEach((listener) => listener({ item_id: itemId, status }));
   };
 
+  const subscribeToStats = vi.fn((listener) => {
+    if (typeof listener === 'function') {
+      statsListeners.add(listener);
+    }
+
+    return vi.fn(() => {
+      if (typeof listener === 'function') {
+        statsListeners.delete(listener);
+      }
+    });
+  });
+
   return {
     subscribeToItemStatus,
+    subscribeToStats,
     __emitItemStatus: emitItemStatus,
     __clearRealtimeMockState: () => {
       itemListeners.clear();
       unsubscribeFns.clear();
+      statsListeners.clear();
       subscribeToItemStatus.mockClear();
+      subscribeToStats.mockClear();
     },
   };
 });
@@ -122,6 +152,15 @@ describe('RouteItem', () => {
             updated_at: new Date().toISOString(),
           },
         ],
+      },
+    });
+    routesApi.getAnalytics.mockResolvedValue({
+      data: {
+        points: [],
+        meta: {
+          window: 'last_hour',
+          bucket_ms: 10_000,
+        },
       },
     });
   });
@@ -195,7 +234,7 @@ describe('RouteItem', () => {
     expect(await screen.findByRole('button', { name: /stop/i })).toBeInTheDocument();
   });
 
-  it('does not show route statistics UI', async () => {
+  it('shows analytics chart controls and fetches analytics data', async () => {
     render(
       <MemoryRouter initialEntries={['/routes/r1']}>
         <Routes>
@@ -204,11 +243,20 @@ describe('RouteItem', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Endpoints')).toBeInTheDocument();
-    expect(screen.queryByText('Route Metrics (Overview)')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('kpi-source-bitrate')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('kpi-worst-dest-bitrate')).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Metrics' })).not.toBeInTheDocument();
+    const refreshButton = await screen.findByRole('button', { name: /refresh/i });
+    expect(refreshButton).toBeDisabled();
+    expect(screen.queryByText('p0.5')).not.toBeInTheDocument();
+    expect(screen.queryByText('p0.95')).not.toBeInTheDocument();
+    expect(screen.queryByText('p0.99')).not.toBeInTheDocument();
+    expect(routesApi.getAnalytics).toHaveBeenCalledTimes(1);
+    expect(routesApi.getAnalytics).toHaveBeenCalledWith(
+      'r1',
+      expect.objectContaining({
+        from: expect.any(String),
+        to: expect.any(String),
+      }),
+    );
+    expect(subscribeToStats).toHaveBeenCalledWith(expect.any(Function));
   });
 
   it('keeps the current runtime status visible until refreshed after Stop is clicked', async () => {

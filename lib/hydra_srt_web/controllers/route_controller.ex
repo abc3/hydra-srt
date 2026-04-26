@@ -3,6 +3,7 @@ defmodule HydraSrtWeb.RouteController do
 
   alias HydraSrt.Db
   alias HydraSrt.SourceProbe
+  alias HydraSrt.Stats.Analytics
 
   action_fallback HydraSrtWeb.FallbackController
 
@@ -83,6 +84,23 @@ defmodule HydraSrtWeb.RouteController do
         conn
         |> put_status(:unprocessable_entity)
         |> json(%{error: inspect(reason)})
+    end
+  end
+
+  def analytics(conn, %{"route_id" => route_id} = params) do
+    with {:ok, query_params} <- Analytics.build_query_params(params),
+         {:ok, analytics_data} <- Analytics.fetch_route_timeseries(route_id, query_params) do
+      data(conn, analytics_data)
+    else
+      {:error, {:bad_request, message}} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: message})
+
+      {:error, reason} ->
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: "Failed to fetch analytics: #{inspect(reason)}"})
     end
   end
 

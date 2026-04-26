@@ -56,6 +56,23 @@ export const routesApi = {
     return response.json();
   },
 
+  // Get route analytics time-series
+  getAnalytics: async (id, params = {}) => {
+    const query = new URLSearchParams();
+
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === '') {
+        return;
+      }
+
+      query.set(key, value);
+    });
+
+    const querySuffix = query.toString().length > 0 ? `?${query.toString()}` : '';
+    const response = await authFetch(`/api/routes/${id}/analytics${querySuffix}`);
+    return response.json();
+  },
+
   // Create a new route
   create: async (routeData) => {
     const response = await authFetch('/api/routes', {
