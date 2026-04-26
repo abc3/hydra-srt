@@ -14,8 +14,7 @@ import {
 } from 'antd';
 import { 
   LockOutlined, 
-  UserOutlined,
-  LoginOutlined
+  UserOutlined
 } from '@ant-design/icons';
 import { login, isAuthenticated } from '../utils/auth';
 import { ROUTES } from '../utils/constants';
@@ -87,16 +86,16 @@ const Login = () => {
       textAlign: 'center',
     },
     logo: {
-      fontSize: '32px',
-      color: token.colorPrimary,
+      display: 'flex',
+      justifyContent: 'center',
       marginBottom: token.marginSM,
+    },
+    logoImage: {
+      width: '100px',
+      height: '100px',
     },
     form: {
       width: '100%',
-    },
-    footer: {
-      marginTop: token.marginLG,
-      textAlign: 'center',
     },
     forgotPassword: {
       float: 'right',
@@ -108,12 +107,9 @@ const Login = () => {
       <Card style={styles.card}>
         <div style={styles.header}>
           <div style={styles.logo}>
-            <LoginOutlined />
+            <img src="/favicon.svg" alt="HydraSRT icon" style={styles.logoImage} />
           </div>
           <Title level={2}>Welcome to HydraSRT</Title>
-          <Text type="secondary">
-            Please sign in to access your account
-          </Text>
         </div>
         
         <Form
@@ -151,9 +147,7 @@ const Login = () => {
               <Form.Item name="remember" valuePropName="checked" noStyle>
                 <Checkbox>Remember me</Checkbox>
               </Form.Item>
-              <Link style={styles.forgotPassword}>
-                Forgot password?
-              </Link>
+              {/* <Link style={styles.forgotPassword}>Forgot password?</Link> */}
             </Space>
           </Form.Item>
           
@@ -168,11 +162,6 @@ const Login = () => {
             </Button>
           </Form.Item>
           
-          <div style={styles.footer}>
-            <Text type="secondary">
-              Don't have an account? Contact administrator
-            </Text>
-          </div>
         </Form>
       </Card>
     </div>
