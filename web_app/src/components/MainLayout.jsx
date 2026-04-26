@@ -5,23 +5,21 @@ import {
   MenuUnfoldOutlined,
   CompassOutlined,
   SettingOutlined,
-  UserOutlined,
-  DownOutlined,
   LogoutOutlined,
-  LeftOutlined,
-  RightOutlined,
   HomeOutlined,
   ApiOutlined,
   CodeOutlined,
+  MessageOutlined,
 } from '@ant-design/icons';
-import { Button, Layout, Menu, theme, Grid, Avatar, Dropdown, Space, message, Breadcrumb } from 'antd';
+import { Button, Layout, Menu, Grid, Dropdown, message, Breadcrumb, Tooltip } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { logout, getUser } from '../utils/auth';
 import { ROUTES } from '../utils/constants';
 import React from 'react';
 
-const { Header, Sider, Content } = Layout;
+const { Sider, Content } = Layout;
 const { useBreakpoint } = Grid;
+const feedbackUrl = 'https://github.com/abc3/hydra-srt/issues/new';
 
 const getDefaultBreadcrumbItems = (path) => {
   if (path.startsWith(ROUTES.ROUTES)) {
@@ -96,10 +94,6 @@ const MainLayout = ({ children }) => {
   const screens = useBreakpoint();
   const navigate = useNavigate();
   const location = useLocation();
-  const {
-    token: { colorBgContainer, borderRadiusLG },
-  } = theme.useToken();
-
   // Expose setBreadcrumbItems to window object for child components
   useEffect(() => {
     window.setBreadcrumbItems = setBreadcrumbItems;
@@ -162,14 +156,6 @@ const MainLayout = ({ children }) => {
       label: 'Settings',
     },
   ];
-
-  // Get the first letter of the username for the avatar
-  const getAvatarText = () => {
-    if (user) {
-      return user.charAt(0).toUpperCase();
-    }
-    return 'U';
-  };
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -237,7 +223,7 @@ const MainLayout = ({ children }) => {
         <div style={{ 
           overflowY: 'auto', 
           flex: '1 1 auto',
-          paddingBottom: 80,
+          paddingBottom: collapsed ? 72 : 84,
         }}>
           <Menu
             theme="dark"
@@ -265,7 +251,6 @@ const MainLayout = ({ children }) => {
           />
         </div>
         
-        {/* User profile at bottom of sidebar */}
         <div
           style={{
             borderTop: '1px solid #1a1a1a',
@@ -277,63 +262,50 @@ const MainLayout = ({ children }) => {
             background: '#000000',
           }}
         >
-          <Dropdown
-            menu={dropdownItems}
-            trigger={['click']}
-            placement={collapsed ? 'rightTop' : 'top'}
-          >
-            <Button 
-              type="text" 
-              style={{ 
-                width: '100%', 
-                textAlign: 'left',
-                padding: collapsed ? '16px 0' : '16px 12px',
-                height: 'auto',
-                borderRadius: 0,
-                border: '1px solid #1a1a1a',
-                borderLeft: 'none',
-                borderRight: 'none',
-                borderBottom: 'none',
+          <Tooltip title="Request a feature or report a bug" placement={collapsed ? 'right' : 'top'}>
+            <a
+              href={feedbackUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Request a feature or report a bug"
+              style={{
+                minHeight: collapsed ? 56 : 68,
+                padding: collapsed ? '12px 0' : '12px 16px',
+                borderBottom: '1px solid #1a1a1a',
+                color: 'rgba(255, 255, 255, 0.78)',
                 display: 'flex',
                 alignItems: 'center',
+                justifyContent: collapsed ? 'center' : 'flex-start',
+                gap: 12,
+                textDecoration: 'none',
+                transition: 'color 0.2s, background 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = '#ffffff';
+                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.04)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = 'rgba(255, 255, 255, 0.78)';
+                e.currentTarget.style.background = 'transparent';
               }}
             >
-              <Space align="center" style={{ width: '100%', justifyContent: collapsed ? 'center' : 'flex-start' }}>
-                <Avatar
-                  size={32}
+              <MessageOutlined style={{ fontSize: 16 }} />
+              {!collapsed && (
+                <span
                   style={{
-                    backgroundColor: '#4169e1', // Royal blue
-                    color: '#fff',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    lineHeight: 1.2,
                   }}
                 >
-                  {getAvatarText()}
-                </Avatar>
-                {!collapsed && (
-                  <div style={{ 
-                    display: 'flex', 
-                    flexDirection: 'column', 
-                    alignItems: 'flex-start',
-                    marginLeft: 8,
-                  }}>
-                    <span style={{ 
-                      color: 'rgba(255, 255, 255, 0.85)', 
-                      lineHeight: '1.2',
-                      fontSize: '14px',
-                      fontWeight: '500',
-                    }}>
-                      {user || 'admin'}
-                    </span>
-                    <small style={{ 
-                      color: 'rgba(255, 255, 255, 0.45)', 
-                      fontSize: '12px',
-                    }}>
-                      View profile
-                    </small>
-                  </div>
-                )}
-              </Space>
-            </Button>
-          </Dropdown>
+                  <span style={{ fontSize: 14, fontWeight: 500 }}>Feedback</span>
+                  <span style={{ color: 'rgba(255, 255, 255, 0.45)', fontSize: 12 }}>
+                    Request a feature or report a bug
+                  </span>
+                </span>
+              )}
+            </a>
+          </Tooltip>
         </div>
       </Sider>
       <Layout style={{ 
@@ -385,7 +357,27 @@ const MainLayout = ({ children }) => {
               }}
             />
           </div>
-          <div />
+          <Dropdown
+            menu={dropdownItems}
+            trigger={['click']}
+            placement="bottomRight"
+          >
+            <Button
+              type="text"
+              style={{
+                height: 44,
+                padding: '6px 12px',
+                borderRadius: 6,
+                display: 'flex',
+                alignItems: 'center',
+                color: 'rgba(255, 255, 255, 0.85)',
+                fontSize: 14,
+                fontWeight: 500,
+              }}
+            >
+              {user || 'admin'}
+            </Button>
+          </Dropdown>
         </div>
         <Content
           style={{
