@@ -80,10 +80,10 @@ defmodule HydraSrt.E2E.SrtDestinationDisconnectDoesNotBlockUdpE2ETest do
         "srt-live-transmit-disconnect"
       )
 
-    Process.sleep(750)
+    Process.sleep(E2EHelpers.e2e_startup_sleep_ms())
 
     :ok = E2EHelpers.api_start_route!(base_url, token, route_id)
-    Process.sleep(750)
+    Process.sleep(E2EHelpers.e2e_startup_sleep_ms())
 
     tx =
       E2EHelpers.start_port_logged!(
@@ -133,7 +133,28 @@ defmodule HydraSrt.E2E.SrtDestinationDisconnectDoesNotBlockUdpE2ETest do
       E2EHelpers.kill_port(srt_rx)
     end)
 
-    assert is_integer(E2EHelpers.await_srt_packets_received(100, 5_000))
+    E2EHelpers.wait_until(
+      fn ->
+        case E2EHelpers.api_get_route(base_url, token, route_id) do
+          {:ok, route} ->
+            route["schema_status"] == "processing" and
+              length(route["destinations"]) == 2 and
+              Enum.all?(route["destinations"], fn destination ->
+                destination["status"] == "processing"
+              end)
+
+          _ ->
+            false
+        end
+      end,
+      10_000,
+      250
+    )
+
+    assert {:ok, %{bytes: probe_bytes}} =
+             E2EHelpers.await_udp_bytes(srt_probe_counter, 20_000, 5_000)
+
+    assert probe_bytes >= 20_000
 
     assert {:ok, %{bytes: udp_bytes_before_disconnect}} =
              E2EHelpers.await_udp_bytes(udp_dest_counter, 1, 5_000)

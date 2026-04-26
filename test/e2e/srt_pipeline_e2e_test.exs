@@ -64,10 +64,10 @@ defmodule HydraSrt.E2E.SrtPipelineE2ETest do
       )
 
     # Give srt-live-transmit a moment to bind and enter listen() before we start the pipeline.
-    Process.sleep(750)
+    Process.sleep(E2EHelpers.e2e_startup_sleep_ms())
 
     :ok = E2EHelpers.api_start_route!(base_url, token, route_id)
-    Process.sleep(750)
+    Process.sleep(E2EHelpers.e2e_startup_sleep_ms())
 
     tx =
       E2EHelpers.start_port_logged!(
@@ -117,24 +117,12 @@ defmodule HydraSrt.E2E.SrtPipelineE2ETest do
       E2EHelpers.kill_port(rx)
     end)
 
-    E2EHelpers.wait_until(
-      fn ->
-        case E2EHelpers.api_get_route(base_url, token, route_id) do
-          {:ok, route} ->
-            route["schema_status"] == "processing" and
-              Enum.all?(route["destinations"], fn destination ->
-                destination["status"] == "processing"
-              end)
+    E2EHelpers.wait_for_route_processing!(base_url, token, route_id)
 
-          _ ->
-            false
-        end
-      end,
-      10_000,
-      250
-    )
+    assert {:ok, %{bytes: probe_bytes}} =
+             E2EHelpers.await_udp_bytes(udp_counter, 20_000, 5_000)
 
-    assert is_integer(E2EHelpers.await_srt_packets_received(100, 5_000))
+    assert probe_bytes >= 20_000
     assert E2EHelpers.await_tag_exit_status("ffmpeg", 10_000) == 0
   end
 end
