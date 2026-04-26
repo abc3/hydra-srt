@@ -289,6 +289,14 @@ defmodule HydraSrt.RouteHandler do
 
   @doc false
   def stats_events(%{} = stats, route_id) when is_binary(route_id) do
+    snapshot_events = [
+      %{
+        route_id: route_id,
+        metric: "snapshot",
+        stats: stats
+      }
+    ]
+
     in_events =
       case get_in(stats, ["source", "bytes_in_per_sec"]) do
         value when is_number(value) ->
@@ -325,7 +333,7 @@ defmodule HydraSrt.RouteHandler do
           []
       end)
 
-    in_events ++ out_events
+    snapshot_events ++ in_events ++ out_events
   end
 
   defp mark_route_terminated(route_id, {:port_exit, status}) when status not in [0, :normal] do

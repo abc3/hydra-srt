@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Table, Card, Button, Tag, Space, Typography, message, Modal, Dropdown, Tooltip, Input, Badge } from 'antd';
+import { Table, Card, Button, Tag, Space, Typography, message, Modal, Dropdown, Tooltip, Input, Badge, Drawer, Tree, Empty } from 'antd';
 import {
   PlusOutlined,
   EditOutlined,
@@ -10,6 +10,8 @@ import {
   HomeOutlined,
   HolderOutlined,
   SearchOutlined,
+  BarChartOutlined,
+  DownOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
@@ -23,7 +25,7 @@ import {
   isRouteBusy,
 } from '../../utils/routes';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 const ONE_MINUTE_SECONDS = 60;
 const ONE_HOUR_SECONDS = 60 * ONE_MINUTE_SECONDS;
 const ONE_DAY_SECONDS = 24 * ONE_HOUR_SECONDS;
@@ -68,11 +70,6 @@ const hasRouteReachedActionResult = (route, action) => {
   }
 
   return runtimeStatus === 'stopped' || runtimeStatus === 'failed';
-};
-
-const getUpdatedAtMs = (value) => {
-  const parsed = new Date(value).getTime();
-  return Number.isNaN(parsed) ? 0 : parsed;
 };
 
 const formatUptime = (startedAt, status, nowMs) => {
@@ -135,29 +132,6 @@ const formatUptime = (startedAt, status, nowMs) => {
   return parts.join('');
 };
 
-const formatLastUpdated = (date) => {
-  if (!date) {
-    return '-';
-  }
-
-  const parsedDate = new Date(date);
-
-  if (Number.isNaN(parsedDate.getTime())) {
-    return '-';
-  }
-
-  const pad = (value) => String(value).padStart(2, '0');
-
-  const hours = pad(parsedDate.getHours());
-  const minutes = pad(parsedDate.getMinutes());
-  const seconds = pad(parsedDate.getSeconds());
-  const day = pad(parsedDate.getDate());
-  const month = pad(parsedDate.getMonth() + 1);
-  const year = parsedDate.getFullYear();
-
-  return `${hours}:${minutes}:${seconds} ${day}/${month}/${year}`;
-};
-
 const formatBitrate = (bytesPerSecond) => {
   if (typeof bytesPerSecond !== 'number' || Number.isNaN(bytesPerSecond)) {
     return '-';
@@ -200,10 +174,71 @@ const getRouteAddress = (route) => {
   return 'N/A';
 };
 
+const formatStatsValue = (value) => {
+  if (value === null) {
+    return 'null';
+  }
+
+  if (value === undefined) {
+    return 'undefined';
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  return String(value);
+};
+
+const buildStatsTreeData = (value, path = 'stats', label = 'stats') => {
+  if (Array.isArray(value)) {
+    return {
+      title: `${label} [${value.length}]`,
+      key: path,
+      children: value.map((item, index) => buildStatsTreeData(item, `${path}.${index}`, `[${index}]`)),
+    };
+  }
+
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value);
+
+    return {
+      title: `${label} {${entries.length}}`,
+      key: path,
+      children: entries.map(([key, childValue]) => buildStatsTreeData(childValue, `${path}.${key}`, key)),
+    };
+  }
+
+  return {
+    title: (
+      <span>
+        <Text>{label}: </Text>
+        <Text code>{formatStatsValue(value)}</Text>
+      </span>
+    ),
+    key: path,
+  };
+};
+
+const collectTreeKeys = (nodes) => {
+  const keys = [];
+
+  nodes.forEach((node) => {
+    keys.push(node.key);
+
+    if (node.children?.length) {
+      keys.push(...collectTreeKeys(node.children));
+    }
+  });
+
+  return keys;
+};
+
 const Routes = () => {
   const [routes, setRoutes] = useState([]);
   const [routesFilter, setRoutesFilter] = useState('');
   const [routeStats, setRouteStats] = useState({});
+  const [statsDrawerRouteId, setStatsDrawerRouteId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pendingRouteActions, setPendingRouteActions] = useState({});
@@ -237,11 +272,26 @@ const Routes = () => {
         const routeId = payload?.route_id;
         const value = payload?.value;
 
-        if (!routeId || typeof value !== 'number') {
+        if (!routeId) {
           return prev;
         }
 
         const current = prev[routeId] || { outByDestination: {} };
+
+        if (payload.metric === 'snapshot' && payload.stats && typeof payload.stats === 'object') {
+          return {
+            ...prev,
+            [routeId]: {
+              ...current,
+              snapshot: payload.stats,
+              outByDestination: current.outByDestination || {},
+            },
+          };
+        }
+
+        if (typeof value !== 'number') {
+          return prev;
+        }
 
         if (payload.direction === 'in') {
           return {
@@ -494,11 +544,17 @@ const Routes = () => {
       render: (_, record) => formatUptime(record.started_at, record.status, nowMs),
     },
     {
-      title: 'Updated',
-      dataIndex: 'updated_at',
-      key: 'updated_at',
-      sorter: (a, b) => getUpdatedAtMs(a.updated_at) - getUpdatedAtMs(b.updated_at),
-      render: (date) => formatLastUpdated(date),
+      title: 'Stats',
+      key: 'stats',
+      align: 'center',
+      render: (_, record) => (
+        <Tooltip title="Stats">
+          <Button
+            icon={<BarChartOutlined />}
+            onClick={() => setStatsDrawerRouteId(record.id)}
+          />
+        </Tooltip>
+      ),
     },
     {
       title: 'Actions',
@@ -573,6 +629,10 @@ const Routes = () => {
         return routeName.includes(normalizedRoutesFilter) || routeAddress.includes(normalizedRoutesFilter);
       })
     : routes;
+  const statsDrawerRoute = routes.find((route) => route.id === statsDrawerRouteId);
+  const statsSnapshot = statsDrawerRouteId ? routeStats[statsDrawerRouteId]?.snapshot : null;
+  const statsTreeData = statsSnapshot ? [buildStatsTreeData(statsSnapshot)] : [];
+  const expandedStatsKeys = collectTreeKeys(statsTreeData);
 
   return (
     <div>
@@ -613,6 +673,23 @@ const Routes = () => {
           />
         </Card>
       </Space>
+      <Drawer
+        title={`Stats${statsDrawerRoute?.name ? `: ${statsDrawerRoute.name}` : ''}`}
+        open={!!statsDrawerRouteId}
+        onClose={() => setStatsDrawerRouteId(null)}
+        width={640}
+      >
+        {statsTreeData.length > 0 ? (
+          <Tree
+            showLine
+            switcherIcon={<DownOutlined />}
+            expandedKeys={expandedStatsKeys}
+            treeData={statsTreeData}
+          />
+        ) : (
+          <Empty description="No stats received yet" />
+        )}
+      </Drawer>
     </div>
   );
 };
