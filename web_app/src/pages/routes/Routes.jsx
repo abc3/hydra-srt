@@ -177,8 +177,32 @@ const formatBitrate = (bytesPerSecond) => {
   return `${value.toFixed(digits)} ${units[unitIndex]}`;
 };
 
+const getRouteAddress = (route) => {
+  if (!route) {
+    return 'N/A';
+  }
+
+  const schemaOptions = route.schema_options || {};
+  const schema = route.schema;
+
+  if (schema === 'SRT') {
+    const address = schemaOptions.localaddress || 'N/A';
+    const port = schemaOptions.localport || 'N/A';
+    return `${address}:${port}`;
+  }
+
+  if (schema === 'UDP') {
+    const address = schemaOptions.host || schemaOptions.address || 'N/A';
+    const port = schemaOptions.port || 'N/A';
+    return `${address}:${port}`;
+  }
+
+  return 'N/A';
+};
+
 const Routes = () => {
   const [routes, setRoutes] = useState([]);
+  const [routesFilter, setRoutesFilter] = useState('');
   const [routeStats, setRouteStats] = useState({});
   const [loading, setLoading] = useState(true);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -405,6 +429,12 @@ const Routes = () => {
       },
     },
     {
+      title: 'Addr',
+      key: 'addr',
+      render: (_, record) => getRouteAddress(record),
+      sorter: (a, b) => getRouteAddress(a).localeCompare(getRouteAddress(b)),
+    },
+    {
       title: 'Enabled',
       dataIndex: 'enabled',
       key: 'enabled',
@@ -535,6 +565,15 @@ const Routes = () => {
     },
   ];
 
+  const normalizedRoutesFilter = routesFilter.trim().toLowerCase();
+  const filteredRoutes = normalizedRoutesFilter
+    ? routes.filter((route) => {
+        const routeName = (route.name || '').toLowerCase();
+        const routeAddress = getRouteAddress(route).toLowerCase();
+        return routeName.includes(normalizedRoutesFilter) || routeAddress.includes(normalizedRoutesFilter);
+      })
+    : routes;
+
   return (
     <div>
       {contextHolder}
@@ -554,9 +593,16 @@ const Routes = () => {
         </Space>
 
         <Card>
+          <Input
+            prefix={<SearchOutlined />}
+            placeholder="Filter routes by name or address"
+            style={{ marginBottom: 16, width: '100%' }}
+            value={routesFilter}
+            onChange={(event) => setRoutesFilter(event.target.value)}
+          />
           <Table
             columns={columns}
-            dataSource={routes}
+            dataSource={filteredRoutes}
             rowKey="id"
             loading={loading}
             pagination={{
