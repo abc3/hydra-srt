@@ -25,6 +25,32 @@ defmodule HydraSrtTest do
     assert DateTime.compare(updated["started_at"], after_ts) in [:eq, :lt]
   end
 
+  test "mark_route_started/1 marks route as starting until native processing begins" do
+    route =
+      route_fixture(%{
+        status: "stopped",
+        schema_status: "stopped",
+        stopped_at: ~U[2025-02-18 15:01:00Z]
+      })
+
+    destination_fixture(route, %{status: "stopped", enabled: true})
+
+    before = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    assert {:ok, updated} = HydraSrt.mark_route_started(route.id)
+
+    after_ts = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    assert updated["status"] == "starting"
+    assert updated["schema_status"] == "starting"
+    assert updated["stopped_at"] == nil
+    assert DateTime.compare(updated["started_at"], before) in [:eq, :gt]
+    assert DateTime.compare(updated["started_at"], after_ts) in [:eq, :lt]
+
+    assert {:ok, reloaded_route} = Db.get_route(route.id, true)
+    assert Enum.all?(reloaded_route["destinations"], &is_nil(&1["status"]))
+  end
+
   test "set_route_status/2 sets stopped_at and keeps started_at when route stops" do
     started_at = ~U[2025-02-18 14:51:00Z]
 

@@ -38,7 +38,8 @@ import {
   getRouteRuntimeStatus,
   isRouteBusy,
   resolvePendingRouteStatus,
-} from "../../utils/routes";
+} from '../../utils/routes';
+import { getEndpointAddressString, renderEndpointAddress } from '../../utils/routeEndpointAddress';
 
 const { Title, Text } = Typography;
 const ROUTE_ACTION_POLL_ATTEMPTS = 5;
@@ -47,9 +48,9 @@ const ROUTE_ACTION_POLL_DELAY_MS = 250;
 const getRuntimeStatusMeta = (status) => {
   switch ((status || '').toLowerCase()) {
     case 'processing':
-      return { badgeStatus: 'processing', label: 'running' };
+      return { badgeStatus: 'success', label: 'running' };
     case 'started':
-      return { badgeStatus: 'success', label: status };
+      return { badgeStatus: 'processing', label: 'starting' };
     case 'starting':
     case 'stopping':
     case 'reconnecting':
@@ -69,19 +70,6 @@ const renderRuntimeStatusBadge = (status) => {
 };
 
 const getEndpointValue = (endpoint, key) => endpoint?.schema_options?.[key];
-
-const getEndpointAddress = (endpoint) => {
-  if (!endpoint) return 'N/A';
-
-  switch (endpoint.schema) {
-    case 'SRT':
-      return `${getEndpointValue(endpoint, 'localaddress') || 'N/A'}:${getEndpointValue(endpoint, 'localport') || 'N/A'}`;
-    case 'UDP':
-      return `${getEndpointValue(endpoint, 'host') || getEndpointValue(endpoint, 'address') || 'N/A'}:${getEndpointValue(endpoint, 'port') || 'N/A'}`;
-    default:
-      return 'N/A';
-  }
-};
 
 const getEndpointType = (endpoint) => {
   if (!endpoint) return 'N/A';
@@ -120,30 +108,6 @@ const formatLastUpdated = (date) => {
   const year = parsedDate.getFullYear();
 
   return `${hours}:${minutes}:${seconds} ${day}/${month}/${year}`;
-};
-
-const renderSrtModeTag = (mode) => {
-  switch (mode) {
-    case 'listener':
-      return <Tag color="default">L</Tag>;
-    case 'caller':
-      return <Tag color="processing">C</Tag>;
-    case 'rendezvous':
-      return <Tag color="warning">R</Tag>;
-    default:
-      return null;
-  }
-};
-
-const renderProtocolTag = (schema) => {
-  switch (schema) {
-    case 'SRT':
-      return <Tag color="blue">SRT</Tag>;
-    case 'UDP':
-      return <Tag color="cyan">UDP</Tag>;
-    default:
-      return null;
-  }
 };
 
 const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -351,7 +315,7 @@ const RouteItem = () => {
   // Filter destinations
   const filteredDestinations = routeData?.destinations.filter(dest =>
     dest.name.toLowerCase().includes(destinationFilter.toLowerCase()) ||
-    getEndpointAddress(dest).toLowerCase().includes(destinationFilter.toLowerCase())
+    getEndpointAddressString(dest).toLowerCase().includes(destinationFilter.toLowerCase())
   ) || [];
 
   const endpointsData = [
@@ -397,35 +361,26 @@ const RouteItem = () => {
     {
       title: 'Addr',
       key: 'addr',
-      render: (_, record) => {
-        const srtModeTag =
-          record.schema === 'SRT' ? renderSrtModeTag(getEndpointValue(record, 'mode')) : null;
-
-        return (
-          <Space size="small">
-            {renderProtocolTag(record.schema)}
-            {srtModeTag}
-            <span>{getEndpointAddress(record)}</span>
-          </Space>
-        );
-      },
-      sorter: (a, b) => getEndpointAddress(a).localeCompare(getEndpointAddress(b)),
+      render: (_, record) => renderEndpointAddress(record),
+      sorter: (a, b) => getEndpointAddressString(a).localeCompare(getEndpointAddressString(b)),
     },
     {
       title: 'Enabled',
       dataIndex: 'enabled',
       key: 'enabled',
       width: 120,
-      render: (enabled) => (
-        <Tag color={enabled ? 'success' : 'default'}>
-          {enabled ? 'Yes' : 'No'}
-        </Tag>
-      ),
+      render: (enabled, record) =>
+        record.rowType === 'destination' ? (
+          <Tag color={enabled ? 'success' : 'error'}>
+            {enabled ? 'Yes' : 'No'}
+          </Tag>
+        ) : null,
       filters: [
         { text: 'Enabled', value: true },
         { text: 'Disabled', value: false },
       ],
-      onFilter: (value, record) => record.enabled === value,
+      onFilter: (value, record) =>
+        record.rowType === 'source' || record.enabled === value,
     },
     {
       title: 'Status',
@@ -438,7 +393,7 @@ const RouteItem = () => {
         return renderRuntimeStatusBadge(endpointStatus);
       },
       filters: [
-        { text: 'Started', value: 'started' },
+        { text: 'Starting', value: 'starting' },
         { text: 'Processing', value: 'processing' },
         { text: 'Reconnecting', value: 'reconnecting' },
         { text: 'Failed', value: 'failed' },
@@ -571,11 +526,11 @@ const RouteItem = () => {
       if (error.message && error.message.includes('already_started')) {
         messageApi.info('Route is already started');
 
-        // Update the UI to reflect that the route is started
+        // Update the UI to reflect that the route is starting.
         setRouteData(prev => ({
           ...prev,
-          status: 'started',
-          schema_status: null
+          status: 'starting',
+          schema_status: 'starting'
         }));
       } else if (error.message && error.message.includes('not_found')) {
         messageApi.info('Route process not found. It may have already been stopped.');

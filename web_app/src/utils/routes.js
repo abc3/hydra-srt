@@ -35,7 +35,11 @@ export const resolvePendingRouteStatus = (currentStatus, incomingStatus, pending
 };
 
 export const getUptimeSeconds = (startedAt, status, nowMs) => {
-  if (typeof status !== 'string' || status.toLowerCase() !== 'started' || !startedAt) {
+  if (
+    typeof status !== 'string' ||
+    !ACTIVE_ROUTE_STATUSES.has(status.toLowerCase()) ||
+    !startedAt
+  ) {
     return null;
   }
 
@@ -49,8 +53,8 @@ export const getUptimeSeconds = (startedAt, status, nowMs) => {
 };
 
 export const compareUptime = (a, b, sortOrder, nowMs) => {
-  const uptimeA = getUptimeSeconds(a.started_at, a.status, nowMs);
-  const uptimeB = getUptimeSeconds(b.started_at, b.status, nowMs);
+  const uptimeA = getUptimeSeconds(a.started_at, getRouteRuntimeStatus(a), nowMs);
+  const uptimeB = getUptimeSeconds(b.started_at, getRouteRuntimeStatus(b), nowMs);
   const aMissing = uptimeA == null;
   const bMissing = uptimeB == null;
 

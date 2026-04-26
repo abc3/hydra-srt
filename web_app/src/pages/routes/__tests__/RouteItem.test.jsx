@@ -9,7 +9,7 @@ vi.mock('../../../utils/api', () => {
   return {
     routesApi: {
       stop: async () => ({ data: { status: 'stopped' } }),
-      start: async () => ({ data: { status: 'started' } }),
+      start: async () => ({ data: { status: 'starting' } }),
       getById: vi.fn(async () => ({
         data: {
           id: 'r1',
@@ -272,8 +272,8 @@ describe('RouteItem', () => {
     );
 
     expect(await screen.findByText('Enabled')).toBeInTheDocument();
-    expect(screen.getAllByText('Yes').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('No')).toBeInTheDocument();
+    expect(screen.getAllByText(/^Yes$/u).length).toBe(1);
+    expect(screen.getByText(/^No$/u)).toBeInTheDocument();
   });
 
   it('disables route delete while the route is started', async () => {

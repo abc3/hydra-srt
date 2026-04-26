@@ -16,7 +16,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
-import { subscribeToStats } from '../../utils/realtime';
+import { subscribeToItemStatus, subscribeToStats } from '../../utils/realtime';
 import {
   ACTIVE_ROUTE_STATUSES,
   compareUptime,
@@ -24,6 +24,7 @@ import {
   getRouteRuntimeStatus,
   isRouteBusy,
 } from '../../utils/routes';
+import { getEndpointAddressString, renderEndpointAddress } from '../../utils/routeEndpointAddress';
 
 const { Title, Text } = Typography;
 const ONE_MINUTE_SECONDS = 60;
@@ -38,9 +39,9 @@ const ROUTE_ACTION_POLL_DELAY_MS = 250;
 const getStatusMeta = (status) => {
   switch ((status || '').toLowerCase()) {
     case 'processing':
-      return { badgeStatus: 'processing', label: 'running' };
+      return { badgeStatus: 'success', label: 'running' };
     case 'started':
-      return { badgeStatus: 'success', label: status };
+      return { badgeStatus: 'processing', label: 'starting' };
     case 'starting':
     case 'stopping':
     case 'reconnecting':
@@ -72,7 +73,11 @@ const hasRouteReachedActionResult = (route, action) => {
 };
 
 const formatUptime = (startedAt, status, nowMs) => {
-  if (typeof status !== 'string' || status.toLowerCase() !== 'started' || !startedAt) {
+  if (
+    typeof status !== 'string' ||
+    !ACTIVE_ROUTE_STATUSES.has(status.toLowerCase()) ||
+    !startedAt
+  ) {
     return '-';
   }
 
@@ -150,29 +155,6 @@ const formatBitrate = (bytesPerSecond) => {
   return `${value.toFixed(digits)} ${units[unitIndex]}`;
 };
 
-const getRouteAddress = (route) => {
-  if (!route) {
-    return 'N/A';
-  }
-
-  const schemaOptions = route.schema_options || {};
-  const schema = route.schema;
-
-  if (schema === 'SRT') {
-    const address = schemaOptions.localaddress || 'N/A';
-    const port = schemaOptions.localport || 'N/A';
-    return `${address}:${port}`;
-  }
-
-  if (schema === 'UDP') {
-    const address = schemaOptions.host || schemaOptions.address || 'N/A';
-    const port = schemaOptions.port || 'N/A';
-    return `${address}:${port}`;
-  }
-
-  return 'N/A';
-};
-
 const formatStatsValue = (value) => {
   if (value === null) {
     return 'null';
@@ -244,6 +226,11 @@ const Routes = () => {
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
   const navigate = useNavigate();
+  const routeIdsSignature = routes
+    .map((route) => route?.id)
+    .filter(Boolean)
+    .sort()
+    .join('|');
 
   useEffect(() => {
     if (window.setBreadcrumbItems) {
@@ -266,7 +253,6 @@ const Routes = () => {
 
   useEffect(() => {
     return subscribeToStats((payload) => {
-      console.log('[realtime:stats]', payload);
       setRouteStats((prev) => {
         const routeId = payload?.route_id;
         const value = payload?.value;
@@ -320,6 +306,41 @@ const Routes = () => {
       });
     });
   }, []);
+
+  useEffect(() => {
+    const routeIds = routeIdsSignature ? routeIdsSignature.split('|') : [];
+
+    if (routeIds.length === 0) {
+      return undefined;
+    }
+
+    const unsubscribers = routeIds.map((routeId) =>
+      subscribeToItemStatus(routeId, (payload) => {
+        const itemId = payload?.item_id;
+        const status = payload?.status;
+
+        if (!itemId || typeof status !== 'string' || status.length === 0) {
+          return;
+        }
+
+        setRoutes((prev) =>
+          prev.map((route) =>
+            route.id === itemId
+              ? {
+                  ...route,
+                  status,
+                  schema_status: status,
+                }
+              : route
+          )
+        );
+      })
+    );
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [routeIdsSignature]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -478,10 +499,10 @@ const Routes = () => {
       },
     },
     {
-      title: 'Addr',
+      title: 'Source Addr',
       key: 'addr',
-      render: (_, record) => getRouteAddress(record),
-      sorter: (a, b) => getRouteAddress(a).localeCompare(getRouteAddress(b)),
+      render: (_, record) => renderEndpointAddress(record),
+      sorter: (a, b) => getEndpointAddressString(a).localeCompare(getEndpointAddressString(b)),
     },
     {
       title: 'Enabled',
@@ -493,8 +514,8 @@ const Routes = () => {
       ],
       onFilter: (value, record) => record.enabled === value,
       render: (enabled) => (
-        <Tag color={enabled ? 'green' : 'gray'}>
-          {enabled ? 'yes' : 'no'}
+        <Tag color={enabled ? 'green' : 'error'}>
+          {enabled ? 'Yes' : 'No'}
         </Tag>
       ),
     },
@@ -503,7 +524,7 @@ const Routes = () => {
       dataIndex: 'status',
       key: 'status',
       filters: [
-        { text: 'Started', value: 'started' },
+        { text: 'Starting', value: 'starting' },
         { text: 'Processing', value: 'processing' },
         { text: 'Reconnecting', value: 'reconnecting' },
         { text: 'Failed', value: 'failed' },
@@ -540,7 +561,7 @@ const Routes = () => {
       title: 'Uptime',
       key: 'uptime',
       sorter: (a, b, sortOrder) => compareUptime(a, b, sortOrder, nowMs),
-      render: (_, record) => formatUptime(record.started_at, record.status, nowMs),
+      render: (_, record) => formatUptime(record.started_at, getRouteRuntimeStatus(record), nowMs),
     },
     {
       title: 'Stats',
@@ -626,7 +647,7 @@ const Routes = () => {
   const filteredRoutes = normalizedRoutesFilter
     ? routes.filter((route) => {
         const routeName = (route.name || '').toLowerCase();
-        const routeAddress = getRouteAddress(route).toLowerCase();
+        const routeAddress = getEndpointAddressString(route).toLowerCase();
         return routeName.includes(normalizedRoutesFilter) || routeAddress.includes(normalizedRoutesFilter);
       })
     : routes;

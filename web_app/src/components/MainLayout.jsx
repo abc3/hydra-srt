@@ -389,8 +389,8 @@ const MainLayout = ({ children }) => {
         </div>
         <Content
           style={{
-            margin: screens.md ? '16px' : '8px',
-            padding: screens.md ? 16 : 12,
+            margin: 0,
+            padding: 21,
             minHeight: 280,
             borderRadius: 4,
             overflow: 'auto',

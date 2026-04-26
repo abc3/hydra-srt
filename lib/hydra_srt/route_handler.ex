@@ -34,17 +34,15 @@ defmodule HydraSrt.RouteHandler do
   @impl true
   def handle_event(:internal, :start, _state, data) do
     Logger.info("RouteHandler: starting route #{data.id}")
-    port = start_native_pipeline(data.route)
-    Logger.info("RouteHandler: Started port: #{inspect(port)}")
+    port = open_and_initialize_native_pipeline(data.route, data.id)
 
-    case send_initial_command(port, data.id) do
-      :ok ->
+    case port do
+      {:ok, port} ->
         HydraSrt.mark_route_started(data.id)
         {:next_state, :started, %{data | port: port}}
 
       {:error, reason} ->
         Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
-        kill_stale_pipeline_processes(data.id, "failed_start")
         {:stop, :normal, %{data | shutdown_reason: {:startup_failed, reason}}}
     end
   end
@@ -120,6 +118,41 @@ defmodule HydraSrt.RouteHandler do
     Logger.info("RouteHandler: reason: #{inspect(reason)}")
     mark_route_terminated(data.id, reason)
     :ok
+  end
+
+  defp open_and_initialize_native_pipeline(route, route_id) do
+    route
+    |> start_native_pipeline()
+    |> initialize_native_pipeline(route_id, true)
+  end
+
+  defp initialize_native_pipeline(port, route_id, retry_on_closed?) do
+    Logger.info("RouteHandler: Started port: #{inspect(port)}")
+
+    case send_initial_command(port, route_id) do
+      :ok ->
+        {:ok, port}
+
+      {:error, :closed} when retry_on_closed? ->
+        kill_stale_pipeline_processes(route_id, "failed_start_closed")
+
+        route_id
+        |> Db.get_route(true)
+        |> case do
+          {:ok, route} ->
+            route
+            |> start_native_pipeline()
+            |> initialize_native_pipeline(route_id, false)
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
+        kill_stale_pipeline_processes(route_id, "failed_start")
+        {:error, reason}
+    end
   end
 
   defp start_native_pipeline(route) do
