@@ -13,7 +13,11 @@ import {
   Input,
   Dropdown,
   Tooltip as AntTooltip,
-  Badge
+  Badge,
+  Select,
+  DatePicker,
+  Alert,
+  Empty
 } from 'antd';
 import {
   PlayCircleOutlined,
@@ -26,11 +30,12 @@ import {
   LoadingOutlined,
   SearchOutlined,
   HolderOutlined,
-  ArrowLeftOutlined
+  ArrowLeftOutlined,
+  ReloadOutlined
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
 import { routesApi, destinationsApi } from '../../utils/api';
-import { subscribeToItemStatus } from '../../utils/realtime';
+import { subscribeToItemStatus, subscribeToStats } from '../../utils/realtime';
 import { ROUTES } from "../../utils/constants";
 import {
   ACTIVE_ROUTE_STATUSES,
@@ -40,10 +45,35 @@ import {
   resolvePendingRouteStatus,
 } from '../../utils/routes';
 import { getEndpointAddressString, renderEndpointAddress } from '../../utils/routeEndpointAddress';
+import dayjs from 'dayjs';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts';
 
 const { Title, Text } = Typography;
 const ROUTE_ACTION_POLL_ATTEMPTS = 5;
 const ROUTE_ACTION_POLL_DELAY_MS = 250;
+const LIVE_ANALYTICS_WINDOW = 'live';
+const DEFAULT_ANALYTICS_WINDOW = LIVE_ANALYTICS_WINDOW;
+const CUSTOM_ANALYTICS_WINDOW = 'custom';
+const LIVE_WINDOW_MINUTES = 5;
+const ANALYTICS_COLORS = ['#1677ff', '#52c41a', '#faad14', '#722ed1', '#13c2c2', '#f5222d', '#2f54eb'];
+
+const ANALYTICS_WINDOW_OPTIONS = [
+  { label: 'live', value: LIVE_ANALYTICS_WINDOW },
+  { label: 'last 30 min', value: 'last_30_min' },
+  { label: 'last hour', value: 'last_hour' },
+  { label: 'last 6 hour', value: 'last_6_hour' },
+  { label: 'last 24 hour', value: 'last_24_hour' },
+  { label: 'custom range', value: CUSTOM_ANALYTICS_WINDOW },
+];
 
 const getRuntimeStatusMeta = (status) => {
   switch ((status || '').toLowerCase()) {
@@ -110,6 +140,62 @@ const formatLastUpdated = (date) => {
   return `${hours}:${minutes}:${seconds} ${day}/${month}/${year}`;
 };
 
+const formatChartTimestamp = (value, includeSeconds = false) => {
+  if (!value) {
+    return '';
+  }
+
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return '';
+  }
+
+  const pad = (input) => String(input).padStart(2, '0');
+  const hours = pad(parsed.getHours());
+  const minutes = pad(parsed.getMinutes());
+
+  if (!includeSeconds) {
+    return `${hours}:${minutes}`;
+  }
+
+  const seconds = pad(parsed.getSeconds());
+  return `${hours}:${minutes}:${seconds}`;
+};
+
+const formatBitrate = (bytesPerSecond) => {
+  if (typeof bytesPerSecond !== 'number' || Number.isNaN(bytesPerSecond)) {
+    return '-';
+  }
+
+  const bitsPerSecond = bytesPerSecond * 8;
+  const units = ['bps', 'Kbps', 'Mbps', 'Gbps'];
+  let value = bitsPerSecond;
+  let unitIndex = 0;
+
+  while (value >= 1000 && unitIndex < units.length - 1) {
+    value /= 1000;
+    unitIndex += 1;
+  }
+
+  const digits = value >= 100 || unitIndex === 0 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
+};
+
+const toNumberOrNull = (value) => {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return null;
+  }
+
+  return value;
+};
+
+const alignToSecondIso = (date = new Date()) => {
+  const aligned = new Date(date);
+  aligned.setMilliseconds(0);
+  return aligned.toISOString();
+};
+
 const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 const hasRouteReachedActionResult = (route, action) => {
@@ -131,6 +217,19 @@ const RouteItem = () => {
   const [modal, modalContextHolder] = Modal.useModal();
   const [destinationFilter, setDestinationFilter] = useState('');
   const [pendingAction, setPendingAction] = useState(null);
+  const [analyticsWindow, setAnalyticsWindow] = useState(DEFAULT_ANALYTICS_WINDOW);
+  const [customRangeDraft, setCustomRangeDraft] = useState([
+    dayjs().subtract(1, 'hour'),
+    dayjs(),
+  ]);
+  const [customRangeApplied, setCustomRangeApplied] = useState([
+    dayjs().subtract(1, 'hour'),
+    dayjs(),
+  ]);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState(null);
+  const [analyticsData, setAnalyticsData] = useState({ points: [], meta: null });
+  const [analyticsRefreshTick, setAnalyticsRefreshTick] = useState(0);
   const destinationIdsSignature = (routeData?.destinations || [])
     .map((destination) => destination?.id)
     .filter(Boolean)
@@ -241,6 +340,133 @@ const RouteItem = () => {
     }
   };
 
+  const fetchAnalyticsData = async (queryParams) => {
+    const normalizePoint = (point) => {
+      const rawDestinations = point?.destinations || {};
+      const normalizedDestinations = Object.entries(rawDestinations).reduce((acc, [destinationId, value]) => {
+        acc[destinationId] = toNumberOrNull(value);
+        return acc;
+      }, {});
+
+      return {
+        timestamp: point?.timestamp,
+        source: toNumberOrNull(point?.source),
+        destinations: normalizedDestinations,
+      };
+    };
+
+    try {
+      setAnalyticsLoading(true);
+      setAnalyticsError(null);
+      const result = await routesApi.getAnalytics(id, queryParams);
+      const nextData = result?.data || { points: [], meta: null };
+      setAnalyticsData({
+        ...nextData,
+        points: (nextData.points || []).map(normalizePoint),
+      });
+    } catch (error) {
+      setAnalyticsError(error.message || 'Failed to fetch analytics data');
+      setAnalyticsData({ points: [], meta: null });
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!id) {
+      return;
+    }
+
+    const queryParams = {};
+
+    if (analyticsWindow === LIVE_ANALYTICS_WINDOW) {
+      const liveTo = dayjs();
+      const liveFrom = liveTo.subtract(LIVE_WINDOW_MINUTES, 'minute');
+      queryParams.from = liveFrom.toISOString();
+      queryParams.to = liveTo.toISOString();
+    } else if (analyticsWindow === CUSTOM_ANALYTICS_WINDOW) {
+      const [customFrom, customTo] = customRangeApplied;
+
+      if (!customFrom || !customTo) {
+        return;
+      }
+
+      queryParams.from = customFrom.toISOString();
+      queryParams.to = customTo.toISOString();
+    } else {
+      queryParams.window = analyticsWindow;
+    }
+
+    fetchAnalyticsData(queryParams);
+  }, [id, analyticsWindow, customRangeApplied, analyticsRefreshTick]);
+
+  useEffect(() => {
+    if (!id || analyticsWindow !== LIVE_ANALYTICS_WINDOW) {
+      return undefined;
+    }
+
+    return subscribeToStats((payload) => {
+      if (payload?.route_id !== id || payload?.metric !== 'snapshot' || !payload?.stats) {
+        return;
+      }
+
+      const snapshotTs = alignToSecondIso(new Date());
+      const snapshotSource = toNumberOrNull(payload?.stats?.source?.bytes_in_per_sec);
+      const snapshotDestinations = (payload?.stats?.destinations || []).reduce((acc, destination) => {
+        if (!destination?.id) {
+          return acc;
+        }
+
+        acc[destination.id] = toNumberOrNull(destination?.bytes_out_per_sec);
+        return acc;
+      }, {});
+      const cutoffMs = Date.now() - (LIVE_WINDOW_MINUTES * 60 * 1000);
+
+      setAnalyticsData((prev) => {
+        const prevPoints = prev?.points || [];
+        const existingIndex = prevPoints.findIndex((point) => point.timestamp === snapshotTs);
+        const nextPoint = {
+          timestamp: snapshotTs,
+          source: snapshotSource,
+          destinations: snapshotDestinations,
+        };
+
+        const mergedPoints =
+          existingIndex >= 0
+            ? prevPoints.map((point, index) => (index === existingIndex ? nextPoint : point))
+            : [...prevPoints, nextPoint];
+
+        const trimmedPoints = mergedPoints
+          .filter((point) => {
+            const pointMs = Date.parse(point.timestamp);
+            return !Number.isNaN(pointMs) && pointMs >= cutoffMs;
+          })
+          .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+
+        return {
+          ...prev,
+          points: trimmedPoints,
+        };
+      });
+    });
+  }, [id, analyticsWindow]);
+
+  const applyCustomRange = () => {
+    const [customFrom, customTo] = customRangeDraft;
+
+    if (!customFrom || !customTo) {
+      messageApi.error('Please select both start and end date');
+      return;
+    }
+
+    if (customFrom.valueOf() >= customTo.valueOf()) {
+      messageApi.error('Start date must be earlier than end date');
+      return;
+    }
+
+    setCustomRangeApplied([customFrom, customTo]);
+  };
+
   const fetchRouteDataSnapshot = async () => {
     const result = await routesApi.getById(id);
     return result.data;
@@ -327,6 +553,35 @@ const RouteItem = () => {
       rowType: 'destination',
     })),
   ];
+
+  const destinationNameById = (routeData?.destinations || []).reduce((acc, destination) => {
+    if (destination?.id) {
+      acc[destination.id] = destination.name || destination.id;
+    }
+
+    return acc;
+  }, {});
+
+  const analyticsPoints = analyticsData?.points || [];
+  const destinationSeriesIds = Array.from(
+    new Set(
+      analyticsPoints.flatMap((point) => Object.keys(point?.destinations || {}))
+    )
+  );
+
+  const chartData = analyticsPoints.map((point) => {
+    const destinationValues = Object.entries(point.destinations || {}).reduce((acc, [destinationId, value]) => {
+      acc[`dest_${destinationId}`] = value;
+      return acc;
+    }, {});
+
+    return {
+      timestamp: point.timestamp,
+      xLabel: formatChartTimestamp(point.timestamp, analyticsWindow === LIVE_ANALYTICS_WINDOW),
+      source: point.source,
+      ...destinationValues,
+    };
+  });
 
   const endpointColumns = [
     {
@@ -653,6 +908,91 @@ const RouteItem = () => {
           </Space>
         </Col>
       </Row>
+
+      <Card
+        title="Bandwidth"
+        extra={(
+          <Space wrap>
+            <Select
+              value={analyticsWindow}
+              onChange={setAnalyticsWindow}
+              options={ANALYTICS_WINDOW_OPTIONS}
+              style={{ minWidth: 180 }}
+            />
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={() => setAnalyticsRefreshTick((prev) => prev + 1)}
+              loading={analyticsLoading}
+              disabled={analyticsWindow === LIVE_ANALYTICS_WINDOW}
+            >
+              Refresh
+            </Button>
+            {analyticsWindow === CUSTOM_ANALYTICS_WINDOW && (
+              <>
+                <DatePicker
+                  showTime
+                  value={customRangeDraft[0]}
+                  onChange={(value) => setCustomRangeDraft((prev) => [value, prev[1]])}
+                  placeholder="Start time"
+                />
+                <DatePicker
+                  showTime
+                  value={customRangeDraft[1]}
+                  onChange={(value) => setCustomRangeDraft((prev) => [prev[0], value])}
+                  placeholder="End time"
+                />
+                <Button onClick={applyCustomRange}>Apply</Button>
+              </>
+            )}
+          </Space>
+        )}
+      >
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          {analyticsError && (
+            <Alert type="error" showIcon message={analyticsError} />
+          )}
+
+          {!analyticsError && chartData.length === 0 && !analyticsLoading && (
+            <Empty description="No analytics data for selected period" />
+          )}
+
+          <div style={{ width: '100%', height: 320 }}>
+            <ResponsiveContainer>
+              <LineChart data={chartData} margin={{ top: 8, right: 20, left: 28, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="xLabel" />
+                <YAxis width={88} tickMargin={8} tickFormatter={(value) => formatBitrate(value)} />
+                <RechartsTooltip
+                  labelFormatter={(_label, payload) => payload?.[0]?.payload?.timestamp || ''}
+                  formatter={(value) => formatBitrate(value)}
+                />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="source"
+                  name={`${routeData.name || 'Source'} in`}
+                  stroke={ANALYTICS_COLORS[0]}
+                  dot={false}
+                  isAnimationActive={false}
+                  connectNulls
+                />
+                {destinationSeriesIds.map((destinationId, index) => (
+                  <Line
+                    key={destinationId}
+                    type="monotone"
+                    dataKey={`dest_${destinationId}`}
+                    name={`${destinationNameById[destinationId] || destinationId} out`}
+                    stroke={ANALYTICS_COLORS[(index + 1) % ANALYTICS_COLORS.length]}
+                    dot={false}
+                    isAnimationActive={false}
+                    connectNulls
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Space>
+      </Card>
 
       <Card
         title="Endpoints"

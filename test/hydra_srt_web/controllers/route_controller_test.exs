@@ -159,7 +159,25 @@ defmodule HydraSrtWeb.RouteControllerTest do
     end
   end
 
-  defp create_route(_) do
+  describe "analytics" do
+    setup [:create_route]
+
+    test "returns route analytics from analytics database", %{conn: conn, route: %{id: id}} do
+      conn = get(conn, "/api/routes/#{id}/analytics?window=last_hour")
+      response = json_response(conn, 200)
+
+      assert %{"data" => %{"meta" => meta, "points" => points}} = response
+      assert meta["window"] == "last_hour"
+      assert is_integer(meta["bucket_ms"])
+      assert is_list(points)
+
+      assert Enum.all?(points, fn point ->
+               is_binary(point["timestamp"]) and is_map(point["destinations"])
+             end)
+    end
+  end
+
+  def create_route(_) do
     route = route_fixture()
     %{route: route}
   end
