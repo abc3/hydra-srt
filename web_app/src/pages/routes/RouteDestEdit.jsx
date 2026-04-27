@@ -9,11 +9,48 @@ import { InfoCircleOutlined, SaveOutlined, ArrowLeftOutlined, HomeOutlined, Load
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
-import { destinationsApi, routesApi } from '../../utils/api';
+import { destinationsApi, interfacesApi, routesApi } from '../../utils/api';
 import React from 'react';
 import { ROUTES } from '../../utils/constants';
 
 const { Title } = Typography;
+
+const normalizeSrtOptionsForForm = (destination) => {
+    if (!destination || destination.schema !== 'SRT') {
+        return destination;
+    }
+
+    const schemaOptions = destination.schema_options || {};
+    const mode = schemaOptions.mode;
+
+    if (mode !== 'caller') {
+        return destination;
+    }
+
+    const normalizedOptions = { ...schemaOptions };
+
+    if (
+        (normalizedOptions.address === undefined || normalizedOptions.address === null || normalizedOptions.address === '') &&
+        typeof normalizedOptions.localaddress === 'string' &&
+        normalizedOptions.localaddress !== ''
+    ) {
+        normalizedOptions.address = normalizedOptions.localaddress;
+    }
+
+    if (
+        (normalizedOptions.port === undefined || normalizedOptions.port === null || normalizedOptions.port === '') &&
+        normalizedOptions.localport !== undefined &&
+        normalizedOptions.localport !== null &&
+        normalizedOptions.localport !== ''
+    ) {
+        normalizedOptions.port = normalizedOptions.localport;
+    }
+
+    return {
+        ...destination,
+        schema_options: normalizedOptions,
+    };
+};
 
 const RouteDestEdit = ({ initialValues, onChange }) => {
     const [form] = Form.useForm();
@@ -21,6 +58,8 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
     const { routeId, destId } = useParams();
     const [messageApi, contextHolder] = message.useMessage();
     const [loading, setLoading] = useState(destId !== 'new');
+    const [interfacesLoading, setInterfacesLoading] = useState(false);
+    const [interfaceOptions, setInterfaceOptions] = useState([]);
     const dataFetchedRef = useRef(false);
     const [routeData, setRouteData] = useState(null);
     const [destData, setDestData] = useState(null);
@@ -74,8 +113,9 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
 
             destinationsApi.getById(routeId, destId)
                 .then(result => {
-                    setDestData(result.data);
-                    form.setFieldsValue(result.data);
+                    const normalizedDestination = normalizeSrtOptionsForForm(result.data);
+                    setDestData(normalizedDestination);
+                    form.setFieldsValue(normalizedDestination);
                     setLoading(false);
                 })
                 .catch(error => {
@@ -85,6 +125,43 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                 });
         }
     }, [routeId, destId, form, messageApi]);
+
+    useEffect(() => {
+        let mounted = true;
+
+        const loadInterfaces = async () => {
+            setInterfacesLoading(true);
+
+            try {
+                const result = await interfacesApi.getAll();
+                const rows = Array.isArray(result?.data) ? result.data : [];
+                const enabledRows = rows.filter((item) => item?.enabled !== false);
+
+                const options = enabledRows.map((item) => ({
+                    label: `${item.name || item.sys_name} (${item.sys_name} - ${item.ip || 'N/A'})`,
+                    value: item.sys_name,
+                }));
+
+                if (mounted) {
+                    setInterfaceOptions(options);
+                }
+            } catch (error) {
+                if (mounted) {
+                    messageApi.error(`Failed to load interfaces: ${error.message}`);
+                }
+            } finally {
+                if (mounted) {
+                    setInterfacesLoading(false);
+                }
+            }
+        };
+
+        loadInterfaces();
+
+        return () => {
+            mounted = false;
+        };
+    }, [messageApi]);
 
     const availableNodes = [
         { label: 'self', value: 'self' }
@@ -174,7 +251,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                         <Col style={{ width: '100%', maxWidth: '1200px' }}>
                             <Space direction="vertical" size="large" style={{ width: '100%' }}>
                                 {/* General Settings */}
-                                <Card title="General Options" size="small" loading={loading}>
+                                <Card title="General Options" size="small" loading={loading} style={{ maxWidth: '650px', width: '100%' }}>
                                     <Form.Item
                                         label="Name"
                                         name="name"
@@ -196,7 +273,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                 </Card>
 
                                 {/* Destination Configuration */}
-                                <Card title="Destination Options" size="small" loading={loading}>
+                                <Card title="Destination Options" size="small" loading={loading} style={{ maxWidth: '650px', width: '100%' }}>
                                     <Form.Item
                                         label="Schema"
                                         name="schema"
@@ -215,38 +292,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                             getFieldValue('schema') === 'SRT' && (
                                                 <>
                                                     <Form.Item
-                                                        label="Local Address"
-                                                        name={['schema_options', 'localaddress']}
-                                                        extra="Local address to bind."
-                                                    >
-                                                        <Input placeholder="Enter local address" />
-                                                    </Form.Item>
-
-                                                    <Form.Item
-                                                        label="Local Port"
-                                                        name={['schema_options', 'localport']}
-                                                        required
-                                                        extra="Local port to bind."
-                                                        rules={[
-                                                            {
-                                                                required: true,
-                                                                message: 'Please enter a local port',
-                                                            },
-                                                            {
-                                                                type: 'number',
-                                                                min: 1,
-                                                                max: 65535,
-                                                                message: 'Port must be between 1 and 65535',
-                                                            },
-                                                        ]}
-                                                    >
-                                                        <InputNumber 
-                                                            style={{ width: '150px' }} 
-                                                            placeholder="Enter port number" 
-                                                        />
-                                                    </Form.Item>
-                                                    
-                                                    <Form.Item
                                                         label="Mode"
                                                         name={['schema_options', 'mode']}
                                                         required
@@ -258,6 +303,116 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                             <Radio.Button value="listener">Listener</Radio.Button>
                                                             <Radio.Button value="rendezvous">Rendezvous</Radio.Button>
                                                         </Radio.Group>
+                                                    </Form.Item>
+
+                                                    <Form.Item
+                                                        label="Interface"
+                                                        name={['schema_options', 'interface_sys_name']}
+                                                        extra="Select a local interface to bind SRT socket to."
+                                                    >
+                                                        <Select
+                                                            allowClear
+                                                            loading={interfacesLoading}
+                                                            placeholder="Select interface"
+                                                            options={interfaceOptions}
+                                                            style={{ width: '100%' }}
+                                                        />
+                                                    </Form.Item>
+
+                                                    <Form.Item noStyle dependencies={[['schema_options', 'mode']]}>
+                                                        {({ getFieldValue: getNestedFieldValue }) => {
+                                                            const mode = getNestedFieldValue(['schema_options', 'mode']);
+                                                            const isCaller = mode === 'caller';
+                                                            const isRendezvous = mode === 'rendezvous';
+
+                                                            return (
+                                                                <>
+                                                                    {(isCaller || isRendezvous) && (
+                                                                        <Form.Item
+                                                                            label="Remote Address"
+                                                                            name={['schema_options', 'address']}
+                                                                            extra={isRendezvous ? 'Remote host/IP of the rendezvous peer.' : 'Remote host/IP for caller mode.'}
+                                                                        >
+                                                                            <Input placeholder="Enter remote address" />
+                                                                        </Form.Item>
+                                                                    )}
+
+                                                                    {(!isCaller || isRendezvous) && (
+                                                                        <Form.Item
+                                                                            label="Bind Address"
+                                                                            name={['schema_options', 'localaddress']}
+                                                                            extra={isRendezvous ? 'Local address to bind before connecting to the rendezvous peer.' : 'Local address to bind.'}
+                                                                        >
+                                                                            <Input placeholder="Enter bind address" />
+                                                                        </Form.Item>
+                                                                    )}
+                                                                </>
+                                                            );
+                                                        }}
+                                                    </Form.Item>
+
+                                                    <Form.Item noStyle dependencies={[['schema_options', 'mode']]}>
+                                                        {({ getFieldValue: getNestedFieldValue }) => {
+                                                            const mode = getNestedFieldValue(['schema_options', 'mode']);
+                                                            const isCaller = mode === 'caller';
+                                                            const isRendezvous = mode === 'rendezvous';
+
+                                                            return (
+                                                                <>
+                                                                    {(isCaller || isRendezvous) && (
+                                                                        <Form.Item
+                                                                            label="Remote Port"
+                                                                            name={['schema_options', 'port']}
+                                                                            required
+                                                                            extra="Remote port for caller/rendezvous mode."
+                                                                            rules={[
+                                                                                {
+                                                                                    required: true,
+                                                                                    message: 'Please enter a remote port',
+                                                                                },
+                                                                                {
+                                                                                    type: 'number',
+                                                                                    min: 1,
+                                                                                    max: 65535,
+                                                                                    message: 'Port must be between 1 and 65535',
+                                                                                },
+                                                                            ]}
+                                                                        >
+                                                                            <InputNumber
+                                                                                style={{ width: '150px' }}
+                                                                                placeholder="Enter remote port"
+                                                                            />
+                                                                        </Form.Item>
+                                                                    )}
+
+                                                                    {(!isCaller || isRendezvous) && (
+                                                                        <Form.Item
+                                                                            label="Bind Port"
+                                                                            name={['schema_options', 'localport']}
+                                                                            required
+                                                                            extra="Local port to bind."
+                                                                            rules={[
+                                                                                {
+                                                                                    required: true,
+                                                                                    message: 'Please enter a bind port',
+                                                                                },
+                                                                                {
+                                                                                    type: 'number',
+                                                                                    min: 1,
+                                                                                    max: 65535,
+                                                                                    message: 'Port must be between 1 and 65535',
+                                                                                },
+                                                                            ]}
+                                                                        >
+                                                                            <InputNumber
+                                                                                style={{ width: '150px' }}
+                                                                                placeholder="Enter bind port"
+                                                                            />
+                                                                        </Form.Item>
+                                                                    )}
+                                                                </>
+                                                            );
+                                                        }}
                                                     </Form.Item>
 
                                                     <Form.Item
@@ -328,6 +483,20 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                         {({ getFieldValue }) =>
                                             getFieldValue('schema') === 'UDP' && (
                                                 <>
+                                                    <Form.Item
+                                                        label="Interface"
+                                                        name={['schema_options', 'interface_sys_name']}
+                                                        extra="Select a local interface for UDP bind/multicast settings."
+                                                    >
+                                                        <Select
+                                                            allowClear
+                                                            loading={interfacesLoading}
+                                                            placeholder="Select interface"
+                                                            options={interfaceOptions}
+                                                            style={{ width: '100%' }}
+                                                        />
+                                                    </Form.Item>
+
                                                     <Form.Item
                                                         label="Address"
                                                         required

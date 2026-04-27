@@ -206,4 +206,78 @@ defmodule HydraSrt.ApiTest do
       assert %Ecto.Changeset{} = Api.change_destination(destination)
     end
   end
+
+  describe "interfaces" do
+    alias HydraSrt.Api.Interface
+
+    import HydraSrt.ApiFixtures
+
+    @invalid_attrs %{name: nil, ip: nil, sys_name: nil, enabled: nil}
+
+    test "list_interfaces/0 returns all interfaces" do
+      interface = interface_fixture()
+      assert Api.list_interfaces() == [interface]
+    end
+
+    test "get_interface!/1 returns the interface with given id" do
+      interface = interface_fixture()
+      assert Api.get_interface!(interface.id) == interface
+    end
+
+    test "create_interface/1 with valid data creates a interface" do
+      valid_attrs = %{name: "some name", ip: "some ip", sys_name: "some sys_name", enabled: true}
+
+      assert {:ok, %Interface{} = interface} = Api.create_interface(valid_attrs)
+      assert interface.name == "some name"
+      assert interface.ip == "some ip"
+      assert interface.sys_name == "some sys_name"
+      assert interface.enabled == true
+    end
+
+    test "create_interface/1 allows nil name" do
+      valid_attrs = %{name: nil, ip: "some ip", sys_name: "optional-name", enabled: true}
+
+      assert {:ok, %Interface{} = interface} = Api.create_interface(valid_attrs)
+      assert interface.name == nil
+      assert interface.sys_name == "optional-name"
+    end
+
+    test "create_interface/1 with invalid data returns error changeset" do
+      assert {:error, %Ecto.Changeset{}} = Api.create_interface(@invalid_attrs)
+    end
+
+    test "update_interface/2 with valid data updates the interface" do
+      interface = interface_fixture()
+
+      update_attrs = %{
+        name: "some updated name",
+        ip: "some updated ip",
+        sys_name: "some updated sys_name",
+        enabled: false
+      }
+
+      assert {:ok, %Interface{} = interface} = Api.update_interface(interface, update_attrs)
+      assert interface.name == "some updated name"
+      assert interface.ip == "some updated ip"
+      assert interface.sys_name == "some updated sys_name"
+      assert interface.enabled == false
+    end
+
+    test "update_interface/2 with invalid data returns error changeset" do
+      interface = interface_fixture()
+      assert {:error, %Ecto.Changeset{}} = Api.update_interface(interface, @invalid_attrs)
+      assert interface == Api.get_interface!(interface.id)
+    end
+
+    test "delete_interface/1 deletes the interface" do
+      interface = interface_fixture()
+      assert {:ok, %Interface{}} = Api.delete_interface(interface)
+      assert_raise Ecto.NoResultsError, fn -> Api.get_interface!(interface.id) end
+    end
+
+    test "change_interface/1 returns a interface changeset" do
+      interface = interface_fixture()
+      assert %Ecto.Changeset{} = Api.change_interface(interface)
+    end
+  end
 end

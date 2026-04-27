@@ -8,8 +8,19 @@ export const getEndpointAddressString = (endpoint) => {
   }
 
   switch (endpoint.schema) {
-    case 'SRT':
-      return `${getSchemaOption(endpoint, 'localaddress') || 'N/A'}:${getSchemaOption(endpoint, 'localport') || 'N/A'}`;
+    case 'SRT': {
+      const mode = getSchemaOption(endpoint, 'mode');
+      const address =
+        mode === 'caller' || mode === 'rendezvous'
+          ? getSchemaOption(endpoint, 'address') || getSchemaOption(endpoint, 'host') || getSchemaOption(endpoint, 'localaddress')
+          : getSchemaOption(endpoint, 'localaddress');
+      const port =
+        mode === 'caller' || mode === 'rendezvous'
+          ? getSchemaOption(endpoint, 'port') || getSchemaOption(endpoint, 'localport')
+          : getSchemaOption(endpoint, 'localport') || getSchemaOption(endpoint, 'port');
+
+      return `${address || 'N/A'}:${port || 'N/A'}`;
+    }
     case 'UDP':
       return `${getSchemaOption(endpoint, 'host') || getSchemaOption(endpoint, 'address') || 'N/A'}:${getSchemaOption(endpoint, 'port') || 'N/A'}`;
     default:

@@ -8,6 +8,8 @@ import Settings from './pages/Settings';
 import RouteItem from './pages/routes/RouteItem';
 import RouteSourceEdit from './pages/routes/RouteSourceEdit';
 import RouteDestEdit from './pages/routes/RouteDestEdit';
+import Interfaces from './pages/interfaces/Interfaces';
+import InterfaceEdit from './pages/interfaces/InterfaceEdit';
 import SystemPipelines from './pages/system/SystemPipelines';
 import SystemNodes from './pages/system/SystemNodes';
 import Login from './pages/Login';
@@ -117,6 +119,22 @@ const App = () => {
           <ProtectedRoute>
             <MainLayout>
               <R />
+            </MainLayout>
+          </ProtectedRoute>
+        } />
+
+        <Route path={ROUTES.INTERFACES} element={
+          <ProtectedRoute>
+            <MainLayout>
+              <Interfaces />
+            </MainLayout>
+          </ProtectedRoute>
+        } />
+
+        <Route path="/interfaces/:id/edit" element={
+          <ProtectedRoute>
+            <MainLayout>
+              <InterfaceEdit />
             </MainLayout>
           </ProtectedRoute>
         } />
