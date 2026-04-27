@@ -44,6 +44,7 @@ export const ROUTES = {
   LOGIN: '/login',
   HOME: '/',
   ROUTES: '/routes',
+  INTERFACES: '/interfaces',
   SETTINGS: '/settings',
   SYSTEM_PIPELINES: '/system/pipelines',
   SYSTEM_NODES: '/system/nodes',

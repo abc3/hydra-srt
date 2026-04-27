@@ -44,6 +44,18 @@ defmodule HydraSrt.RouteHandlerTest do
     assert source["uri"] =~ "pbkeylen=16"
   end
 
+  test "build_srt_uri uses remote address and port in caller mode" do
+    opts = %{
+      "mode" => "caller",
+      "address" => "198.51.100.20",
+      "port" => 4209,
+      "localaddress" => "10.0.0.10",
+      "localport" => 4201
+    }
+
+    assert RouteHandler.build_srt_uri(opts) == "srt://198.51.100.20:4209?mode=caller"
+  end
+
   test "source_from_record with valid UDP schema" do
     record = %{
       "schema" => "UDP",
@@ -127,6 +139,27 @@ defmodule HydraSrt.RouteHandlerTest do
     assert sink["hydra_destination_id"] == "dest2"
     assert sink["hydra_destination_name"] == "Destination 2"
     assert sink["hydra_destination_schema"] == "UDP"
+  end
+
+  test "sink_from_record keeps udp bind and multicast interface properties" do
+    record = %{
+      "id" => "dest3",
+      "name" => "Destination 3",
+      "schema" => "UDP",
+      "schema_options" => %{
+        "host" => "239.1.1.1",
+        "port" => 5004,
+        "bind-address" => "10.10.0.2",
+        "multicast-iface" => "eno2"
+      }
+    }
+
+    assert {:ok, sink} = RouteHandler.sink_from_record(record)
+    assert sink["type"] == "udpsink"
+    assert sink["host"] == "239.1.1.1"
+    assert sink["port"] == 5004
+    assert sink["bind-address"] == "10.10.0.2"
+    assert sink["multicast-iface"] == "eno2"
   end
 
   test "sinks_from_record skips disabled destinations" do

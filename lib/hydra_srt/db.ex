@@ -7,6 +7,7 @@ defmodule HydraSrt.Db do
   alias HydraSrt.Api
   alias HydraSrt.Api.Route
   alias HydraSrt.Api.Destination
+  alias HydraSrt.Api.Interface
 
   @spec create_route(map, binary | nil) :: {:ok, map} | {:error, any}
   def create_route(data, id \\ nil) when is_map(data) do
@@ -143,6 +144,79 @@ defmodule HydraSrt.Db do
           {:error, %Ecto.Changeset{} = changeset} -> [{:error, changeset}]
         end
     end
+  end
+
+  @spec create_interface(map(), binary() | nil) :: {:ok, map()} | {:error, any()}
+  def create_interface(data, id \\ nil) when is_map(data) do
+    changeset =
+      %Interface{}
+      |> Interface.changeset(data)
+      |> maybe_put_changeset_id(id)
+
+    case Repo.insert(changeset) do
+      {:ok, interface} ->
+        {:ok, interface_to_map(interface)}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  @spec get_interface(String.t()) :: {:ok, map()} | {:error, any()}
+  def get_interface(id) when is_binary(id) do
+    case Repo.get(Interface, id) do
+      nil -> {:error, :not_found}
+      %Interface{} = interface -> {:ok, interface_to_map(interface)}
+    end
+  end
+
+  @spec get_interface_by_sys_name(String.t()) :: {:ok, map()} | {:error, any()}
+  def get_interface_by_sys_name(sys_name) when is_binary(sys_name) do
+    case Repo.get_by(Interface, sys_name: sys_name) do
+      nil -> {:error, :not_found}
+      %Interface{} = interface -> {:ok, interface_to_map(interface)}
+    end
+  end
+
+  @spec update_interface(String.t(), map()) :: {:ok, map()} | {:error, any()}
+  def update_interface(id, data) when is_binary(id) and is_map(data) do
+    case Repo.get(Interface, id) do
+      nil ->
+        {:error, :not_found}
+
+      %Interface{} = interface ->
+        interface
+        |> Interface.changeset(data)
+        |> Repo.update()
+        |> case do
+          {:ok, updated} -> {:ok, interface_to_map(updated)}
+          {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
+        end
+    end
+  end
+
+  @spec delete_interface(String.t()) :: :ok | {:error, any()}
+  def delete_interface(id) when is_binary(id) do
+    case Repo.get(Interface, id) do
+      nil ->
+        {:error, :not_found}
+
+      %Interface{} = interface ->
+        case Repo.delete(interface) do
+          {:ok, _} -> :ok
+          {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
+        end
+    end
+  end
+
+  @spec get_all_interfaces() :: {:ok, list(map())}
+  def get_all_interfaces() do
+    interfaces =
+      from(i in Interface, order_by: [desc: i.inserted_at])
+      |> Repo.all()
+      |> Enum.map(&interface_to_map/1)
+
+    {:ok, interfaces}
   end
 
   @spec create_destination(String.t(), map, binary | nil) :: {:ok, map} | {:error, any}
@@ -300,6 +374,19 @@ defmodule HydraSrt.Db do
       "stopped_at" => destination.stopped_at,
       "created_at" => destination.inserted_at,
       "updated_at" => destination.updated_at
+    }
+  end
+
+  @doc false
+  def interface_to_map(%Interface{} = interface) do
+    %{
+      "id" => interface.id,
+      "name" => interface.name,
+      "sys_name" => interface.sys_name,
+      "ip" => interface.ip,
+      "enabled" => interface.enabled,
+      "created_at" => interface.inserted_at,
+      "updated_at" => interface.updated_at
     }
   end
 
