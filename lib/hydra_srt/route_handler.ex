@@ -195,6 +195,10 @@ defmodule HydraSrt.RouteHandler do
       Logger.info("RouteHandler: sent initial command")
       :ok
     else
+      {:error, reason} ->
+        Logger.error("RouteHandler: send_initial_command failed: #{inspect(reason)}")
+        {:error, reason}
+
       error ->
         Logger.error("RouteHandler: send_initial_command failed: #{inspect(error)}")
         {:error, error}
@@ -208,7 +212,8 @@ defmodule HydraSrt.RouteHandler do
 
       _info ->
         try do
-          if Port.command(port, payload), do: :ok, else: {:error, :command_failed}
+          Port.command(port, payload)
+          :ok
         rescue
           ArgumentError -> {:error, :closed}
         end
@@ -468,7 +473,9 @@ defmodule HydraSrt.RouteHandler do
         Application.get_env(:hydra_srt, :default_bind_ip, "127.0.0.1")
       )
 
+    remote_address = Map.get(opts, "address") || Map.get(opts, "host")
     localport = Map.get(opts, "localport")
+    remote_port = Map.get(opts, "port")
 
     query_params =
       %{}
@@ -477,18 +484,22 @@ defmodule HydraSrt.RouteHandler do
       |> maybe_add_param(opts, "pbkeylen")
       |> maybe_add_param(opts, "poll-timeout")
 
-    # Some clients (notably ffmpeg) reject `srt://:port?...` for listener mode,
-    # so we always include the host (usually from `localaddress`).
-    host =
+    {host, port} =
       case mode do
-        "listener" -> localaddress
-        _ -> localaddress
+        "caller" ->
+          {remote_address || localaddress, remote_port || localport}
+
+        "rendezvous" ->
+          {remote_address || localaddress, remote_port || localport}
+
+        _ ->
+          {localaddress || remote_address, localport || remote_port}
       end
 
     URI.to_string(%URI{
       scheme: "srt",
       host: host,
-      port: localport,
+      port: port,
       query: URI.encode_query(query_params)
     })
   end
@@ -506,52 +517,100 @@ defmodule HydraSrt.RouteHandler do
   end
 
   def sink_from_record(%{"id" => id, "schema" => "SRT", "schema_options" => opts} = destination) do
-    name = Map.get(destination, "name", id)
+    with {:ok, resolved_opts} <- resolve_interface_options(opts) do
+      name = Map.get(destination, "name", id)
 
-    # Native pipeline expects SRT properties directly on the element config (not a URI).
-    {:ok,
-     %{
-       "type" => "srtsink",
-       "uri" => build_srt_uri(opts),
-       "hydra_destination_id" => id,
-       "hydra_destination_name" => name,
-       "hydra_destination_schema" => "SRT"
-     }
-     |> Map.merge(opts)}
+      # Native pipeline expects SRT properties directly on the element config (not a URI).
+      {:ok,
+       %{
+         "type" => "srtsink",
+         "uri" => build_srt_uri(resolved_opts),
+         "hydra_destination_id" => id,
+         "hydra_destination_name" => name,
+         "hydra_destination_schema" => "SRT"
+       }
+       |> Map.merge(resolved_opts)}
+    end
   end
 
   def sink_from_record(%{"id" => id, "schema" => "UDP", "schema_options" => opts} = destination) do
-    name = Map.get(destination, "name", id)
+    with {:ok, resolved_opts} <- resolve_interface_options(opts) do
+      name = Map.get(destination, "name", id)
 
-    # Native pipeline expects `address` and `port` (it maps `address` -> udpsink host property).
-    address = Map.get(opts, "address") || Map.get(opts, "host")
-    port = Map.get(opts, "port")
+      # Native pipeline expects `address` and `port` (it maps `address` -> udpsink host property).
+      address = Map.get(resolved_opts, "address") || Map.get(resolved_opts, "host")
+      port = Map.get(resolved_opts, "port")
 
-    {:ok,
-     %{
-       "type" => "udpsink",
-       "address" => address,
-       "host" => address,
-       "port" => port,
-       "hydra_destination_id" => id,
-       "hydra_destination_name" => name,
-       "hydra_destination_schema" => "UDP"
-     }}
+      {:ok,
+       %{
+         "type" => "udpsink",
+         "address" => address,
+         "host" => address,
+         "port" => port,
+         "bind-address" =>
+           Map.get(resolved_opts, "bind-address") || Map.get(resolved_opts, "localaddress"),
+         "multicast-iface" =>
+           Map.get(resolved_opts, "multicast-iface") ||
+             Map.get(resolved_opts, "interface_sys_name"),
+         "hydra_destination_id" => id,
+         "hydra_destination_name" => name,
+         "hydra_destination_schema" => "UDP"
+       }
+       |> drop_nil_values()}
+    end
   end
 
   def sink_from_record(_), do: {:error, :invalid_destination}
 
   def source_from_record(%{"schema" => "SRT", "schema_options" => opts}) do
-    # Native pipeline expects SRT properties directly on the element config (not a URI).
-    {:ok, %{"type" => "srtsrc", "uri" => build_srt_uri(opts)} |> Map.merge(opts)}
+    with {:ok, resolved_opts} <- resolve_interface_options(opts) do
+      # Native pipeline expects SRT properties directly on the element config (not a URI).
+      {:ok,
+       %{"type" => "srtsrc", "uri" => build_srt_uri(resolved_opts)} |> Map.merge(resolved_opts)}
+    end
   end
 
   def source_from_record(%{"schema" => "UDP", "schema_options" => opts}) do
-    # Native pipeline expects `address` and `port` for udpsrc.
-    {:ok, %{"type" => "udpsrc"} |> Map.merge(opts)}
+    with {:ok, resolved_opts} <- resolve_interface_options(opts) do
+      # Native pipeline expects `address` and `port` for udpsrc.
+      {:ok, %{"type" => "udpsrc"} |> Map.merge(resolved_opts)}
+    end
   end
 
   def source_from_record(_), do: {:error, :invalid_source}
+
+  @doc false
+  def resolve_interface_options(opts) when is_map(opts) do
+    case Map.get(opts, "interface_sys_name") do
+      nil ->
+        {:ok, opts}
+
+      "" ->
+        {:ok, opts}
+
+      sys_name when is_binary(sys_name) ->
+        with {:ok, interface} <- Db.get_interface_by_sys_name(sys_name),
+             ip when is_binary(ip) and ip != "" and ip != "-" <- Map.get(interface, "ip") do
+          {:ok,
+           opts
+           |> Map.put("localaddress", ip)
+           |> Map.put("bind-address", ip)
+           |> Map.put("multicast-iface", sys_name)}
+        else
+          {:error, :not_found} -> {:ok, opts}
+          _ -> {:ok, opts}
+        end
+    end
+  end
+
+  def resolve_interface_options(_), do: {:error, :invalid_schema_options}
+
+  @doc false
+  def drop_nil_values(map) when is_map(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
 
   def dummy_params do
     %{

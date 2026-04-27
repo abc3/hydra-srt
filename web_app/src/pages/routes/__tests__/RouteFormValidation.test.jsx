@@ -4,7 +4,7 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import RouteSourceEdit from '../RouteSourceEdit';
 import RouteDestEdit from '../RouteDestEdit';
 
-const { mockRoutesApi, mockDestinationsApi } = vi.hoisted(() => ({
+const { mockRoutesApi, mockDestinationsApi, mockInterfacesApi } = vi.hoisted(() => ({
   mockRoutesApi: {
     create: vi.fn(),
     update: vi.fn(),
@@ -16,12 +16,16 @@ const { mockRoutesApi, mockDestinationsApi } = vi.hoisted(() => ({
     update: vi.fn(),
     getById: vi.fn(),
   },
+  mockInterfacesApi: {
+    getAll: vi.fn(),
+  },
 }));
 
 vi.mock('../../../utils/api', () => {
   return {
     routesApi: mockRoutesApi,
     destinationsApi: mockDestinationsApi,
+    interfacesApi: mockInterfacesApi,
   };
 });
 
@@ -36,6 +40,7 @@ describe('Route form validation', () => {
         name: 'Route 1',
       },
     });
+    mockInterfacesApi.getAll.mockResolvedValue({ data: [] });
   });
 
   it('blocks source save when required fields are empty', async () => {

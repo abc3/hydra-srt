@@ -3,10 +3,47 @@ import { InfoCircleOutlined, SaveOutlined, ArrowLeftOutlined, HomeOutlined, Load
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
-import { routesApi } from '../../utils/api';
+import { interfacesApi, routesApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
 
 const { Title } = Typography;
+
+const normalizeSrtOptionsForForm = (route) => {
+  if (!route || route.schema !== 'SRT') {
+    return route;
+  }
+
+  const schemaOptions = route.schema_options || {};
+  const mode = schemaOptions.mode;
+
+  if (mode !== 'caller' && mode !== 'rendezvous') {
+    return route;
+  }
+
+  const normalizedOptions = { ...schemaOptions };
+
+  if (
+    (normalizedOptions.address === undefined || normalizedOptions.address === null || normalizedOptions.address === '') &&
+    typeof normalizedOptions.localaddress === 'string' &&
+    normalizedOptions.localaddress !== ''
+  ) {
+    normalizedOptions.address = normalizedOptions.localaddress;
+  }
+
+  if (
+    (normalizedOptions.port === undefined || normalizedOptions.port === null || normalizedOptions.port === '') &&
+    normalizedOptions.localport !== undefined &&
+    normalizedOptions.localport !== null &&
+    normalizedOptions.localport !== ''
+  ) {
+    normalizedOptions.port = normalizedOptions.localport;
+  }
+
+  return {
+    ...route,
+    schema_options: normalizedOptions,
+  };
+};
 
 const RouteSourceEdit = ({ initialValues, onChange }) => {
   const [form] = Form.useForm();
@@ -16,6 +53,8 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
   const [modal, modalContextHolder] = Modal.useModal();
   const [loading, setLoading] = useState(id !== 'new');
   const [testingConnection, setTestingConnection] = useState(false);
+  const [interfacesLoading, setInterfacesLoading] = useState(false);
+  const [interfaceOptions, setInterfaceOptions] = useState([]);
   const dataFetchedRef = useRef(false);
   const [routeData, setRouteData] = useState(null);
 
@@ -51,8 +90,9 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
       routesApi.getById(id)
         .then(result => {
-          setRouteData(result.data);
-          form.setFieldsValue(result.data);
+          const normalizedRoute = normalizeSrtOptionsForForm(result.data);
+          setRouteData(normalizedRoute);
+          form.setFieldsValue(normalizedRoute);
           setLoading(false);
         })
         .catch(error => {
@@ -62,6 +102,44 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         });
     }
   }, [id, form, messageApi]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadInterfaces = async () => {
+      setInterfacesLoading(true);
+
+      try {
+        const result = await interfacesApi.getAll();
+        const rows = Array.isArray(result?.data) ? result.data : [];
+        const enabledRows = rows.filter((item) => item?.enabled !== false);
+
+        const options = enabledRows.map((item) => ({
+          label: `${item.name || item.sys_name} (${item.sys_name} - ${item.ip || 'N/A'})`,
+          value: item.sys_name,
+          ip: item.ip,
+        }));
+
+        if (mounted) {
+          setInterfaceOptions(options);
+        }
+      } catch (error) {
+        if (mounted) {
+          messageApi.error(`Failed to load interfaces: ${error.message}`);
+        }
+      } finally {
+        if (mounted) {
+          setInterfacesLoading(false);
+        }
+      }
+    };
+
+    loadInterfaces();
+
+    return () => {
+      mounted = false;
+    };
+  }, [messageApi]);
 
   const availableNodes = [
     { label: 'self', value: 'self' }
@@ -227,7 +305,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
       {id === 'new' && (
         <Card 
-          style={{ marginBottom: '24px', backgroundColor: '#141414', border: '1px solid #303030' }}
+          style={{ marginBottom: '24px', backgroundColor: '#141414', border: '1px solid #303030', maxWidth: '650px', width: '100%' }}
           size="small"
         >
           <Space align="start">
@@ -278,7 +356,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
             <Col style={{ width: '100%', maxWidth: '1200px' }}>
               <Space direction="vertical" size="large" style={{ width: '100%' }}>
                 {/* General Settings */}
-                <Card title="General Options" size="small" loading={loading}>
+                <Card title="General Options" size="small" loading={loading} style={{ maxWidth: '650px', width: '100%' }}>
                   <Form.Item
                     label="Name"
                     name="name"
@@ -324,7 +402,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                   </Form.Item>
                 </Card>
 
-                <Card title="Source Options" size="small" loading={loading}>
+                <Card title="Source Options" size="small" loading={loading} style={{ maxWidth: '650px', width: '100%' }}>
                   <Form.Item
                     label="Schema"
                     name="schema"
@@ -356,6 +434,20 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                             </Radio.Group>
                           </Form.Item>
 
+                          <Form.Item
+                            label="Interface"
+                            name={['schema_options', 'interface_sys_name']}
+                            extra="Select a local interface to bind SRT socket to."
+                          >
+                            <Select
+                              allowClear
+                              loading={interfacesLoading}
+                              placeholder="Select interface"
+                              options={interfaceOptions}
+                              style={{ width: '100%' }}
+                            />
+                          </Form.Item>
+
                           <Form.Item noStyle dependencies={[['schema_options', 'mode']]}>
                             {({ getFieldValue }) => {
                               const mode = getFieldValue(['schema_options', 'mode']);
@@ -364,7 +456,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                               return (
                                 <Form.Item
                                   label={isCaller ? 'Remote Address' : 'Bind Address'}
-                                  name={['schema_options', 'localaddress']}
+                                  name={['schema_options', isCaller ? 'address' : 'localaddress']}
                                   extra={
                                     isCaller
                                       ? 'The remote host or IP address to connect to in caller mode.'
@@ -390,7 +482,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                   style={{ width: '150px' }}
                                   size="5"
                                   label={isCaller ? 'Remote Port' : 'Bind Port'}
-                                  name={['schema_options', 'localport']}
+                                  name={['schema_options', isCaller ? 'port' : 'localport']}
                                   required
                                   tooltip="Port number (1-65535)"
                                   rules={[
@@ -499,6 +591,20 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                       getFieldValue('schema') === 'UDP' && (
                         <>
                           <Form.Item
+                            label="Interface"
+                            name={['schema_options', 'interface_sys_name']}
+                            extra="Select a local interface for UDP bind/multicast settings."
+                          >
+                            <Select
+                              allowClear
+                              loading={interfacesLoading}
+                              placeholder="Select interface"
+                              options={interfaceOptions}
+                              style={{ width: '100%' }}
+                            />
+                          </Form.Item>
+
+                          <Form.Item
                             label="Address"
                             name={['schema_options', 'address']}
                             extra="Address to receive packets for. This is equivalent to the multicast-group property for now."
@@ -563,7 +669,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
               {id === 'new' && (
                 <Card 
-                  style={{ marginTop: '24px', backgroundColor: '#141414', border: '1px solid #303030' }}
+                  style={{ marginTop: '24px', backgroundColor: '#141414', border: '1px solid #303030', maxWidth: '650px', width: '100%' }}
                   size="small"
                 >
                   <Space align="start">

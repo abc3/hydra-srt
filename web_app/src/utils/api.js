@@ -139,6 +139,56 @@ export const routesApi = {
   },
 };
 
+// Interfaces API
+export const interfacesApi = {
+  getAll: async () => {
+    const response = await authFetch('/api/interfaces');
+    return response.json();
+  },
+
+  getById: async (id) => {
+    const response = await authFetch(`/api/interfaces/${id}`);
+    return response.json();
+  },
+
+  create: async (interfaceData) => {
+    const response = await authFetch('/api/interfaces', {
+      method: 'POST',
+      body: JSON.stringify({ interface: interfaceData }),
+    });
+    return response.json();
+  },
+
+  update: async (id, interfaceData) => {
+    const response = await authFetch(`/api/interfaces/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ interface: interfaceData }),
+    });
+    return response.json();
+  },
+
+  delete: async (id) => {
+    const response = await authFetch(`/api/interfaces/${id}`, {
+      method: 'DELETE',
+    });
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      return response.json();
+    }
+    return { success: true };
+  },
+
+  getSystemInterfaces: async () => {
+    const response = await authFetch('/api/interfaces/system');
+    return response.json();
+  },
+
+  getSystemRaw: async () => {
+    const response = await authFetch('/api/interfaces/system/raw');
+    return response.json();
+  },
+};
+
 export const backupApi = {
   export: async () => {
     const response = await authFetch('/api/backup/export');

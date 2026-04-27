@@ -70,4 +70,21 @@ defmodule HydraSrt.ApiFixtures do
 
     HydraSrt.Api.get_destination!(destination.id)
   end
+
+  @doc """
+  Generate a interface.
+  """
+  def interface_fixture(attrs \\ %{}) do
+    {:ok, interface} =
+      attrs
+      |> Enum.into(%{
+        enabled: true,
+        ip: "some ip",
+        name: "some name",
+        sys_name: "some sys_name"
+      })
+      |> HydraSrt.Api.create_interface()
+
+    interface
+  end
 end

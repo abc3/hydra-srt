@@ -41,6 +41,9 @@ defmodule HydraSrtWeb.Router do
     get "/routes/:route_id/destinations/:dest_id", DestinationController, :show
     put "/routes/:route_id/destinations/:dest_id", DestinationController, :update
     delete "/routes/:route_id/destinations/:dest_id", DestinationController, :delete
+    get "/interfaces/system", InterfaceController, :system
+    get "/interfaces/system/raw", InterfaceController, :system_raw
+    resources "/interfaces", InterfaceController, except: [:new, :edit]
 
     get "/backup/export", BackupController, :export
     get "/backup/create-download-link", BackupController, :create_download_link

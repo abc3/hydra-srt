@@ -103,10 +103,7 @@ case config_env() do
 
     analytics_database_path =
       System.get_env("ANALYTICS_DATABASE_PATH") ||
-        raise """
-        environment variable ANALYTICS_DATABASE_PATH is missing.
-        For example: /tmp/hydra_srt_analytics.duckdb
-        """
+        Path.expand("../hydra_srt_analytics.duckdb", __DIR__)
 
     config :hydra_srt, analytics_database_path: analytics_database_path
 
