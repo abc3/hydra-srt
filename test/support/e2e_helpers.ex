@@ -310,6 +310,22 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     :ok
   end
 
+  def api_create_interface!(base_url, token, interface_params) when is_map(interface_params) do
+    interface_params = Map.put_new(interface_params, "enabled", true)
+
+    body = Jason.encode!(%{"interface" => interface_params})
+
+    {:ok, 201, _headers, resp} =
+      http_raw(:post, base_url <> "/api/interfaces", auth_headers(token), body)
+
+    Jason.decode!(resp) |> get_in(["data", "id"])
+  end
+
+  def api_delete_interface(base_url, token, interface_id)
+      when is_binary(base_url) and is_binary(token) and is_binary(interface_id) do
+    http_raw(:delete, base_url <> "/api/interfaces/#{interface_id}", auth_headers(token), "")
+  end
+
   def api_start_route!(base_url, token, route_id) do
     {:ok, 200, _headers, _resp} =
       http_raw(:get, base_url <> "/api/routes/#{route_id}/start", auth_headers(token), "")
@@ -623,6 +639,68 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     %{pid: pid, sock: sock, port: port}
   end
 
+  def start_multicast_udp_counter!(group_ip, iface_ip, port)
+      when is_binary(group_ip) and is_binary(iface_ip) and is_integer(port) do
+    group_tuple = ipv4_tuple!(group_ip)
+    iface_tuple = ipv4_tuple!(iface_ip)
+
+    {:ok, sock} =
+      :gen_udp.open(port, [
+        :binary,
+        active: true,
+        reuseaddr: true,
+        ip: {0, 0, 0, 0},
+        add_membership: {group_tuple, iface_tuple}
+      ])
+
+    parent = self()
+    pid = spawn_link(__MODULE__, :udp_counter_loop, [sock, 0, parent])
+    :ok = :gen_udp.controlling_process(sock, pid)
+    %{pid: pid, sock: sock, port: port, group_ip: group_ip, iface_ip: iface_ip}
+  end
+
+  def send_udp_burst!(host_ip, port, opts \\ [])
+      when is_binary(host_ip) and is_integer(port) and is_list(opts) do
+    packet_count = Keyword.get(opts, :packet_count, 250)
+    packet_size = Keyword.get(opts, :packet_size, 1316)
+    payload = :binary.copy(<<0x47>>, packet_size)
+
+    {:ok, sock} = :gen_udp.open(0, [:binary, active: false])
+    host_tuple = ipv4_tuple!(host_ip)
+
+    Enum.each(1..packet_count, fn _ ->
+      :ok = :gen_udp.send(sock, host_tuple, port, payload)
+    end)
+
+    :ok = :gen_udp.close(sock)
+    :ok
+  end
+
+  def send_multicast_udp_burst!(group_ip, port, iface_ip, opts \\ [])
+      when is_binary(group_ip) and is_integer(port) and is_binary(iface_ip) and is_list(opts) do
+    packet_count = Keyword.get(opts, :packet_count, 250)
+    packet_size = Keyword.get(opts, :packet_size, 1316)
+    payload = :binary.copy(<<0x47>>, packet_size)
+    group_tuple = ipv4_tuple!(group_ip)
+    iface_tuple = ipv4_tuple!(iface_ip)
+
+    {:ok, sock} =
+      :gen_udp.open(0, [
+        :binary,
+        active: false,
+        multicast_if: iface_tuple,
+        multicast_ttl: 1,
+        multicast_loop: true
+      ])
+
+    Enum.each(1..packet_count, fn _ ->
+      :ok = :gen_udp.send(sock, group_tuple, port, payload)
+    end)
+
+    :ok = :gen_udp.close(sock)
+    :ok
+  end
+
   def udp_counter_loop(sock, bytes, parent) do
     receive do
       {:udp, ^sock, _ip, _port, data} when is_binary(data) ->
@@ -672,6 +750,100 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
       2_000 ->
         Map.put(counter, :bytes, 0)
     end
+  end
+
+  def local_multicast_roundtrip_supported?(iface_ip) when is_binary(iface_ip) do
+    group_ip = "239.255.20.20"
+    port = udp_free_port!()
+    counter = start_multicast_udp_counter!(group_ip, iface_ip, port)
+
+    result =
+      try do
+        :ok =
+          send_multicast_udp_burst!(group_ip, port, iface_ip, packet_count: 32, packet_size: 188)
+
+        match?({:ok, %{bytes: bytes}} when bytes > 0, await_udp_bytes(counter, 188, 2_000))
+      rescue
+        _ -> false
+      catch
+        _, _ -> false
+      end
+
+    stop_udp_counter!(counter)
+    result
+  end
+
+  def discover_ipv4_system_interface!(opts \\ []) do
+    prefer_non_loopback? = Keyword.get(opts, :prefer_non_loopback, true)
+    prefer_loopback? = Keyword.get(opts, :prefer_loopback, false)
+    require_multicast? = Keyword.get(opts, :require_multicast, true)
+
+    {:ok, interfaces} = HydraSrt.SystemInterfaces.discover()
+
+    ipv4_interfaces =
+      interfaces
+      |> Enum.filter(fn interface ->
+        ip = Map.get(interface, "ip", "")
+        is_binary(ip) and ip != "-" and String.contains?(ip, ".")
+      end)
+      |> Enum.map(fn interface ->
+        bind_ip = strip_cidr_suffix(Map.fetch!(interface, "ip"))
+
+        Map.merge(interface, %{
+          "bind_ip" => bind_ip,
+          "is_loopback" => loopback_ip?(bind_ip)
+        })
+      end)
+
+    selected =
+      ipv4_interfaces
+      |> maybe_filter_multicast(require_multicast?)
+      |> maybe_sort_loopback_first(prefer_loopback?)
+      |> maybe_sort_non_loopback_first(prefer_non_loopback?)
+      |> List.first()
+
+    selected ||
+      raise "No suitable IPv4 system interface found. interfaces=#{inspect(ipv4_interfaces)}"
+  end
+
+  def strip_cidr_suffix(ip) when is_binary(ip) do
+    ip
+    |> String.split("/", parts: 2)
+    |> List.first()
+  end
+
+  def ipv4_tuple!(ip) when is_binary(ip) do
+    ip
+    |> String.split(".")
+    |> Enum.map(&String.to_integer/1)
+    |> List.to_tuple()
+    |> case do
+      {a, b, c, d} -> {a, b, c, d}
+      _ -> raise "Invalid IPv4 address: #{inspect(ip)}"
+    end
+  end
+
+  defp maybe_filter_multicast(interfaces, false), do: interfaces
+
+  defp maybe_filter_multicast(interfaces, true) do
+    filtered = Enum.filter(interfaces, &(&1["multicast_supported"] == true))
+    if filtered == [], do: interfaces, else: filtered
+  end
+
+  defp maybe_sort_non_loopback_first(interfaces, false), do: interfaces
+
+  defp maybe_sort_non_loopback_first(interfaces, true) do
+    Enum.sort_by(interfaces, fn interface -> interface["is_loopback"] == true end)
+  end
+
+  defp maybe_sort_loopback_first(interfaces, false), do: interfaces
+
+  defp maybe_sort_loopback_first(interfaces, true) do
+    Enum.sort_by(interfaces, fn interface -> interface["is_loopback"] == false end)
+  end
+
+  defp loopback_ip?(ip) when is_binary(ip) do
+    String.starts_with?(ip, "127.")
   end
 
   def wait_until(fun, timeout_ms, interval_ms) when is_function(fun, 0) do

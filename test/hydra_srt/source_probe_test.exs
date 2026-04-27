@@ -17,6 +17,22 @@ defmodule HydraSrt.SourceProbeTest do
     assert uri == "srt://127.0.0.1:4201?mode=listener"
   end
 
+  test "build_probe_uri/1 uses remote address and port in SRT caller mode" do
+    route = %{
+      "schema" => "SRT",
+      "schema_options" => %{
+        "mode" => "caller",
+        "address" => "203.0.113.8",
+        "port" => 5001,
+        "localaddress" => "10.0.0.12",
+        "localport" => 4201
+      }
+    }
+
+    assert {:ok, uri} = SourceProbe.build_probe_uri(route)
+    assert uri == "srt://203.0.113.8:5001?mode=caller"
+  end
+
   test "build_probe_uri/1 builds UDP probe URI with default bind address" do
     route = %{
       "schema" => "UDP",

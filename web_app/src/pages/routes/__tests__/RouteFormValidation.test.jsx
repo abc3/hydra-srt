@@ -4,7 +4,7 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import RouteSourceEdit from '../RouteSourceEdit';
 import RouteDestEdit from '../RouteDestEdit';
 
-const { mockRoutesApi, mockDestinationsApi } = vi.hoisted(() => ({
+const { mockRoutesApi, mockDestinationsApi, mockInterfacesApi } = vi.hoisted(() => ({
   mockRoutesApi: {
     create: vi.fn(),
     update: vi.fn(),
@@ -16,12 +16,16 @@ const { mockRoutesApi, mockDestinationsApi } = vi.hoisted(() => ({
     update: vi.fn(),
     getById: vi.fn(),
   },
+  mockInterfacesApi: {
+    getAll: vi.fn(),
+  },
 }));
 
 vi.mock('../../../utils/api', () => {
   return {
     routesApi: mockRoutesApi,
     destinationsApi: mockDestinationsApi,
+    interfacesApi: mockInterfacesApi,
   };
 });
 
@@ -36,6 +40,7 @@ describe('Route form validation', () => {
         name: 'Route 1',
       },
     });
+    mockInterfacesApi.getAll.mockResolvedValue({ data: [] });
   });
 
   it('blocks source save when required fields are empty', async () => {
@@ -78,9 +83,33 @@ describe('Route form validation', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Please enter a destination name')).toBeInTheDocument();
-      expect(screen.getByText('Please enter a local port')).toBeInTheDocument();
+      expect(screen.getByText('Please select an SRT mode')).toBeInTheDocument();
     });
 
     expect(mockDestinationsApi.create).not.toHaveBeenCalled();
+  });
+
+  it('requires both bind and remote ports for SRT rendezvous source', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/new/edit']}>
+        <Routes>
+          <Route path="/routes/:id/edit" element={<RouteSourceEdit />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Route 1' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'Rendezvous' }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Please enter a remote port')).toBeInTheDocument();
+      expect(screen.getByText('Please enter a bind port')).toBeInTheDocument();
+    });
+
+    expect(mockRoutesApi.create).not.toHaveBeenCalled();
   });
 });

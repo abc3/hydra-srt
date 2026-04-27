@@ -33,7 +33,7 @@ defmodule HydraSrt.SourceProbe do
     with {:ok, source} <- RouteHandler.source_from_record(route_params) do
       case source["type"] do
         "srtsrc" ->
-          case {source["uri"], source["localport"]} do
+          case {source["uri"], source["localport"] || source["port"]} do
             {uri, port}
             when is_binary(uri) and byte_size(uri) > 0 and is_integer(port) and port > 0 ->
               {:ok, uri}

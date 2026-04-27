@@ -4,6 +4,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   CompassOutlined,
+  CloudServerOutlined,
   SettingOutlined,
   LogoutOutlined,
   HomeOutlined,
@@ -51,6 +52,18 @@ const getDefaultBreadcrumbItems = (path) => {
       },
       {
         title: 'Settings',
+      }
+    ];
+  }
+
+  if (path.startsWith(ROUTES.INTERFACES)) {
+    return [
+      {
+        href: ROUTES.ROUTES,
+        title: <HomeOutlined />,
+      },
+      {
+        title: 'Interfaces',
       }
     ];
   }
@@ -141,13 +154,18 @@ const MainLayout = ({ children }) => {
       label: 'Routes',
     },
     {
+      key: ROUTES.INTERFACES,
+      icon: <ApiOutlined />,
+      label: 'Interfaces',
+    },
+    {
       key: ROUTES.SYSTEM_PIPELINES,
       icon: <CodeOutlined />,
       label: 'Pipelines',
     },
     {
       key: ROUTES.SYSTEM_NODES,
-      icon: <ApiOutlined />,
+      icon: <CloudServerOutlined />,
       label: 'Nodes',
     },
     {
@@ -229,12 +247,17 @@ const MainLayout = ({ children }) => {
             theme="dark"
             mode="inline"
             selectedKeys={[
-              // Keep parent route selected when on child routes
-              location.pathname.startsWith(`${ROUTES.ROUTES}/`) ? ROUTES.ROUTES : 
-              location.pathname.startsWith(`${ROUTES.SETTINGS}/`) ? ROUTES.SETTINGS : 
-              location.pathname.startsWith(ROUTES.SYSTEM_PIPELINES) ? ROUTES.SYSTEM_PIPELINES :
-              location.pathname.startsWith(ROUTES.SYSTEM_NODES) ? ROUTES.SYSTEM_NODES :
-              location.pathname
+              location.pathname.startsWith(`${ROUTES.ROUTES}/`)
+                ? ROUTES.ROUTES
+                : location.pathname.startsWith(`${ROUTES.INTERFACES}/`)
+                  ? ROUTES.INTERFACES
+                  : location.pathname.startsWith(`${ROUTES.SETTINGS}/`)
+                    ? ROUTES.SETTINGS
+                    : location.pathname.startsWith(ROUTES.SYSTEM_PIPELINES)
+                      ? ROUTES.SYSTEM_PIPELINES
+                      : location.pathname.startsWith(ROUTES.SYSTEM_NODES)
+                        ? ROUTES.SYSTEM_NODES
+                        : location.pathname
             ]}
             items={menuItems.map(item => ({
               ...item,

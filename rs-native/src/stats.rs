@@ -29,7 +29,7 @@ pub fn start_stats_loop(runtime: &PipelineRuntime, writer: Arc<Mutex<Box<dyn Sta
             let last_total = source_bytes_last_interval.swap(current_total, Ordering::Relaxed);
             source_bytes_per_sec.store(current_total.saturating_sub(last_total), Ordering::Relaxed);
 
-            let source_stats = source.property::<Option<gst::Structure>>("stats");
+            let source_stats = stats_property(&source);
 
             let bytes_total = source_stats
                 .as_ref()
@@ -93,7 +93,7 @@ pub fn start_stats_loop(runtime: &PipelineRuntime, writer: Arc<Mutex<Box<dyn Sta
                     );
 
                     if let Some(sink_element) = dest.sink_element.as_ref() {
-                        let sink_stats = sink_element.property::<Option<gst::Structure>>("stats");
+                        let sink_stats = stats_property(sink_element);
                         if let Some(sink_stats) = sink_stats.as_ref() {
                             dest_obj.insert("srt".into(), structure_to_json(sink_stats));
                         }
@@ -109,6 +109,14 @@ pub fn start_stats_loop(runtime: &PipelineRuntime, writer: Arc<Mutex<Box<dyn Sta
             }
         }
     });
+}
+
+fn stats_property(element: &gst::Element) -> Option<gst::Structure> {
+    if element.has_property("stats", None) {
+        element.property::<Option<gst::Structure>>("stats")
+    } else {
+        None
+    }
 }
 
 fn extract_callers_from_stats(stats: &gst::Structure) -> Option<Vec<Value>> {
