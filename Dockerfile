@@ -109,6 +109,9 @@ RUN apt-get update -y && \
     libgstreamer-plugins-base1.0-0 \
     && apt-get clean && rm -f /var/lib/apt/lists/*_*
 
+# Install DuckDB CLI for local analytics introspection/debugging inside container
+RUN curl -fsSL https://install.duckdb.org | sh
+
 # Set the locale
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
 

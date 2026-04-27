@@ -118,6 +118,16 @@ Before deploying HydraSRT, ensure your system has the following dependencies ins
    ```
    This command should output the linking flags without errors. If you see errors, ensure all required packages are installed.
 
+6. **DuckDB CLI** (used for analytics inspection/debugging):
+
+   ```bash
+   # Ubuntu/Debian and most Linux distributions
+   curl -fsSL https://install.duckdb.org | sh
+
+   # macOS (using Homebrew)
+   brew install duckdb
+   ```
+
 ## Development
 
 To run HydraSRT locally, start the Elixir app and Phoenix will also launch the Vite dev server for the web UI.
@@ -241,6 +251,8 @@ Configure HydraSRT using the following environment variables:
 ## Running with Docker
 
 To run HydraSRT using Docker and Docker Compose, follow these steps:
+
+> `duckdb` CLI is installed in the Docker image during build.
 
 1. **Build the Docker image**:
 
