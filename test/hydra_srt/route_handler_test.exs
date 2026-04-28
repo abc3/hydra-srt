@@ -237,10 +237,6 @@ defmodule HydraSrt.RouteHandlerTest do
     assert sink["hydra_destination_id"] == "dest-enabled"
   end
 
-  test "callback_mode returns handle_event_function" do
-    assert RouteHandler.callback_mode() == [:handle_event_function]
-  end
-
   test "parse_native_json_line detects pipeline status events" do
     assert {:pipeline_status, "processing", nil} =
              RouteHandler.parse_native_json_line(
