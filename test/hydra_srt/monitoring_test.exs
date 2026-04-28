@@ -2,7 +2,6 @@ defmodule HydraSrt.MonitoringTest do
   use ExUnit.Case
   alias HydraSrt.Monitoring.OsMon
   alias HydraSrt.ProcessMonitor
-  alias HydraSrt.SignalHandler
   alias HydraSrt.ErlSysMon
 
   test "OsMon returns valid system stats" do
@@ -127,26 +126,6 @@ defmodule HydraSrt.MonitoringTest do
 
         assert {:error, "Unsupported operating system"} =
                  ProcessMonitor.list_pipeline_processes_detailed()
-    end
-  end
-
-  test "SignalHandler initializes with empty state" do
-    assert {:ok, %{}} = SignalHandler.init([])
-  end
-
-  test "SignalHandler handles events" do
-    signal = {:signal, :sigterm}
-    state = %{}
-    assert {:ok, %{}} = SignalHandler.handle_event(signal, state)
-  end
-
-  test "SignalHandler handles multiple signal types" do
-    signals = [:sigterm, :sigint, :sighup, :sigquit]
-    state = %{}
-
-    for signal_type <- signals do
-      signal = {:signal, signal_type}
-      assert {:ok, %{}} = SignalHandler.handle_event(signal, state)
     end
   end
 
