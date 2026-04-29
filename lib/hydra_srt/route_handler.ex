@@ -1,17 +1,16 @@
 defmodule HydraSrt.RouteHandler do
   @moduledoc false
 
+  @behaviour GenServer
+
   require Logger
-  @behaviour :gen_statem
+
   @normal_port_exit_reasons [:normal, :epipe]
 
   alias HydraSrt.Db
   alias HydraSrt.Helpers
 
-  def start_link(args), do: :gen_statem.start_link(__MODULE__, args, [])
-
-  @impl true
-  def callback_mode, do: [:handle_event_function]
+  def start_link(args), do: GenServer.start_link(__MODULE__, args, [])
 
   @impl true
   def init(args) do
@@ -28,11 +27,11 @@ defmodule HydraSrt.RouteHandler do
       shutdown_reason: nil
     }
 
-    {:ok, :start, data, {:next_event, :internal, :start}}
+    {:ok, data, {:continue, :start}}
   end
 
   @impl true
-  def handle_event(:internal, :start, _state, data) do
+  def handle_continue(:start, data) do
     Logger.info("RouteHandler: starting route #{data.id}")
     port = open_and_initialize_native_pipeline(data.route, data.id)
 
@@ -47,25 +46,26 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  def handle_event(:info, {port, {:data, info}}, _state, %{port: port} = data)
+  @impl true
+  def handle_info({port, {:data, info}}, %{port: port} = data)
       when is_binary(info) do
     new_data = consume_port_output(info, data)
-    {:keep_state, new_data}
+    {:noreply, new_data}
   end
 
-  def handle_event(:info, {port, {:data, {:eol, info}}}, _state, %{port: port} = data)
+  def handle_info({port, {:data, {:eol, info}}}, %{port: port} = data)
       when is_binary(info) do
     new_data = consume_port_output(info <> "\n", data)
-    {:keep_state, new_data}
+    {:noreply, new_data}
   end
 
-  def handle_event(:info, {port, {:data, {:noeol, info}}}, _state, %{port: port} = data)
+  def handle_info({port, {:data, {:noeol, info}}}, %{port: port} = data)
       when is_binary(info) do
     new_data = consume_port_output(info, data)
-    {:keep_state, new_data}
+    {:noreply, new_data}
   end
 
-  def handle_event(:info, {port, {:exit_status, status}}, _state, %{port: port} = data) do
+  def handle_info({port, {:exit_status, status}}, %{port: port} = data) do
     log_fun = if status == 0, do: &Logger.info/1, else: &Logger.error/1
     log_fun.("RouteHandler: native pipeline exited with status #{status}")
 
@@ -76,7 +76,7 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  def handle_event(:info, {:EXIT, port, reason}, _state, %{port: port} = data) do
+  def handle_info({:EXIT, port, reason}, %{port: port} = data) do
     Logger.info("RouteHandler: port exit #{inspect(reason)}")
 
     if reason == :epipe do
@@ -90,31 +90,31 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  def handle_event(type, content, state, data) do
+  def handle_info(content, data) do
     Logger.error(
-      "RouteHandler: Undefined msg: #{inspect([{"type", type}, {"content", content}, {"state", state}, {"data", data}],
+      "RouteHandler: Undefined msg: #{inspect([{"content", content}, {"data", data}],
       pretty: true)}"
     )
 
-    :keep_state_and_data
+    {:noreply, data}
   end
 
   @impl true
-  def terminate(reason, _state, %{id: id, shutdown_reason: shutdown_reason})
+  def terminate(reason, %{id: id, shutdown_reason: shutdown_reason})
       when not is_nil(shutdown_reason) do
     Logger.info("RouteHandler: reason: #{inspect(reason)}")
     mark_route_terminated(id, shutdown_reason)
     :ok
   end
 
-  def terminate(reason, _state, %{port: port, id: id}) when is_port(port) do
+  def terminate(reason, %{port: port, id: id}) when is_port(port) do
     Logger.info("RouteHandler: reason: #{inspect(reason)} Closing port #{inspect(port)}")
     close_port(port)
     mark_route_terminated(id, reason)
     :ok
   end
 
-  def terminate(reason, _state, data) do
+  def terminate(reason, data) do
     Logger.info("RouteHandler: reason: #{inspect(reason)}")
     mark_route_terminated(data.id, reason)
     :ok
