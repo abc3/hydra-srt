@@ -7,7 +7,9 @@ defmodule HydraSrt.Db do
   alias HydraSrt.Api
   alias HydraSrt.Api.Route
   alias HydraSrt.Api.Destination
+  alias HydraSrt.Api.Source
   alias HydraSrt.Api.Interface
+  alias HydraSrt.Stats.EventLogger
 
   @spec create_route(map, binary | nil) :: {:ok, map} | {:error, any}
   def create_route(data, id \\ nil) when is_map(data) do
@@ -18,7 +20,7 @@ defmodule HydraSrt.Db do
 
     case Repo.insert(changeset) do
       {:ok, route} ->
-        {:ok, route_to_map(route, false)}
+        {:ok, route_to_map(route, false, [], list_sources_for_route(route.id))}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:error, changeset}
@@ -27,6 +29,11 @@ defmodule HydraSrt.Db do
 
   @spec get_route(String.t(), boolean) :: {:ok, map} | {:error, any}
   def get_route(id, include_dest? \\ false) when is_binary(id) do
+    get_route(id, include_dest?, true)
+  end
+
+  @spec get_route(String.t(), boolean, boolean) :: {:ok, map} | {:error, any}
+  def get_route(id, include_dest?, include_sources?) when is_binary(id) do
     case Api.get_route(id, false) do
       nil ->
         {:error, :not_found}
@@ -39,8 +46,8 @@ defmodule HydraSrt.Db do
             []
           end
 
-        route_map =
-          route_to_map(route, include_dest?, destinations)
+        sources = if include_sources?, do: list_sources_for_route(id), else: []
+        route_map = route_to_map(route, include_dest?, destinations, sources)
 
         {:ok, route_map}
     end
@@ -57,8 +64,11 @@ defmodule HydraSrt.Db do
         |> Route.changeset(data)
         |> Repo.update(stale_error_field: :lock_version)
         |> case do
-          {:ok, updated} -> {:ok, route_to_map(updated, false)}
-          {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
+          {:ok, updated} ->
+            {:ok, route_to_map(updated, false, [], list_sources_for_route(id))}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:error, changeset}
         end
     end
   end
@@ -289,21 +299,184 @@ defmodule HydraSrt.Db do
       from(r in Route, order_by: [desc: field(r, ^order_field)])
       |> Repo.all()
 
-    routes =
+    source_map = list_sources_for_routes(routes)
+
+    destination_map =
       if with_destinations do
-        Enum.map(routes, fn route ->
-          destinations = list_destinations_for_route(route.id)
-          route_to_map(route, true, destinations)
-        end)
+        list_destinations_for_routes(routes)
       else
-        Enum.map(routes, &route_to_map(&1, false))
+        %{}
       end
+
+    routes =
+      Enum.map(routes, fn route ->
+        sources = Map.get(source_map, route.id, [])
+        destinations = Map.get(destination_map, route.id, [])
+        route_to_map(route, with_destinations, destinations, sources)
+      end)
 
     {:ok, routes}
   end
 
   def get_all_destinations(route_id) when is_binary(route_id) do
     {:ok, Enum.map(list_destinations_for_route(route_id), &destination_to_map/1)}
+  end
+
+  @spec create_source(String.t(), map, binary | nil) :: {:ok, map} | {:error, any}
+  def create_source(route_id, data, id \\ nil)
+      when is_binary(route_id) and is_map(data) do
+    data = Map.put_new(data, "route_id", route_id)
+
+    changeset =
+      %Source{}
+      |> Source.changeset(data)
+      |> maybe_put_changeset_id(id)
+
+    case Repo.insert(changeset) do
+      {:ok, source} ->
+        {:ok, source_to_map(source)}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  @spec get_source(String.t(), String.t()) :: {:ok, map} | {:error, any}
+  def get_source(route_id, id) when is_binary(route_id) and is_binary(id) do
+    case Api.get_source(route_id, id) do
+      nil -> {:error, :not_found}
+      %Source{} = source -> {:ok, source_to_map(source)}
+    end
+  end
+
+  @spec update_source(String.t(), String.t(), map) :: {:ok, map} | {:error, any}
+  def update_source(route_id, id, data)
+      when is_binary(route_id) and is_binary(id) and is_map(data) do
+    case Api.get_source(route_id, id) do
+      nil ->
+        {:error, :not_found}
+
+      %Source{} = source ->
+        source
+        |> Source.changeset(data)
+        |> Repo.update()
+        |> case do
+          {:ok, updated} -> {:ok, source_to_map(updated)}
+          {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
+        end
+    end
+  end
+
+  def del_source(route_id, id) when is_binary(route_id) and is_binary(id) do
+    route = Api.get_route(route_id, false)
+
+    case Api.get_source(route_id, id) do
+      nil ->
+        {:error, :not_found}
+
+      %Source{} = source ->
+        if route && route.active_source_id == source.id do
+          {:error, :active_source_cannot_be_deleted}
+        else
+          case Repo.delete(source) do
+            {:ok, _} -> :ok
+            {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
+          end
+        end
+    end
+  end
+
+  def get_all_sources(route_id) when is_binary(route_id) do
+    {:ok, Enum.map(list_sources_for_route(route_id), &source_to_map/1)}
+  end
+
+  @spec reorder_sources(String.t(), list(String.t())) :: {:ok, list(map())} | {:error, any()}
+  def reorder_sources(route_id, source_ids)
+      when is_binary(route_id) and is_list(source_ids) do
+    sources = list_sources_for_route(route_id)
+    existing_ids = MapSet.new(Enum.map(sources, & &1.id))
+    requested_ids = MapSet.new(source_ids)
+
+    cond do
+      source_ids == [] ->
+        {:error, :invalid_source_order}
+
+      map_size(Map.new(Enum.with_index(source_ids))) != length(source_ids) ->
+        {:error, :invalid_source_order}
+
+      existing_ids != requested_ids ->
+        {:error, :invalid_source_order}
+
+      true ->
+        case Repo.transaction(fn ->
+               # Two-step update to avoid unique conflicts on (route_id, position).
+               from(s in Source, where: s.route_id == ^route_id)
+               |> Repo.update_all(
+                 inc: [position: 1000],
+                 set: [updated_at: DateTime.utc_now(:second)]
+               )
+
+               source_ids
+               |> Enum.with_index()
+               |> Enum.each(fn {id, position} ->
+                 from(s in Source, where: s.id == ^id and s.route_id == ^route_id)
+                 |> Repo.update_all(
+                   set: [position: position, updated_at: DateTime.utc_now(:second)]
+                 )
+               end)
+             end) do
+          {:ok, _} ->
+            {:ok, Enum.map(list_sources_for_route(route_id), &source_to_map/1)}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  @spec set_route_active_source(String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, any()}
+  def set_route_active_source(route_id, source_id, reason)
+      when is_binary(route_id) and is_binary(source_id) and is_binary(reason) do
+    with %Route{} = route <- Api.get_route(route_id, false),
+         %Source{} = source <- Api.get_source(route_id, source_id),
+         {:ok, updated} <-
+           route
+           |> Route.changeset(%{
+             "active_source_id" => source.id,
+             "last_switch_reason" => reason,
+             "last_switch_at" => DateTime.utc_now(:second)
+           })
+           |> Repo.update() do
+      map = route_to_map(updated, false, [], list_sources_for_route(route_id))
+
+      EventLogger.log_source_switch(
+        route_id,
+        route.active_source_id,
+        source.id,
+        reason,
+        %{
+          active_source_id: source.id
+        }
+      )
+
+      Phoenix.PubSub.broadcast(
+        HydraSrt.PubSub,
+        "item:#{route_id}",
+        {:item_source,
+         %{
+           item_id: route_id,
+           active_source_id: source.id,
+           last_switch_reason: reason,
+           last_switch_at: map["last_switch_at"]
+         }}
+      )
+
+      {:ok, map}
+    else
+      nil -> {:error, :not_found}
+      {:error, %Ecto.Changeset{} = changeset} -> {:error, changeset}
+    end
   end
 
   @spec backup() :: {:ok, binary} | {:error, any}
@@ -323,21 +496,48 @@ defmodule HydraSrt.Db do
   end
 
   @doc false
-  def route_to_map(%Route{} = route, include_destinations \\ false) do
-    route_to_map(route, include_destinations, [])
+  def list_sources_for_route(route_id) when is_binary(route_id) do
+    from(s in Source, where: s.route_id == ^route_id, order_by: [asc: s.position])
+    |> Repo.all()
+  end
+
+  defp list_sources_for_routes(routes) when is_list(routes) do
+    route_ids = Enum.map(routes, & &1.id)
+
+    from(s in Source, where: s.route_id in ^route_ids, order_by: [asc: s.position])
+    |> Repo.all()
+    |> Enum.group_by(& &1.route_id)
+  end
+
+  defp list_destinations_for_routes(routes) when is_list(routes) do
+    route_ids = Enum.map(routes, & &1.id)
+
+    from(d in Destination, where: d.route_id in ^route_ids, order_by: [desc: d.inserted_at])
+    |> Repo.all()
+    |> Enum.group_by(& &1.route_id)
   end
 
   @doc false
-  def route_to_map(%Route{} = route, true, destinations) when is_list(destinations) do
+  def route_to_map(%Route{} = route, include_destinations \\ false) do
+    route_to_map(route, include_destinations, [], list_sources_for_route(route.id))
+  end
+
+  @doc false
+  def route_to_map(%Route{} = route, true, destinations, sources)
+      when is_list(destinations) and is_list(sources) do
     Map.put(
-      route_to_map(route, false, []),
+      route_to_map(route, false, [], sources),
       "destinations",
       Enum.map(destinations, &destination_to_map/1)
     )
   end
 
   @doc false
-  def route_to_map(%Route{} = route, false, _destinations) do
+  def route_to_map(%Route{} = route, false, _destinations, sources) when is_list(sources) do
+    active_source =
+      Enum.find(sources, &(&1.id == route.active_source_id)) ||
+        Enum.find(sources, &(&1.position == 0))
+
     %{
       "id" => route.id,
       "enabled" => route.enabled,
@@ -345,8 +545,11 @@ defmodule HydraSrt.Db do
       "alias" => route.alias,
       "status" => route.status,
       "schema_status" => route.schema_status,
-      "schema" => route.schema,
-      "schema_options" => route.schema_options,
+      "sources" => Enum.map(sources, &source_to_map/1),
+      "active_source_id" => route.active_source_id || (active_source && active_source.id),
+      "backup_config" => route.backup_config || %{},
+      "last_switch_reason" => route.last_switch_reason,
+      "last_switch_at" => route.last_switch_at,
       "node" => route.node,
       "gstDebug" => route.gst_debug,
       "source" => route.source,
@@ -374,6 +577,24 @@ defmodule HydraSrt.Db do
       "stopped_at" => destination.stopped_at,
       "created_at" => destination.inserted_at,
       "updated_at" => destination.updated_at
+    }
+  end
+
+  @doc false
+  def source_to_map(%Source{} = source) do
+    %{
+      "id" => source.id,
+      "route_id" => source.route_id,
+      "position" => source.position,
+      "enabled" => source.enabled,
+      "name" => source.name,
+      "schema" => source.schema,
+      "schema_options" => source.schema_options,
+      "status" => source.status,
+      "last_probe_at" => source.last_probe_at,
+      "last_failure_at" => source.last_failure_at,
+      "created_at" => source.inserted_at,
+      "updated_at" => source.updated_at
     }
   end
 

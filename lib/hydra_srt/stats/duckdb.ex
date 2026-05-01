@@ -4,6 +4,7 @@ defmodule HydraSrt.Stats.Duckdb do
   require Logger
 
   @table "stats_samples"
+  @events_table "events"
 
   @spec ensure_schema(GenServer.server()) :: :ok | {:error, term()}
   def ensure_schema(conn \\ HydraSrt.AnalyticsConn) do
@@ -24,7 +25,24 @@ defmodule HydraSrt.Stats.Duckdb do
       "CREATE INDEX IF NOT EXISTS idx_stats_samples_ts ON stats_samples(ts)",
       "CREATE INDEX IF NOT EXISTS idx_stats_samples_route_id ON stats_samples(route_id)",
       "CREATE INDEX IF NOT EXISTS idx_stats_samples_metric_key ON stats_samples(metric_key)",
-      "CREATE INDEX IF NOT EXISTS idx_stats_samples_entity_id ON stats_samples(entity_id)"
+      "CREATE INDEX IF NOT EXISTS idx_stats_samples_entity_id ON stats_samples(entity_id)",
+      """
+      CREATE TABLE IF NOT EXISTS events (
+        ts TIMESTAMP,
+        route_id VARCHAR,
+        event_type VARCHAR,
+        severity VARCHAR,
+        source_id VARCHAR,
+        from_source_id VARCHAR,
+        to_source_id VARCHAR,
+        reason VARCHAR,
+        message VARCHAR,
+        details_json VARCHAR
+      )
+      """,
+      "CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)",
+      "CREATE INDEX IF NOT EXISTS idx_events_route_id ON events(route_id)",
+      "CREATE INDEX IF NOT EXISTS idx_events_event_type ON events(event_type)"
     ]
 
     Enum.reduce_while(statements, :ok, fn statement, :ok ->
@@ -59,6 +77,30 @@ defmodule HydraSrt.Stats.Duckdb do
     execute(conn, sql)
   end
 
+  @spec delete_events_older_than(pos_integer(), GenServer.server()) :: :ok | {:error, term()}
+  def delete_events_older_than(hours, conn \\ HydraSrt.AnalyticsConn)
+      when is_integer(hours) and hours > 0 do
+    sql = "DELETE FROM events WHERE ts < (CURRENT_TIMESTAMP - INTERVAL '#{hours} HOURS')"
+    execute(conn, sql)
+  end
+
+  @spec insert_events([map()], GenServer.server()) :: :ok | {:error, term()}
+  def insert_events(rows, conn \\ HydraSrt.AnalyticsConn)
+  def insert_events([], _conn), do: :ok
+
+  def insert_events(rows, conn) when is_list(rows) do
+    columns = to_event_columns(rows)
+
+    case Adbc.Connection.bulk_insert(conn, columns, table: @events_table, mode: :append) do
+      {:ok, _inserted_rows_count} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("Stats DuckDB events insert failed reason=#{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
   @spec execute(GenServer.server(), binary()) :: :ok | {:error, term()}
   def execute(conn, sql) when is_binary(sql) do
     case Adbc.Connection.execute(conn, sql) do
@@ -89,6 +131,24 @@ defmodule HydraSrt.Stats.Duckdb do
       Adbc.Column.f64(value_double_values, name: "value_double"),
       Adbc.Column.s64(value_bigint_values, name: "value_bigint"),
       Adbc.Column.string(value_text_values, name: "value_text")
+    ]
+  end
+
+  @spec to_event_columns([map()]) :: [Adbc.Column.t()]
+  def to_event_columns(rows) when is_list(rows) do
+    ts_values = Enum.map(rows, &normalize_ts/1)
+
+    [
+      Adbc.Column.timestamp(ts_values, :microseconds, "UTC", name: "ts"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :route_id)), name: "route_id"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :event_type)), name: "event_type"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :severity)), name: "severity"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :source_id)), name: "source_id"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :from_source_id)), name: "from_source_id"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :to_source_id)), name: "to_source_id"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :reason)), name: "reason"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :message)), name: "message"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :details_json)), name: "details_json")
     ]
   end
 

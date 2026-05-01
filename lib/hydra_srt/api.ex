@@ -8,6 +8,7 @@ defmodule HydraSrt.Api do
 
   alias HydraSrt.Api.Route
   alias HydraSrt.Api.Destination
+  alias HydraSrt.Api.Source
 
   @doc false
   def list_routes(with_destinations) when with_destinations in [true, false] do
@@ -33,6 +34,32 @@ defmodule HydraSrt.Api do
       when is_binary(route_id) and is_binary(destination_id) do
     from(d in Destination, where: d.id == ^destination_id and d.route_id == ^route_id)
     |> Repo.one()
+  end
+
+  @doc false
+  def list_sources(route_id) when is_binary(route_id) do
+    from(s in Source, where: s.route_id == ^route_id, order_by: [asc: s.position])
+    |> Repo.all()
+  end
+
+  @doc false
+  def get_source(route_id, source_id)
+      when is_binary(route_id) and is_binary(source_id) do
+    from(s in Source, where: s.id == ^source_id and s.route_id == ^route_id)
+    |> Repo.one()
+  end
+
+  @doc false
+  def get_source(source_id) when is_binary(source_id) do
+    Repo.get(Source, source_id)
+  end
+
+  @doc false
+  def create_source(route_id, attrs) when is_binary(route_id) and is_map(attrs) do
+    attrs
+    |> Map.put_new(:route_id, route_id)
+    |> Map.put_new("route_id", route_id)
+    |> create_source()
   end
 
   @doc false
@@ -229,6 +256,50 @@ defmodule HydraSrt.Api do
   """
   def change_destination(%Destination{} = destination, attrs \\ %{}) do
     Destination.changeset(destination, attrs)
+  end
+
+  @doc """
+  Returns the list of sources.
+  """
+  def list_sources do
+    Repo.all(Source)
+  end
+
+  @doc """
+  Gets a single source.
+  """
+  def get_source!(id), do: Repo.get!(Source, id)
+
+  @doc """
+  Creates a source.
+  """
+  def create_source(attrs \\ %{}) do
+    %Source{}
+    |> Source.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @doc """
+  Updates a source.
+  """
+  def update_source(%Source{} = source, attrs) do
+    source
+    |> Source.changeset(attrs)
+    |> Repo.update()
+  end
+
+  @doc """
+  Deletes a source.
+  """
+  def delete_source(%Source{} = source) do
+    Repo.delete(source)
+  end
+
+  @doc """
+  Returns an `%Ecto.Changeset{}` for tracking source changes.
+  """
+  def change_source(%Source{} = source, attrs \\ %{}) do
+    Source.changeset(source, attrs)
   end
 
   alias HydraSrt.Api.Interface

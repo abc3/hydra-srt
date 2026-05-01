@@ -73,6 +73,22 @@ export const routesApi = {
     return response.json();
   },
 
+  getEvents: async (id, params = {}) => {
+    const query = new URLSearchParams();
+
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === '') {
+        return;
+      }
+
+      query.set(key, value);
+    });
+
+    const querySuffix = query.toString().length > 0 ? `?${query.toString()}` : '';
+    const response = await authFetch(`/api/routes/${id}/events${querySuffix}`);
+    return response.json();
+  },
+
   // Create a new route
   create: async (routeData) => {
     const response = await authFetch('/api/routes', {
@@ -122,6 +138,14 @@ export const routesApi = {
     return response.json();
   },
 
+  switchSource: async (id, sourceId) => {
+    const response = await authFetch(`/api/routes/${id}/switch-source`, {
+      method: 'POST',
+      body: JSON.stringify({ source_id: sourceId }),
+    });
+    return response.json();
+  },
+
   // Test a route source with ffprobe
   testSource: async (routeData) => {
     const response = await authFetch('/api/routes/test-source', {
@@ -136,6 +160,61 @@ export const routesApi = {
     }
 
     return data;
+  },
+};
+
+export const sourcesApi = {
+  list: async (routeId) => {
+    const response = await authFetch(`/api/routes/${routeId}/sources`);
+    return response.json();
+  },
+
+  get: async (routeId, id) => {
+    const response = await authFetch(`/api/routes/${routeId}/sources/${id}`);
+    return response.json();
+  },
+
+  create: async (routeId, sourceData) => {
+    const response = await authFetch(`/api/routes/${routeId}/sources`, {
+      method: 'POST',
+      body: JSON.stringify({ source: sourceData }),
+    });
+    return response.json();
+  },
+
+  update: async (routeId, id, sourceData) => {
+    const response = await authFetch(`/api/routes/${routeId}/sources/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ source: sourceData }),
+    });
+    return response.json();
+  },
+
+  delete: async (routeId, id) => {
+    const response = await authFetch(`/api/routes/${routeId}/sources/${id}`, {
+      method: 'DELETE',
+    });
+
+    if (response.status === 204) {
+      return { success: true };
+    }
+
+    return response.json();
+  },
+
+  reorder: async (routeId, sourceIds) => {
+    const response = await authFetch(`/api/routes/${routeId}/sources/reorder`, {
+      method: 'POST',
+      body: JSON.stringify({ source_ids: sourceIds }),
+    });
+    return response.json();
+  },
+
+  test: async (routeId, id) => {
+    const response = await authFetch(`/api/routes/${routeId}/sources/${id}/test`, {
+      method: 'POST',
+    });
+    return response.json();
   },
 };
 

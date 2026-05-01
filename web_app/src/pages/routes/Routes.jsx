@@ -16,7 +16,8 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
-import { subscribeToItemStatus, subscribeToStats } from '../../utils/realtime';
+import { subscribeToItemSource, subscribeToItemStatus, subscribeToStats } from '../../utils/realtime';
+import ActiveSourceBadge from './ActiveSourceBadge';
 import {
   ACTIVE_ROUTE_STATUSES,
   compareUptime,
@@ -34,6 +35,20 @@ const ONE_MONTH_SECONDS = 30 * ONE_DAY_SECONDS;
 const DELETE_DISABLED_MESSAGE = 'If you want to delete it, stop the route first';
 const ROUTE_ACTION_POLL_ATTEMPTS = 5;
 const ROUTE_ACTION_POLL_DELAY_MS = 250;
+const SWITCH_ALERT_WINDOW_MS = ONE_HOUR_SECONDS * 1000;
+
+const isRecentSwitch = (lastSwitchAt, now) => {
+  if (!lastSwitchAt) {
+    return false;
+  }
+
+  const ts = new Date(lastSwitchAt).getTime();
+  if (Number.isNaN(ts)) {
+    return false;
+  }
+
+  return now - ts <= SWITCH_ALERT_WINDOW_MS;
+};
 
 const getStatusMeta = (status) => {
   switch ((status || '').toLowerCase()) {
@@ -342,6 +357,42 @@ const Routes = () => {
   }, [routeIdsSignature]);
 
   useEffect(() => {
+    const routeIds = routeIdsSignature ? routeIdsSignature.split('|') : [];
+
+    if (routeIds.length === 0) {
+      return undefined;
+    }
+
+    const unsubscribers = routeIds.map((routeId) =>
+      subscribeToItemSource(routeId, (payload) => {
+        const itemId = payload?.item_id;
+        const activeSourceId = payload?.active_source_id;
+
+        if (!itemId || !activeSourceId) {
+          return;
+        }
+
+        setRoutes((prev) =>
+          prev.map((route) =>
+            route.id === itemId
+              ? {
+                  ...route,
+                  active_source_id: activeSourceId,
+                  last_switch_reason: payload?.last_switch_reason || route.last_switch_reason,
+                  last_switch_at: payload?.last_switch_at || route.last_switch_at,
+                }
+              : route
+          )
+        );
+      })
+    );
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [routeIdsSignature]);
+
+  useEffect(() => {
     const intervalId = window.setInterval(() => {
       setNowMs(Date.now());
     }, 10_000);
@@ -533,6 +584,18 @@ const Routes = () => {
       render: (_, record) => renderStatusBadge(getRouteRuntimeStatus(record)),
     },
     {
+      title: 'Active Source',
+      key: 'active_source',
+      render: (_, record) => (
+        <Space size="small">
+          <ActiveSourceBadge route={record} />
+          {isRecentSwitch(record.last_switch_at, nowMs) && (
+            <Tag color="warning">unstable</Tag>
+          )}
+        </Space>
+      ),
+    },
+    {
       title: 'In / Out',
       key: 'throughput',
       render: (_, record) => {
@@ -661,6 +724,10 @@ const Routes = () => {
   const statsSnapshot = statsDrawerRouteId ? routeStats[statsDrawerRouteId]?.snapshot : null;
   const statsTreeData = statsSnapshot ? [buildStatsTreeData(statsSnapshot)] : [];
   const expandedStatsKeys = collectTreeKeys(statsTreeData);
+  const switchesLastHour = routes.filter((route) => isRecentSwitch(route.last_switch_at, nowMs)).length;
+  const unstableRoutes = routes
+    .filter((route) => isRecentSwitch(route.last_switch_at, nowMs))
+    .slice(0, 5);
 
   return (
     <div>
@@ -670,6 +737,15 @@ const Routes = () => {
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
           <Title level={3} style={{ margin: 0, fontSize: '2rem', fontWeight: 600 }}>Routes</Title>
           <Space>
+            <Badge
+              count={switchesLastHour}
+              showZero
+              color={switchesLastHour > 0 ? '#fa8c16' : '#d9d9d9'}
+            >
+              <Tag color={switchesLastHour > 0 ? 'warning' : 'default'}>
+                Switches last 1h
+              </Tag>
+            </Badge>
             <Button
               type="primary"
               icon={<PlusOutlined />}
@@ -699,6 +775,20 @@ const Routes = () => {
               showTotal: (total) => `Total ${total} routes`,
             }}
           />
+        </Card>
+        <Card title="Top Unstable Routes (last 1h)">
+          {unstableRoutes.length === 0 ? (
+            <Empty description="No recent source switches" />
+          ) : (
+            <Space direction="vertical" style={{ width: '100%' }}>
+              {unstableRoutes.map((route) => (
+                <Space key={route.id} style={{ justifyContent: 'space-between', width: '100%' }}>
+                  <a href={`#/routes/${route.id}`}>{route.name || route.id}</a>
+                  <Tag color="warning">{route.last_switch_reason || 'switch'}</Tag>
+                </Space>
+              ))}
+            </Space>
+          )}
         </Card>
       </Space>
       <Drawer

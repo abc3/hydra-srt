@@ -4,12 +4,13 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import RouteSourceEdit from '../RouteSourceEdit';
 import RouteDestEdit from '../RouteDestEdit';
 
-const { mockRoutesApi, mockDestinationsApi, mockInterfacesApi } = vi.hoisted(() => ({
+const { mockRoutesApi, mockDestinationsApi, mockInterfacesApi, mockSourcesApi } = vi.hoisted(() => ({
   mockRoutesApi: {
     create: vi.fn(),
     update: vi.fn(),
     getById: vi.fn(),
     testSource: vi.fn(),
+    switchSource: vi.fn(),
   },
   mockDestinationsApi: {
     create: vi.fn(),
@@ -19,6 +20,13 @@ const { mockRoutesApi, mockDestinationsApi, mockInterfacesApi } = vi.hoisted(() 
   mockInterfacesApi: {
     getAll: vi.fn(),
   },
+  mockSourcesApi: {
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    reorder: vi.fn(),
+    test: vi.fn(),
+  },
 }));
 
 vi.mock('../../../utils/api', () => {
@@ -26,6 +34,7 @@ vi.mock('../../../utils/api', () => {
     routesApi: mockRoutesApi,
     destinationsApi: mockDestinationsApi,
     interfacesApi: mockInterfacesApi,
+    sourcesApi: mockSourcesApi,
   };
 });
 
@@ -89,7 +98,7 @@ describe('Route form validation', () => {
     expect(mockDestinationsApi.create).not.toHaveBeenCalled();
   });
 
-  it('requires both bind and remote ports for SRT rendezvous source', async () => {
+  it('requires source ports for SRT source', async () => {
     render(
       <MemoryRouter initialEntries={['/routes/new/edit']}>
         <Routes>
@@ -98,15 +107,12 @@ describe('Route form validation', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Route 1' } });
-    fireEvent.click(screen.getByRole('radio', { name: 'Rendezvous' }));
-
+    fireEvent.change(screen.getByPlaceholderText('Enter route name'), { target: { value: 'Route 1' } });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /save/i }));
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Please enter a remote port')).toBeInTheDocument();
       expect(screen.getByText('Please enter a bind port')).toBeInTheDocument();
     });
 

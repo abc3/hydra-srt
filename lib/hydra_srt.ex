@@ -19,6 +19,28 @@ defmodule HydraSrt do
     end
   end
 
+  @spec get_route_handler(String.t()) :: {:ok, pid()} | {:error, term()}
+  def get_route_handler(id) do
+    with {:ok, supervisor_pid} <- get_route(id) do
+      case Supervisor.which_children(supervisor_pid) do
+        children when is_list(children) ->
+          case Enum.find(children, fn
+                 {_child_id, pid, :worker, [HydraSrt.RouteHandler]} when is_pid(pid) -> true
+                 _ -> false
+               end) do
+            {_child_id, pid, :worker, [HydraSrt.RouteHandler]} ->
+              {:ok, pid}
+
+            _ ->
+              {:error, :route_handler_not_found}
+          end
+
+        _ ->
+          {:error, :route_handler_not_found}
+      end
+    end
+  end
+
   @spec stop_route(String.t()) :: :ok | {:error, term()}
   def stop_route(id) do
     case get_route(id) do

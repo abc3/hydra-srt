@@ -4,8 +4,10 @@ import { MemoryRouter } from 'react-router-dom';
 import Routes from '../Routes';
 import { routesApi } from '../../../utils/api';
 import {
+  subscribeToItemSource,
   subscribeToItemStatus,
   __clearRealtimeMockState,
+  __emitItemSource,
   __emitItemStatus,
   __emitStats,
 } from '../../../utils/realtime';
@@ -22,6 +24,7 @@ vi.mock('../../../utils/api', () => ({
 vi.mock('../../../utils/realtime', () => {
   const itemListeners = new Map();
   const statsListeners = new Set();
+  const itemSourceListeners = new Map();
 
   const subscribeToItemStatus = vi.fn((itemId, listener) => {
     const listeners = itemListeners.get(itemId) || [];
@@ -44,7 +47,22 @@ vi.mock('../../../utils/realtime', () => {
     });
   });
 
+  const subscribeToItemSource = vi.fn((itemId, listener) => {
+    const listeners = itemSourceListeners.get(itemId) || [];
+    listeners.push(listener);
+    itemSourceListeners.set(itemId, listeners);
+
+    return vi.fn(() => {
+      const current = itemSourceListeners.get(itemId) || [];
+      itemSourceListeners.set(
+        itemId,
+        current.filter((saved) => saved !== listener),
+      );
+    });
+  });
+
   return {
+    subscribeToItemSource,
     subscribeToItemStatus,
     subscribeToStats,
     __emitItemStatus: (itemId, status) => {
@@ -54,9 +72,19 @@ vi.mock('../../../utils/realtime', () => {
     __emitStats: (payload) => {
       statsListeners.forEach((listener) => listener(payload));
     },
+    __emitItemSource: (itemId, activeSourceId, reason = 'manual') => {
+      const listeners = itemSourceListeners.get(itemId) || [];
+      listeners.forEach((listener) => listener({
+        item_id: itemId,
+        active_source_id: activeSourceId,
+        last_switch_reason: reason,
+      }));
+    },
     __clearRealtimeMockState: () => {
       itemListeners.clear();
       statsListeners.clear();
+      itemSourceListeners.clear();
+      subscribeToItemSource.mockClear();
       subscribeToItemStatus.mockClear();
       subscribeToStats.mockClear();
     },
@@ -71,6 +99,11 @@ const routeFixture = (attrs) => ({
   schema_status: attrs.schema_status,
   schema: 'SRT',
   schema_options: { localaddress: '127.0.0.1', localport: 4201 },
+  sources: [
+    { id: `${attrs.id}-primary`, position: 0, enabled: true, name: 'primary' },
+    { id: `${attrs.id}-backup`, position: 1, enabled: true, name: 'backup-1' },
+  ],
+  active_source_id: `${attrs.id}-primary`,
   started_at: attrs.started_at ?? null,
   destinations: [],
   ...attrs,
@@ -87,6 +120,7 @@ describe('Routes', () => {
           name: 'Starting route',
           status: 'starting',
           schema_status: 'starting',
+          last_switch_at: new Date(Date.now() - 30_000).toISOString(),
         }),
         routeFixture({
           id: 'stopped-route',
@@ -105,7 +139,7 @@ describe('Routes', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText('Starting route');
+    await screen.findAllByText('Starting route');
 
     fireEvent.click(screen.getByRole('button', { name: /route actions for starting route/i }));
 
@@ -120,7 +154,7 @@ describe('Routes', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText('Stopped route');
+    await screen.findAllByText('Stopped route');
 
     fireEvent.click(screen.getByRole('button', { name: /route actions for stopped route/i }));
 
@@ -134,16 +168,47 @@ describe('Routes', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText('Starting route');
+    await screen.findAllByText('Starting route');
 
     expect(subscribeToItemStatus).toHaveBeenCalledWith('starting-route', expect.any(Function));
     expect(subscribeToItemStatus).toHaveBeenCalledWith('stopped-route', expect.any(Function));
+    expect(subscribeToItemSource).toHaveBeenCalledWith('starting-route', expect.any(Function));
+    expect(subscribeToItemSource).toHaveBeenCalledWith('stopped-route', expect.any(Function));
 
     await act(async () => {
       __emitItemStatus('starting-route', 'processing');
     });
 
     expect(await screen.findByText('running')).toBeInTheDocument();
+  });
+
+  it('updates active source badge on item_source event', async () => {
+    render(
+      <MemoryRouter>
+        <Routes />
+      </MemoryRouter>,
+    );
+
+    await screen.findAllByText('Starting route');
+    expect(screen.getAllByText('PRIMARY').length).toBeGreaterThan(0);
+
+    await act(async () => {
+      __emitItemSource('starting-route', 'starting-route-backup', 'manual');
+    });
+
+    expect(await screen.findByText('BACKUP: backup-1')).toBeInTheDocument();
+  });
+
+  it('shows switch counter and unstable marker for recent switches', async () => {
+    render(
+      <MemoryRouter>
+        <Routes />
+      </MemoryRouter>,
+    );
+
+    await screen.findAllByText('Starting route');
+    expect(screen.getByText('Switches last 1h')).toBeInTheDocument();
+    expect(screen.getByText('unstable')).toBeInTheDocument();
   });
 
   it('shows route in and out stats while status is not stopped', async () => {
@@ -153,7 +218,7 @@ describe('Routes', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByText('Starting route');
+    await screen.findAllByText('Starting route');
 
     await act(async () => {
       __emitStats({

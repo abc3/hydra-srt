@@ -75,6 +75,33 @@ defmodule HydraSrtWeb.RealtimeChannelTest do
     assert_push "item_status", %{item_id: "dest-1", status: "processing"}
   end
 
+  test "subscribes to item topic and pushes item source event", %{token: token} do
+    assert {:ok, socket} = connect(HydraSrtWeb.UserSocket, %{"token" => token})
+    assert {:ok, _, socket} = subscribe_and_join(socket, HydraSrtWeb.RealtimeChannel, "realtime")
+
+    ref = push(socket, "item:subscribe", %{"item_id" => "route-1"})
+    assert_reply ref, :ok
+
+    Phoenix.PubSub.broadcast(
+      HydraSrt.PubSub,
+      "item:route-1",
+      {:item_source,
+       %{
+         item_id: "route-1",
+         active_source_id: "source-2",
+         last_switch_reason: "manual",
+         last_switch_at: "2026-05-01T12:30:00Z"
+       }}
+    )
+
+    assert_push "item_source", %{
+      item_id: "route-1",
+      active_source_id: "source-2",
+      last_switch_reason: "manual",
+      last_switch_at: "2026-05-01T12:30:00Z"
+    }
+  end
+
   test "item topic subscribe is idempotent and unsubscribe stops pushes", %{token: token} do
     assert {:ok, socket} = connect(HydraSrtWeb.UserSocket, %{"token" => token})
     assert {:ok, _, socket} = subscribe_and_join(socket, HydraSrtWeb.RealtimeChannel, "realtime")
@@ -95,5 +122,30 @@ defmodule HydraSrtWeb.RealtimeChannelTest do
     )
 
     refute_push "item_status", _, 150
+  end
+
+  test "subscribes to events topic and pushes event payload", %{token: token} do
+    assert {:ok, socket} = connect(HydraSrtWeb.UserSocket, %{"token" => token})
+    assert {:ok, _, socket} = subscribe_and_join(socket, HydraSrtWeb.RealtimeChannel, "realtime")
+
+    ref = push(socket, "events:subscribe", %{"route_id" => "route-1"})
+    assert_reply ref, :ok
+
+    Phoenix.PubSub.broadcast(
+      HydraSrt.PubSub,
+      "events:route-1",
+      {:event,
+       %{
+         "route_id" => "route-1",
+         "event_type" => "source_switch",
+         "reason" => "manual"
+       }}
+    )
+
+    assert_push "event", %{
+      "route_id" => "route-1",
+      "event_type" => "source_switch",
+      "reason" => "manual"
+    }
   end
 end

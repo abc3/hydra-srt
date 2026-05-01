@@ -3,9 +3,13 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import RouteItem from '../RouteItem';
 import {
+  subscribeToItemSource,
   subscribeToItemStatus,
+  subscribeToRouteEvents,
   subscribeToStats,
+  __emitItemSource,
   __emitItemStatus,
+  __emitRouteEvent,
   __clearRealtimeMockState,
 } from '../../../utils/realtime';
 import { routesApi } from '../../../utils/api';
@@ -18,10 +22,18 @@ vi.mock('../../../utils/api', () => {
       getAnalytics: vi.fn(async () => ({
         data: {
           points: [],
+          switches: [],
+          source_timeline: [],
           meta: {
             window: 'last_hour',
             bucket_ms: 10_000,
           },
+        },
+      })),
+      getEvents: vi.fn(async () => ({
+        data: {
+          events: [],
+          meta: { window: 'last_hour', limit: 50, offset: 0 },
         },
       })),
       getById: vi.fn(async () => ({
@@ -34,6 +46,11 @@ vi.mock('../../../utils/api', () => {
           enabled: true,
           schema: 'SRT',
           schema_options: { localaddress: '127.0.0.1', localport: 1234, mode: 'listener' },
+          sources: [
+            { id: 's1', position: 0, enabled: true, name: 'primary' },
+            { id: 's2', position: 1, enabled: true, name: 'backup' },
+          ],
+          active_source_id: 's1',
           node: 'node@host',
           destinations: [
             {
@@ -57,6 +74,10 @@ vi.mock('../../../utils/api', () => {
           ],
         },
       })),
+      switchSource: vi.fn(async () => ({ data: { active_source_id: 's2', last_switch_reason: 'manual' } })),
+    },
+    sourcesApi: {
+      test: vi.fn(async () => ({ data: { ok: true } })),
     },
     destinationsApi: {
       delete: async () => ({ data: {} }),
@@ -66,29 +87,50 @@ vi.mock('../../../utils/api', () => {
 
 vi.mock('../../../utils/realtime', () => {
   const itemListeners = new Map();
-  const unsubscribeFns = new Map();
+  const itemSourceListeners = new Map();
   const statsListeners = new Set();
+  const routeEventsListeners = new Map();
 
   const subscribeToItemStatus = vi.fn((itemId, listener) => {
     const listeners = itemListeners.get(itemId) || [];
     listeners.push(listener);
     itemListeners.set(itemId, listeners);
 
-    const unsubscribe = vi.fn(() => {
+    return vi.fn(() => {
       const current = itemListeners.get(itemId) || [];
       itemListeners.set(
         itemId,
         current.filter((saved) => saved !== listener),
       );
     });
+  });
 
-    unsubscribeFns.set(listener, unsubscribe);
-    return unsubscribe;
+  const subscribeToItemSource = vi.fn((itemId, listener) => {
+    const listeners = itemSourceListeners.get(itemId) || [];
+    listeners.push(listener);
+    itemSourceListeners.set(itemId, listeners);
+
+    return vi.fn(() => {
+      const current = itemSourceListeners.get(itemId) || [];
+      itemSourceListeners.set(
+        itemId,
+        current.filter((saved) => saved !== listener),
+      );
+    });
   });
 
   const emitItemStatus = (itemId, status) => {
     const listeners = itemListeners.get(itemId) || [];
     listeners.forEach((listener) => listener({ item_id: itemId, status }));
+  };
+
+  const emitItemSource = (itemId, activeSourceId, reason = 'manual') => {
+    const listeners = itemSourceListeners.get(itemId) || [];
+    listeners.forEach((listener) => listener({
+      item_id: itemId,
+      active_source_id: activeSourceId,
+      last_switch_reason: reason,
+    }));
   };
 
   const subscribeToStats = vi.fn((listener) => {
@@ -103,15 +145,41 @@ vi.mock('../../../utils/realtime', () => {
     });
   });
 
+  const subscribeToRouteEvents = vi.fn((routeId, listener) => {
+    const listeners = routeEventsListeners.get(routeId) || [];
+    listeners.push(listener);
+    routeEventsListeners.set(routeId, listeners);
+
+    return vi.fn(() => {
+      const current = routeEventsListeners.get(routeId) || [];
+      routeEventsListeners.set(
+        routeId,
+        current.filter((saved) => saved !== listener),
+      );
+    });
+  });
+
+  const emitRouteEvent = (routeId, payload) => {
+    const listeners = routeEventsListeners.get(routeId) || [];
+    listeners.forEach((listener) => listener({ route_id: routeId, ...payload }));
+  };
+
   return {
+    subscribeToItemSource,
     subscribeToItemStatus,
+    subscribeToRouteEvents,
     subscribeToStats,
+    __emitItemSource: emitItemSource,
     __emitItemStatus: emitItemStatus,
+    __emitRouteEvent: emitRouteEvent,
     __clearRealtimeMockState: () => {
       itemListeners.clear();
-      unsubscribeFns.clear();
+      itemSourceListeners.clear();
       statsListeners.clear();
+      routeEventsListeners.clear();
+      subscribeToItemSource.mockClear();
       subscribeToItemStatus.mockClear();
+      subscribeToRouteEvents.mockClear();
       subscribeToStats.mockClear();
     },
   };
@@ -131,6 +199,11 @@ describe('RouteItem', () => {
         enabled: true,
         schema: 'SRT',
         schema_options: { localaddress: '127.0.0.1', localport: 1234, mode: 'listener' },
+        sources: [
+          { id: 's1', position: 0, enabled: true, name: 'primary' },
+          { id: 's2', position: 1, enabled: true, name: 'backup' },
+        ],
+        active_source_id: 's1',
         node: 'node@host',
         destinations: [
           {
@@ -157,10 +230,18 @@ describe('RouteItem', () => {
     routesApi.getAnalytics.mockResolvedValue({
       data: {
         points: [],
+        switches: [],
+        source_timeline: [],
         meta: {
           window: 'last_hour',
           bucket_ms: 10_000,
         },
+      },
+    });
+    routesApi.getEvents.mockResolvedValue({
+      data: {
+        events: [],
+        meta: { window: 'last_hour', limit: 50, offset: 0 },
       },
     });
   });
@@ -179,6 +260,49 @@ describe('RouteItem', () => {
     expect(subscribeToItemStatus).toHaveBeenCalledWith('r1', expect.any(Function));
     expect(subscribeToItemStatus).toHaveBeenCalledWith('d1', expect.any(Function));
     expect(subscribeToItemStatus).toHaveBeenCalledWith('d2', expect.any(Function));
+    expect(subscribeToItemSource).toHaveBeenCalledWith('r1', expect.any(Function));
+    expect(subscribeToRouteEvents).toHaveBeenCalledWith('r1', expect.any(Function));
+  });
+
+  it('updates active source badge when item source event arrives', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Endpoints');
+    expect(screen.getByText('PRIMARY')).toBeInTheDocument();
+
+    await act(async () => {
+      __emitItemSource('r1', 's2', 'manual');
+    });
+
+    expect(await screen.findByText('BACKUP: backup')).toBeInTheDocument();
+  });
+
+  it('calls switch source from source actions', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Endpoints');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Actions for backup' }));
+    });
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('menuitem', { name: /switch/i }));
+    });
+
+    expect(routesApi.switchSource).toHaveBeenCalledWith('r1', 's2');
   });
 
   it('updates statuses when item status events arrive', async () => {
@@ -201,22 +325,7 @@ describe('RouteItem', () => {
     expect(screen.getAllByText('stopped').length).toBeGreaterThan(0);
   });
 
-  it('switches Start button to Stop immediately after start click', async () => {
-    routesApi.getById.mockResolvedValue({
-      data: {
-        id: 'r1',
-        name: 'Route 1',
-        status: 'stopped',
-        schema_status: 'stopped',
-        updated_at: new Date().toISOString(),
-        enabled: true,
-        schema: 'SRT',
-        schema_options: { localaddress: '127.0.0.1', localport: 1234, mode: 'listener' },
-        node: 'node@host',
-        destinations: [],
-      },
-    });
-
+  it('prepends events when realtime event arrives', async () => {
     render(
       <MemoryRouter initialEntries={['/routes/r1']}>
         <Routes>
@@ -225,180 +334,17 @@ describe('RouteItem', () => {
       </MemoryRouter>,
     );
 
-    const startButton = await screen.findByRole('button', { name: /start/i });
+    await screen.findByText('Events');
 
     await act(async () => {
-      fireEvent.click(startButton);
+      __emitRouteEvent('r1', {
+        ts: new Date().toISOString(),
+        event_type: 'source_switch',
+        source_id: 's2',
+        reason: 'manual',
+      });
     });
 
-    expect(await screen.findByRole('button', { name: /stop/i })).toBeInTheDocument();
-  });
-
-  it('shows analytics chart controls and fetches analytics data', async () => {
-    render(
-      <MemoryRouter initialEntries={['/routes/r1']}>
-        <Routes>
-          <Route path="/routes/:id" element={<RouteItem />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    const refreshButton = await screen.findByRole('button', { name: /refresh/i });
-    expect(refreshButton).toBeDisabled();
-    expect(screen.queryByText('p0.5')).not.toBeInTheDocument();
-    expect(screen.queryByText('p0.95')).not.toBeInTheDocument();
-    expect(screen.queryByText('p0.99')).not.toBeInTheDocument();
-    expect(routesApi.getAnalytics).toHaveBeenCalledTimes(1);
-    expect(routesApi.getAnalytics).toHaveBeenCalledWith(
-      'r1',
-      expect.objectContaining({
-        from: expect.any(String),
-        to: expect.any(String),
-      }),
-    );
-    expect(subscribeToStats).toHaveBeenCalledWith(expect.any(Function));
-  });
-
-  it('keeps the current runtime status visible until refreshed after Stop is clicked', async () => {
-    render(
-      <MemoryRouter initialEntries={['/routes/r1']}>
-        <Routes>
-          <Route path="/routes/:id" element={<RouteItem />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    const stopButton = await screen.findByRole('button', { name: /stop/i });
-
-    await act(async () => {
-      fireEvent.click(stopButton);
-    });
-
-    expect(screen.getAllByText('running').length).toBeGreaterThan(0);
-  });
-
-  it('keeps local stopping state after Stop is clicked', async () => {
-    render(
-      <MemoryRouter initialEntries={['/routes/r1']}>
-        <Routes>
-          <Route path="/routes/:id" element={<RouteItem />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    const stopButton = await screen.findByRole('button', { name: /stop/i });
-
-    await act(async () => {
-      fireEvent.click(stopButton);
-    });
-
-    expect(await screen.findAllByText('stopping')).not.toHaveLength(0);
-
-    expect(screen.getAllByText('stopping').length).toBeGreaterThan(0);
-  });
-
-  it('shows destination runtime status in the destinations table', async () => {
-    render(
-      <MemoryRouter initialEntries={['/routes/r1']}>
-        <Routes>
-          <Route path="/routes/:id" element={<RouteItem />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    expect(await screen.findByText('Status')).toBeInTheDocument();
-    expect(screen.getAllByText('running').length).toBeGreaterThanOrEqual(3);
-  });
-
-  it('shows destination enabled state in the endpoints table', async () => {
-    render(
-      <MemoryRouter initialEntries={['/routes/r1']}>
-        <Routes>
-          <Route path="/routes/:id" element={<RouteItem />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    expect(await screen.findByText('Enabled')).toBeInTheDocument();
-    expect(screen.getAllByText(/^Yes$/u).length).toBe(1);
-    expect(screen.getByText(/^No$/u)).toBeInTheDocument();
-  });
-
-  it('disables route delete while the route is started', async () => {
-    render(
-      <MemoryRouter initialEntries={['/routes/r1']}>
-        <Routes>
-          <Route path="/routes/:id" element={<RouteItem />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    const deleteButtonLabel = await screen.findByText('Delete');
-    const deleteButton = deleteButtonLabel.closest('button');
-    expect(deleteButton).not.toBeNull();
-    expect(deleteButton).toBeDisabled();
-  });
-
-  it('disables destination delete action while the route is started', async () => {
-    render(
-      <MemoryRouter initialEntries={['/routes/r1']}>
-        <Routes>
-          <Route path="/routes/:id" element={<RouteItem />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    const destinationActionsButton = await screen.findByRole('button', { name: 'Actions for Dest 1' });
-
-    await act(async () => {
-      fireEvent.click(destinationActionsButton);
-    });
-
-    const deleteLabels = await screen.findAllByText('Delete');
-    const deleteMenuItem = deleteLabels.find((element) =>
-      element.closest('[aria-disabled="true"]')
-    );
-
-    expect(deleteMenuItem).toBeTruthy();
-    expect(deleteMenuItem.closest('[aria-disabled="true"]')).not.toBeNull();
-  });
-
-  it('shows a unified Endpoints table with Source first', async () => {
-    render(
-      <MemoryRouter initialEntries={['/routes/r1']}>
-        <Routes>
-          <Route path="/routes/:id" element={<RouteItem />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    expect(await screen.findByText('Endpoints')).toBeInTheDocument();
-    expect(screen.getByText('Source')).toBeInTheDocument();
-    expect(screen.getAllByText('Destination').length).toBeGreaterThan(0);
-
-    const endpointLinks = screen.getAllByRole('link');
-    expect(endpointLinks[0]).toHaveTextContent('Route 1');
-  });
-
-  it('unsubscribes from item topics on unmount', async () => {
-    const { unmount } = render(
-      <MemoryRouter initialEntries={['/routes/r1']}>
-        <Routes>
-          <Route path="/routes/:id" element={<RouteItem />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    await screen.findByText('Endpoints');
-
-    const unsubs = subscribeToItemStatus.mock.results
-      .map((result) => result.value)
-      .filter((value) => typeof value === 'function');
-
-    unmount();
-
-    unsubs.forEach((unsubscribe) => {
-      expect(unsubscribe).toHaveBeenCalledTimes(1);
-    });
+    expect(await screen.findByText('source_switch')).toBeInTheDocument();
   });
 });

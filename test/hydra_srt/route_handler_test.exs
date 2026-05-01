@@ -110,6 +110,145 @@ defmodule HydraSrt.RouteHandlerTest do
     assert {:error, :invalid_source} = RouteHandler.source_from_record(record)
   end
 
+  test "source_record_from_route picks active source id when present" do
+    route = %{
+      "active_source_id" => "s2",
+      "sources" => [
+        %{"id" => "s1", "position" => 0, "schema" => "UDP", "schema_options" => %{}},
+        %{"id" => "s2", "position" => 1, "schema" => "SRT", "schema_options" => %{}}
+      ]
+    }
+
+    assert {:ok, source} = RouteHandler.source_record_from_route(route, nil)
+    assert source["id"] == "s2"
+  end
+
+  test "source_record_from_route falls back to position zero when active source missing" do
+    route = %{
+      "active_source_id" => "missing",
+      "sources" => [
+        %{"id" => "s1", "position" => 0, "schema" => "UDP", "schema_options" => %{}},
+        %{"id" => "s2", "position" => 1, "schema" => "SRT", "schema_options" => %{}}
+      ]
+    }
+
+    assert {:ok, source} = RouteHandler.source_record_from_route(route, nil)
+    assert source["id"] == "s1"
+  end
+
+  test "source_record_from_route uses explicit source id argument" do
+    route = %{
+      "active_source_id" => "s1",
+      "sources" => [
+        %{"id" => "s1", "position" => 0, "schema" => "UDP", "schema_options" => %{}},
+        %{"id" => "s2", "position" => 1, "schema" => "SRT", "schema_options" => %{}}
+      ]
+    }
+
+    assert {:ok, source} = RouteHandler.source_record_from_route(route, "s2")
+    assert source["id"] == "s2"
+  end
+
+  test "source_record_from_route returns invalid_source when explicit source id missing" do
+    route = %{
+      "active_source_id" => "s1",
+      "sources" => [
+        %{"id" => "s1", "position" => 0, "schema" => "UDP", "schema_options" => %{}}
+      ]
+    }
+
+    assert {:error, :invalid_source} = RouteHandler.source_record_from_route(route, "s2")
+  end
+
+  test "next_enabled_source in active mode wraps around" do
+    sources = [
+      %{"id" => "p", "position" => 0, "enabled" => true},
+      %{"id" => "b1", "position" => 1, "enabled" => true},
+      %{"id" => "b2", "position" => 2, "enabled" => true}
+    ]
+
+    assert RouteHandler.next_enabled_source(sources, "p", "active")["id"] == "b1"
+    assert RouteHandler.next_enabled_source(sources, "b1", "active")["id"] == "b2"
+    assert RouteHandler.next_enabled_source(sources, "b2", "active")["id"] == "p"
+  end
+
+  test "next_enabled_source in passive mode returns nil at end" do
+    sources = [
+      %{"id" => "p", "position" => 0, "enabled" => true},
+      %{"id" => "b1", "position" => 1, "enabled" => true}
+    ]
+
+    assert RouteHandler.next_enabled_source(sources, "p", "passive")["id"] == "b1"
+    assert RouteHandler.next_enabled_source(sources, "b1", "passive") == nil
+  end
+
+  test "next_enabled_source disabled mode always nil" do
+    sources = [
+      %{"id" => "p", "position" => 0, "enabled" => true},
+      %{"id" => "b1", "position" => 1, "enabled" => true}
+    ]
+
+    assert RouteHandler.next_enabled_source(sources, "p", "disabled") == nil
+  end
+
+  test "next_enabled_source skips disabled entries" do
+    sources = [
+      %{"id" => "p", "position" => 0, "enabled" => true},
+      %{"id" => "b1", "position" => 1, "enabled" => false},
+      %{"id" => "b2", "position" => 2, "enabled" => true}
+    ]
+
+    assert RouteHandler.next_enabled_source(sources, "p", "passive")["id"] == "b2"
+  end
+
+  test "in_cooldown? boundary behavior" do
+    refute RouteHandler.in_cooldown?(nil, 1000)
+    refute RouteHandler.in_cooldown?(1000, 1000)
+    refute RouteHandler.in_cooldown?(900, 1000)
+    assert RouteHandler.in_cooldown?(1001, 1000)
+  end
+
+  test "should_trigger_failover? zero_bitrate respects switch threshold and cooldown" do
+    data = %{
+      route: %{"backup_config" => %{"mode" => "passive", "switch_after_ms" => 3000}},
+      zero_bitrate_ticks: 2,
+      cooldown_until: nil,
+      now_ms: 1000
+    }
+
+    refute RouteHandler.should_trigger_failover?(data, :zero_bitrate)
+
+    assert RouteHandler.should_trigger_failover?(%{data | zero_bitrate_ticks: 3}, :zero_bitrate)
+
+    refute RouteHandler.should_trigger_failover?(
+             %{data | zero_bitrate_ticks: 3, cooldown_until: 2000},
+             :zero_bitrate
+           )
+  end
+
+  test "should_trigger_failover? reconnecting uses debounce threshold" do
+    data = %{
+      route: %{"backup_config" => %{"mode" => "passive", "switch_after_ms" => 3000}},
+      reconnecting_elapsed_ms: 2500,
+      now_ms: 1000
+    }
+
+    refute RouteHandler.should_trigger_failover?(data, :reconnecting)
+
+    assert RouteHandler.should_trigger_failover?(
+             %{data | reconnecting_elapsed_ms: 3000},
+             :reconnecting
+           )
+  end
+
+  test "should_trigger_failover? failed is immediate but disabled mode blocks auto" do
+    data = %{route: %{"backup_config" => %{"mode" => "passive"}}}
+    assert RouteHandler.should_trigger_failover?(data, :failed)
+
+    data_disabled = %{route: %{"backup_config" => %{"mode" => "disabled"}}}
+    refute RouteHandler.should_trigger_failover?(data_disabled, :failed)
+  end
+
   test "sink_from_record includes hydra destination metadata for SRT" do
     record = %{
       "id" => "dest1",

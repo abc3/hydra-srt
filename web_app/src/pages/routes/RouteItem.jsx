@@ -31,11 +31,17 @@ import {
   SearchOutlined,
   HolderOutlined,
   ArrowLeftOutlined,
-  ReloadOutlined
+  ReloadOutlined,
+  ApiOutlined,
 } from '@ant-design/icons';
 import { useParams, useNavigate } from 'react-router-dom';
-import { routesApi, destinationsApi } from '../../utils/api';
-import { subscribeToItemStatus, subscribeToStats } from '../../utils/realtime';
+import { routesApi, destinationsApi, sourcesApi } from '../../utils/api';
+import {
+  subscribeToItemSource,
+  subscribeToItemStatus,
+  subscribeToRouteEvents,
+  subscribeToStats,
+} from '../../utils/realtime';
 import { ROUTES } from "../../utils/constants";
 import {
   ACTIVE_ROUTE_STATUSES,
@@ -45,6 +51,10 @@ import {
   resolvePendingRouteStatus,
 } from '../../utils/routes';
 import { getEndpointAddressString, renderEndpointAddress } from '../../utils/routeEndpointAddress';
+import ActiveSourceBadge from './ActiveSourceBadge';
+import SwitchMarkers from './SwitchMarkers';
+import SourceTimeline from './SourceTimeline';
+import EventsLog from './EventsLog';
 import dayjs from 'dayjs';
 import {
   LineChart,
@@ -55,6 +65,7 @@ import {
   Tooltip as RechartsTooltip,
   Legend,
   ResponsiveContainer,
+  ReferenceArea,
 } from 'recharts';
 
 const { Title, Text } = Typography;
@@ -230,6 +241,9 @@ const RouteItem = () => {
   const [analyticsError, setAnalyticsError] = useState(null);
   const [analyticsData, setAnalyticsData] = useState({ points: [], meta: null });
   const [analyticsRefreshTick, setAnalyticsRefreshTick] = useState(0);
+  const [eventsData, setEventsData] = useState({ events: [], meta: null });
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsTypeFilter, setEventsTypeFilter] = useState('');
   const destinationIdsSignature = (routeData?.destinations || [])
     .map((destination) => destination?.id)
     .filter(Boolean)
@@ -325,6 +339,59 @@ const RouteItem = () => {
     };
   }, [routeData?.id, destinationIdsSignature]);
 
+  useEffect(() => {
+    if (!routeData?.id) {
+      return undefined;
+    }
+
+    return subscribeToItemSource(routeData.id, (payload) => {
+      const itemId = payload?.item_id;
+      const activeSourceId = payload?.active_source_id;
+
+      if (!itemId || itemId !== routeData.id || !activeSourceId) {
+        return;
+      }
+
+      setRouteData((prev) => {
+        if (!prev) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          active_source_id: activeSourceId,
+          last_switch_reason: payload?.last_switch_reason || prev.last_switch_reason,
+          last_switch_at: payload?.last_switch_at || prev.last_switch_at,
+        };
+      });
+    });
+  }, [routeData?.id]);
+
+  useEffect(() => {
+    if (!routeData?.id) {
+      return undefined;
+    }
+
+    return subscribeToRouteEvents(routeData.id, (payload) => {
+      setEventsData((prev) => {
+        const current = prev?.events || [];
+        const dedupKey = `${payload?.ts}-${payload?.event_type}-${payload?.source_id || 'none'}`;
+        const hasDuplicate = current.some(
+          (item) => `${item?.ts}-${item?.event_type}-${item?.source_id || 'none'}` === dedupKey,
+        );
+
+        if (hasDuplicate) {
+          return prev;
+        }
+
+        return {
+          ...(prev || {}),
+          events: [payload, ...current].slice(0, 50),
+        };
+      });
+    });
+  }, [routeData?.id]);
+
   const fetchRouteData = async () => {
     try {
       const result = await routesApi.getById(id);
@@ -372,6 +439,23 @@ const RouteItem = () => {
     }
   };
 
+  const fetchEventsData = async (queryParams, type = '') => {
+    try {
+      setEventsLoading(true);
+      const result = await routesApi.getEvents(id, {
+        ...queryParams,
+        type: type || undefined,
+        limit: 50,
+        offset: 0,
+      });
+      setEventsData(result?.data || { events: [], meta: null });
+    } catch (error) {
+      setEventsData({ events: [], meta: null });
+    } finally {
+      setEventsLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!id) {
       return;
@@ -398,7 +482,8 @@ const RouteItem = () => {
     }
 
     fetchAnalyticsData(queryParams);
-  }, [id, analyticsWindow, customRangeApplied, analyticsRefreshTick]);
+    fetchEventsData(queryParams, eventsTypeFilter);
+  }, [id, analyticsWindow, customRangeApplied, analyticsRefreshTick, eventsTypeFilter]);
 
   useEffect(() => {
     if (!id || analyticsWindow !== LIVE_ANALYTICS_WINDOW) {
@@ -527,14 +612,16 @@ const RouteItem = () => {
     };
   };
 
-  const sourceRow = routeData ? {
-    ...routeData,
-    id: `source-${routeData.id}`,
-    endpointId: routeData.id,
-    role: 'Source',
-    rowType: 'source',
-    name: routeData.name || 'Source',
-  } : null;
+  const sourceRows = (routeData?.sources || [])
+    .map((source) => ({
+      ...source,
+      id: `source-${source.id}`,
+      endpointId: source.id,
+      role: source.position === 0 ? 'Primary Source' : `Backup Source #${source.position}`,
+      rowType: 'source',
+      name: source.name || (source.position === 0 ? 'Primary Source' : `Backup Source #${source.position}`),
+      schema_status: source.status,
+    }));
   const routeBusy = isRouteBusy(routeData);
   const deleteDisabledMessage = 'If you want to delete it, stop the route first';
 
@@ -545,7 +632,7 @@ const RouteItem = () => {
   ) || [];
 
   const endpointsData = [
-    ...(sourceRow ? [sourceRow] : []),
+    ...sourceRows,
     ...filteredDestinations.map((dest) => ({
       ...dest,
       endpointId: dest.id,
@@ -563,6 +650,8 @@ const RouteItem = () => {
   }, {});
 
   const analyticsPoints = analyticsData?.points || [];
+  const switches = analyticsData?.switches || [];
+  const sourceTimeline = analyticsData?.source_timeline || [];
   const destinationSeriesIds = Array.from(
     new Set(
       analyticsPoints.flatMap((point) => Object.keys(point?.destinations || {}))
@@ -582,6 +671,22 @@ const RouteItem = () => {
       ...destinationValues,
     };
   });
+
+  const sourceNameById = (routeData?.sources || []).reduce((acc, source) => {
+    if (source?.id) {
+      acc[source.id] = source.name || `#${source.position}`;
+    }
+
+    return acc;
+  }, {});
+  const sourceColorById = (routeData?.sources || []).reduce((acc, source) => {
+    if (!source?.id) {
+      return acc;
+    }
+
+    acc[source.id] = source.position === 0 ? '#95de64' : '#ffd591';
+    return acc;
+  }, {});
 
   const endpointColumns = [
     {
@@ -671,6 +776,21 @@ const RouteItem = () => {
             icon: <EditOutlined />,
             label: 'Edit',
           },
+          ...(record.rowType === 'source'
+            ? [
+                {
+                  key: 'switch',
+                  icon: <PlayCircleOutlined />,
+                  label: 'Switch',
+                  disabled: routeData?.active_source_id === record.endpointId,
+                },
+                {
+                  key: 'test',
+                  icon: <ApiOutlined />,
+                  label: 'Test',
+                },
+              ]
+            : []),
           ...(record.rowType === 'destination'
             ? [{
                 key: 'delete',
@@ -689,6 +809,16 @@ const RouteItem = () => {
         const handleMenuClick = ({ key }) => {
           if (key === 'edit') {
             navigate(record.rowType === 'source' ? `/routes/${id}/edit` : `/routes/${id}/destinations/${record.endpointId}/edit`);
+            return;
+          }
+
+          if (key === 'switch') {
+            handleSwitchSource(record.endpointId);
+            return;
+          }
+
+          if (key === 'test') {
+            handleTestSource(record.endpointId);
             return;
           }
 
@@ -739,6 +869,47 @@ const RouteItem = () => {
     } catch (error) {
       messageApi.error(`Failed to delete destination: ${error.message}`);
       console.error('Error:', error);
+    }
+  };
+
+  const handleSwitchSource = async (sourceId) => {
+    try {
+      const result = await routesApi.switchSource(id, sourceId);
+      const updatedRoute = result?.data;
+
+      setRouteData((prev) => {
+        if (!prev) {
+          return prev;
+        }
+
+        if (!updatedRoute) {
+          return {
+            ...prev,
+            active_source_id: sourceId,
+            last_switch_reason: 'manual',
+            last_switch_at: new Date().toISOString(),
+          };
+        }
+
+        return {
+          ...prev,
+          ...updatedRoute,
+          sources: updatedRoute.sources || prev.sources,
+        };
+      });
+
+      messageApi.success('Source switched');
+    } catch (error) {
+      messageApi.error(`Failed to switch source: ${error.message}`);
+    }
+  };
+
+  const handleTestSource = async (sourceId) => {
+    try {
+      await sourcesApi.test(id, sourceId);
+      messageApi.success('Source test completed');
+    } catch (error) {
+      messageApi.error(`Failed to test source: ${error.message}`);
     }
   };
 
@@ -859,6 +1030,7 @@ const RouteItem = () => {
 
             <Space size="small" wrap>
               {renderRuntimeStatusBadge(runtimeStatus)}
+              <ActiveSourceBadge route={routeData} />
               {routeData?.status && routeData?.schema_status && routeData.status !== routeData.schema_status && (
                 <Tag color={statusDetails.color}>
                   Route {formatStatusLabel(routeData.status)}
@@ -976,6 +1148,24 @@ const RouteItem = () => {
                   isAnimationActive={false}
                   connectNulls
                 />
+                {sourceTimeline.map((segment, index) => (
+                  <ReferenceArea
+                    key={`${segment.source_id}-${segment.from}-${index}-bg`}
+                    x1={formatChartTimestamp(segment.from, analyticsWindow === LIVE_ANALYTICS_WINDOW)}
+                    x2={formatChartTimestamp(segment.to, analyticsWindow === LIVE_ANALYTICS_WINDOW)}
+                    y1={0}
+                    y2={1}
+                    ifOverflow="extendDomain"
+                    fill={sourceColorById[segment.source_id] || '#d9d9d9'}
+                    fillOpacity={0.08}
+                    strokeOpacity={0}
+                  />
+                ))}
+                <SwitchMarkers
+                  switches={switches}
+                  isLiveWindow={analyticsWindow === LIVE_ANALYTICS_WINDOW}
+                  formatChartTimestamp={formatChartTimestamp}
+                />
                 {destinationSeriesIds.map((destinationId, index) => (
                   <Line
                     key={destinationId}
@@ -991,7 +1181,27 @@ const RouteItem = () => {
               </LineChart>
             </ResponsiveContainer>
           </div>
+
+          <SourceTimeline
+            sourceTimeline={sourceTimeline}
+            sourceNameById={sourceNameById}
+            formatChartTimestamp={formatChartTimestamp}
+          />
         </Space>
+      </Card>
+
+      <Card
+        title="Events"
+        extra={(
+          <EventsLog.Filter value={eventsTypeFilter} onChange={setEventsTypeFilter} />
+        )}
+      >
+        <EventsLog
+          eventsLoading={eventsLoading}
+          events={eventsData?.events || []}
+          sourceNameById={sourceNameById}
+          formatLastUpdated={formatLastUpdated}
+        />
       </Card>
 
       <Card

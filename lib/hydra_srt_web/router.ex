@@ -33,14 +33,24 @@ defmodule HydraSrtWeb.Router do
     post "/routes/test-source", RouteController, :test_source
     resources "/routes", RouteController, except: [:new, :edit]
     get "/routes/:route_id/analytics", RouteController, :analytics
+    get "/routes/:route_id/events", RouteController, :events
     get "/routes/:route_id/start", RouteController, :start
     get "/routes/:route_id/stop", RouteController, :stop
     get "/routes/:route_id/restart", RouteController, :restart
+    post "/routes/:id/switch-source", RouteController, :switch_source
     get "/routes/:route_id/destinations", DestinationController, :index
     post "/routes/:route_id/destinations", DestinationController, :create
     get "/routes/:route_id/destinations/:dest_id", DestinationController, :show
     put "/routes/:route_id/destinations/:dest_id", DestinationController, :update
     delete "/routes/:route_id/destinations/:dest_id", DestinationController, :delete
+    get "/routes/:route_id/sources", SourceController, :index
+    post "/routes/:route_id/sources", SourceController, :create
+    get "/routes/:route_id/sources/:id", SourceController, :show
+    patch "/routes/:route_id/sources/:id", SourceController, :update
+    delete "/routes/:route_id/sources/:id", SourceController, :delete
+    post "/routes/:route_id/sources-reorder", SourceController, :reorder
+    post "/routes/:route_id/sources/reorder", SourceController, :reorder
+    post "/routes/:route_id/sources/:id/test", SourceController, :test
     get "/interfaces/system", InterfaceController, :system
     get "/interfaces/system/raw", InterfaceController, :system_raw
     resources "/interfaces", InterfaceController, except: [:new, :edit]
