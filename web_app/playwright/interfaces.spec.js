@@ -36,7 +36,7 @@ async function getFirstIpv4SystemInterface(request, token) {
 }
 
 async function openFirstSourceInterfaceSelect(page) {
-  const sourceCard = page.locator('.ant-card').filter({ hasText: 'Source Options' });
+  const sourceCard = page.locator('.ant-card').filter({ hasText: 'Primary Source' });
   const interfaceField = sourceCard.locator('.ant-form-item').filter({ hasText: 'Interface' }).first();
   await interfaceField.locator('.ant-select').click();
 }
@@ -64,7 +64,7 @@ test('interface visibility toggle controls route selector options', async ({ pag
   await expect(switchLocator).toHaveAttribute('aria-checked', 'false');
 
   await page.goto('/#/routes/new/edit');
-  await expect(page.getByRole('heading', { name: 'Add Source' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Add Route' })).toBeVisible();
   await openFirstSourceInterfaceSelect(page);
   await expect(page.getByText(aliasName)).toHaveCount(0);
   await page.keyboard.press('Escape');

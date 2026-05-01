@@ -202,6 +202,8 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
       |> Keyword.put(:database, db_path)
       |> Keyword.put(:pool, DBConnection.ConnectionPool)
       |> Keyword.put(:pool_size, 5)
+      |> Keyword.put(:journal_mode, :wal)
+      |> Keyword.put(:busy_timeout, 15_000)
 
     Application.put_env(:hydra_srt, HydraSrt.Repo, updated)
 
@@ -285,10 +287,52 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     # API schema defaults routes to disabled; E2E expects an active pipeline unless a test opts out.
     route_params = Map.put_new(route_params, "enabled", true)
 
-    body = Jason.encode!(%{"route" => route_params})
+    schema = Map.get(route_params, "schema")
+    schema_options = Map.get(route_params, "schema_options") || %{}
+
+    route_for_post =
+      route_params
+      |> Map.drop(["schema", "schema_options"])
+
+    body = Jason.encode!(%{"route" => route_for_post})
 
     {:ok, 201, _headers, resp} =
       http_raw(:post, base_url <> "/api/routes", auth_headers(token), body)
+
+    route_id = Jason.decode!(resp) |> get_in(["data", "id"])
+
+    if is_binary(schema) and schema != "" do
+      source = %{
+        "enabled" => true,
+        "name" => Map.get(route_params, "source_name", "Primary"),
+        "schema" => schema,
+        "schema_options" => schema_options,
+        "position" => 0
+      }
+
+      _ = api_create_source!(base_url, token, route_id, source)
+    end
+
+    route_id
+  end
+
+  def api_create_source!(base_url, token, route_id, source_params) when is_map(source_params) do
+    source_params =
+      source_params
+      |> Map.put_new("enabled", true)
+      |> then(fn m ->
+        if Map.has_key?(m, "position"), do: m, else: Map.put(m, "position", 0)
+      end)
+
+    body = Jason.encode!(%{"source" => source_params})
+
+    {:ok, 201, _headers, resp} =
+      http_raw(
+        :post,
+        base_url <> "/api/routes/#{route_id}/sources",
+        auth_headers(token),
+        body
+      )
 
     Jason.decode!(resp) |> get_in(["data", "id"])
   end

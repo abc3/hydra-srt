@@ -406,7 +406,7 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
     })
   end
 
-  defp start_srt_probe_listener!(tag, srt_port, udp_probe_port, listen_host \\ "127.0.0.1") do
+  defp start_srt_probe_listener!(tag, srt_port, udp_probe_port, listen_host) do
     E2EHelpers.start_port_logged!(
       "srt-live-transmit",
       [

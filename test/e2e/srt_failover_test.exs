@@ -42,7 +42,7 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
     end)
 
     primary_source_id =
-      api_create_source!(base_url, token, route_id, %{
+      E2EHelpers.api_create_source!(base_url, token, route_id, %{
         "position" => 0,
         "enabled" => true,
         "name" => "primary-e2e",
@@ -55,7 +55,7 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
       })
 
     backup_source_id =
-      api_create_source!(base_url, token, route_id, %{
+      E2EHelpers.api_create_source!(base_url, token, route_id, %{
         "position" => 1,
         "enabled" => true,
         "name" => "backup-e2e",
@@ -82,107 +82,29 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
         }
       })
 
-    :ok = E2EHelpers.api_start_route!(base_url, token, route_id)
-    Process.sleep(E2EHelpers.e2e_startup_sleep_ms())
-
+    # Same order as cascading test: SRT caller before route so connection can retry
+    # until Hydra's listener is up (avoids CI flakes when the route starts before ffmpeg).
     tx_primary =
-      E2EHelpers.start_port_logged!(
-        "ffmpeg",
-        [
-          "-hide_banner",
-          "-loglevel",
-          "error",
-          "-re",
-          "-f",
-          "lavfi",
-          "-i",
-          "testsrc2=size=640x360:rate=25",
-          "-f",
-          "lavfi",
-          "-i",
-          "sine=frequency=440:sample_rate=48000",
-          "-t",
-          "4",
-          "-c:v",
-          "libx264",
-          "-preset",
-          "veryfast",
-          "-tune",
-          "zerolatency",
-          "-pix_fmt",
-          "yuv420p",
-          "-g",
-          "50",
-          "-c:a",
-          "aac",
-          "-b:a",
-          "96k",
-          "-ar",
-          "48000",
-          "-ac",
-          "2",
-          "-f",
-          "mpegts",
-          "srt://127.0.0.1:#{primary_source_port}?mode=caller"
-        ],
-        "ffmpeg_failover_primary"
-      )
+      start_sender!("ffmpeg_failover_primary", primary_source_port, 440, 60)
 
     on_exit(fn -> E2EHelpers.kill_port(tx_primary) end)
 
-    E2EHelpers.wait_for_route_processing!(base_url, token, route_id)
+    :ok = E2EHelpers.api_start_route!(base_url, token, route_id)
+    Process.sleep(E2EHelpers.e2e_startup_sleep_ms())
+
+    E2EHelpers.wait_for_route_processing!(base_url, token, route_id, timeout_ms: 25_000)
 
     assert {:ok, %{bytes: bytes_before_switch}} =
              E2EHelpers.await_udp_bytes(udp_counter, 15_000, 8_000)
 
     assert bytes_before_switch > 0
-    assert E2EHelpers.await_tag_exit_status("ffmpeg_failover_primary", 10_000) == 0
+    E2EHelpers.kill_port(tx_primary)
 
     :ok = api_switch_source!(base_url, token, route_id, backup_source_id)
     Process.sleep(E2EHelpers.e2e_startup_sleep_ms())
 
     tx_backup =
-      E2EHelpers.start_port_logged!(
-        "ffmpeg",
-        [
-          "-hide_banner",
-          "-loglevel",
-          "error",
-          "-re",
-          "-f",
-          "lavfi",
-          "-i",
-          "testsrc2=size=640x360:rate=25",
-          "-f",
-          "lavfi",
-          "-i",
-          "sine=frequency=880:sample_rate=48000",
-          "-t",
-          "4",
-          "-c:v",
-          "libx264",
-          "-preset",
-          "veryfast",
-          "-tune",
-          "zerolatency",
-          "-pix_fmt",
-          "yuv420p",
-          "-g",
-          "50",
-          "-c:a",
-          "aac",
-          "-b:a",
-          "96k",
-          "-ar",
-          "48000",
-          "-ac",
-          "2",
-          "-f",
-          "mpegts",
-          "srt://127.0.0.1:#{backup_source_port}?mode=caller"
-        ],
-        "ffmpeg_failover_backup"
-      )
+      start_sender!("ffmpeg_failover_backup", backup_source_port, 880, 30)
 
     on_exit(fn -> E2EHelpers.kill_port(tx_backup) end)
 
@@ -190,15 +112,15 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
              E2EHelpers.await_udp_bytes(udp_counter, bytes_before_switch + 12_000, 8_000)
 
     assert bytes_after_switch > bytes_before_switch
-    # Some ffmpeg builds can terminate the short sender with non-zero (e.g. 251)
-    # after the transport already delivered packets; byte growth is the primary signal.
-    assert E2EHelpers.await_tag_exit_status("ffmpeg_failover_backup", 10_000) in [0, 251]
+    # Backup sender runs up to ~30s; allow enough time for await vs short CI timeouts.
+    # Some ffmpeg builds exit 251 after data was already delivered; bytes are the main signal.
+    assert E2EHelpers.await_tag_exit_status("ffmpeg_failover_backup", 40_000) in [0, 251]
 
     route_after_switch = E2EHelpers.api_get_route!(base_url, token, route_id)
     assert route_after_switch["active_source_id"] == backup_source_id
     assert route_after_switch["last_switch_reason"] == "manual"
 
-    events = wait_for_route_events(base_url, token, route_id, 8_000)
+    events = wait_for_route_events(base_url, token, route_id, 12_000)
 
     assert Enum.any?(events, fn event ->
              event["event_type"] == "source_switch" and
@@ -238,7 +160,7 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
     end)
 
     s0 =
-      api_create_source!(base_url, token, route_id, %{
+      E2EHelpers.api_create_source!(base_url, token, route_id, %{
         "position" => 0,
         "enabled" => true,
         "name" => "primary-cascade",
@@ -251,7 +173,7 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
       })
 
     s1 =
-      api_create_source!(base_url, token, route_id, %{
+      E2EHelpers.api_create_source!(base_url, token, route_id, %{
         "position" => 1,
         "enabled" => true,
         "name" => "backup-1-cascade",
@@ -264,7 +186,7 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
       })
 
     s2 =
-      api_create_source!(base_url, token, route_id, %{
+      E2EHelpers.api_create_source!(base_url, token, route_id, %{
         "position" => 2,
         "enabled" => true,
         "name" => "backup-2-cascade",
@@ -289,7 +211,8 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
     on_exit(fn -> E2EHelpers.kill_port(tx_primary) end)
 
     :ok = E2EHelpers.api_start_route!(base_url, token, route_id)
-    E2EHelpers.wait_for_route_processing!(base_url, token, route_id)
+    Process.sleep(if(System.get_env("CI") == "true", do: 1_500, else: 400))
+    E2EHelpers.wait_for_route_processing!(base_url, token, route_id, timeout_ms: 25_000)
 
     assert {:ok, %{bytes: bytes_before}} = E2EHelpers.await_udp_bytes(udp_counter, 10_000, 8_000)
     assert bytes_before > 0
@@ -318,7 +241,9 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
 
     assert bytes_after > bytes_before
 
-    events = wait_for_route_events(base_url, token, route_id, 8_000)
+    # EventLogger flushes to DuckDB on a ~5s timer; polling until the window ends
+    # avoids returning the first partial batch (see wait_for_route_events/4).
+    events = wait_for_route_events(base_url, token, route_id, 14_000)
 
     assert Enum.any?(events, fn event ->
              event["event_type"] == "source_switch" and event["to_source_id"] == s1
@@ -329,20 +254,6 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
            end)
 
     assert s0 != s1 and s1 != s2
-  end
-
-  defp api_create_source!(base_url, token, route_id, source_params) do
-    body = Jason.encode!(%{"source" => source_params})
-
-    {:ok, 201, _headers, resp} =
-      E2EHelpers.http_raw(
-        :post,
-        base_url <> "/api/routes/#{route_id}/sources",
-        E2EHelpers.auth_headers(token),
-        body
-      )
-
-    Jason.decode!(resp) |> get_in(["data", "id"])
   end
 
   defp api_switch_source!(base_url, token, route_id, source_id) do
@@ -400,21 +311,20 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
 
   defp wait_for_route_events(base_url, token, route_id, timeout_ms) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait_for_route_events(base_url, token, route_id, deadline)
+    do_wait_for_route_events(base_url, token, route_id, deadline, [])
   end
 
-  defp do_wait_for_route_events(base_url, token, route_id, deadline) do
+  # Poll until the deadline and return the longest event list seen. EventLogger
+  # batches writes (~5s), so the first non-empty API response is often incomplete.
+  defp do_wait_for_route_events(base_url, token, route_id, deadline, best) do
     events = api_list_route_events!(base_url, token, route_id)
+    best = if length(events) >= length(best), do: events, else: best
 
-    if events != [] do
-      events
+    if System.monotonic_time(:millisecond) >= deadline do
+      best
     else
-      if System.monotonic_time(:millisecond) >= deadline do
-        []
-      else
-        Process.sleep(300)
-        do_wait_for_route_events(base_url, token, route_id, deadline)
-      end
+      Process.sleep(400)
+      do_wait_for_route_events(base_url, token, route_id, deadline, best)
     end
   end
 
@@ -451,7 +361,7 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
         "-f",
         "lavfi",
         "-i",
-        "testsrc2=size=640x360:rate=25",
+        "testsrc2=size=320x180:rate=15",
         "-f",
         "lavfi",
         "-i",
@@ -461,7 +371,7 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
         "-c:v",
         "libx264",
         "-preset",
-        "veryfast",
+        "ultrafast",
         "-tune",
         "zerolatency",
         "-pix_fmt",

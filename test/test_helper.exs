@@ -77,6 +77,10 @@ if not e2e_mode_enabled? do
 end
 
 if e2e_mode_enabled? do
+  # One shared HTTP endpoint + one SQLite file: parallel ExUnit cases contend on DB
+  # locks and route lifecycle, causing flaky "database is locked" / pipeline timeouts.
+  ExUnit.configure(max_cases: 1)
+
   # E2E suite needs the real HTTP server + API auth
   HydraSrt.TestSupport.E2EHelpers.ensure_e2e_prereqs!()
 
