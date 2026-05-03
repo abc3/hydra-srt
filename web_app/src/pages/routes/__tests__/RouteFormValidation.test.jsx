@@ -19,6 +19,7 @@ const { mockRoutesApi, mockDestinationsApi, mockInterfacesApi, mockSourcesApi } 
   },
   mockInterfacesApi: {
     getAll: vi.fn(),
+    getSystemInterfaces: vi.fn(),
   },
   mockSourcesApi: {
     create: vi.fn(),
@@ -50,6 +51,7 @@ describe('Route form validation', () => {
       },
     });
     mockInterfacesApi.getAll.mockResolvedValue({ data: [] });
+    mockInterfacesApi.getSystemInterfaces.mockResolvedValue({ data: [] });
   });
 
   it('blocks source save when required fields are empty', async () => {
@@ -149,5 +151,28 @@ describe('Route form validation', () => {
       expect(destinationScope.getByPlaceholderText('Enter passphrase')).toBeInTheDocument();
       expect(destinationScope.getByText('Key Length')).toBeInTheDocument();
     });
+  });
+
+  it('loads interface options from system interfaces when database is empty', async () => {
+    mockInterfacesApi.getAll.mockResolvedValue({ data: [] });
+    mockInterfacesApi.getSystemInterfaces.mockResolvedValue({
+      data: [{ sys_name: 'eth0', ip: '10.10.10.1/24' }],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/routes/new/edit']}>
+        <Routes>
+          <Route path="/routes/:id/edit" element={<RouteSourceEdit />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const sourceTitle = await screen.findByText('Primary Source');
+    const sourceCard = sourceTitle.closest('.ant-card');
+    expect(sourceCard).not.toBeNull();
+
+    fireEvent.mouseDown(within(sourceCard).getByLabelText('Interface'));
+
+    expect(await screen.findByText('eth0 (eth0 - 10.10.10.1/24)')).toBeInTheDocument();
   });
 });

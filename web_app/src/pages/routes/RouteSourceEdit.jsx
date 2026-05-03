@@ -113,10 +113,42 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
     const loadInterfaces = async () => {
       setInterfacesLoading(true);
       try {
-        const result = await interfacesApi.getAll();
-        const rows = Array.isArray(result?.data) ? result.data : [];
-        const options = rows
-          .filter((item) => item?.enabled !== false)
+        const [savedResult, systemResult] = await Promise.all([
+          interfacesApi.getAll(),
+          interfacesApi.getSystemInterfaces(),
+        ]);
+        const saved = Array.isArray(savedResult?.data) ? savedResult.data : [];
+        const system = Array.isArray(systemResult?.data) ? systemResult.data : [];
+
+        const savedBySysName = saved.reduce((acc, item) => {
+          if (item?.sys_name) {
+            acc[item.sys_name] = item;
+          }
+          return acc;
+        }, {});
+
+        const mergedRows = [
+          ...system.map((item) => {
+            const aliasRecord = savedBySysName[item.sys_name];
+            return {
+              name: aliasRecord?.name || '',
+              sys_name: item.sys_name,
+              ip: item.ip,
+              enabled: aliasRecord?.enabled ?? true,
+            };
+          }),
+          ...saved
+            .filter((item) => !system.some((systemItem) => systemItem.sys_name === item.sys_name))
+            .map((item) => ({
+              name: item.name,
+              sys_name: item.sys_name,
+              ip: item.ip,
+              enabled: item.enabled ?? true,
+            })),
+        ];
+
+        const options = mergedRows
+          .filter((item) => item?.enabled !== false && item?.sys_name)
           .map((item) => ({
             label: `${item.name || item.sys_name} (${item.sys_name} - ${item.ip || 'N/A'})`,
             value: item.sys_name,
