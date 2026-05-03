@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import RouteSourceEdit from '../RouteSourceEdit';
 import RouteDestEdit from '../RouteDestEdit';
@@ -117,5 +117,37 @@ describe('Route form validation', () => {
     });
 
     expect(mockRoutesApi.create).not.toHaveBeenCalled();
+  });
+
+  it('shows destination SRT authentication fields on new route form', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/new/edit']}>
+        <Routes>
+          <Route path="/routes/:id/edit" element={<RouteSourceEdit />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const destinationTitle = await screen.findByText('Destination #1');
+    const destinationCard = destinationTitle.closest('.ant-card');
+    expect(destinationCard).not.toBeNull();
+
+    const destinationScope = within(destinationCard);
+
+    expect(destinationScope.queryByText('Authentication')).not.toBeInTheDocument();
+
+    fireEvent.click(destinationScope.getByRole('radio', { name: 'SRT' }));
+
+    await waitFor(() => {
+      expect(destinationScope.getByText('Authentication')).toBeInTheDocument();
+    });
+
+    const switches = destinationScope.getAllByRole('switch');
+    fireEvent.click(switches[switches.length - 1]);
+
+    await waitFor(() => {
+      expect(destinationScope.getByPlaceholderText('Enter passphrase')).toBeInTheDocument();
+      expect(destinationScope.getByText('Key Length')).toBeInTheDocument();
+    });
   });
 });

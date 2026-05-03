@@ -551,6 +551,50 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                         </Form.Item>
                                       </>
                                     )}
+
+                                    <Form.Item
+                                      label="Authentication"
+                                      name={[field.name, 'schema_options', 'authentication']}
+                                      valuePropName="checked"
+                                      extra="Enable SRT authentication"
+                                    >
+                                      <Switch />
+                                    </Form.Item>
+
+                                    <Form.Item noStyle dependencies={[['sources', field.name, 'schema_options', 'authentication']]}>
+                                      {({ getFieldValue: getNestedFieldValue }) =>
+                                        getNestedFieldValue(['sources', field.name, 'schema_options', 'authentication']) && (
+                                          <>
+                                            <Form.Item
+                                              label="Passphrase"
+                                              name={[field.name, 'schema_options', 'passphrase']}
+                                              rules={[{ required: true, message: 'Please enter an SRT passphrase' }]}
+                                              extra="Encryption passphrase for SRT authentication"
+                                            >
+                                              <Input.Password placeholder="Enter passphrase" />
+                                            </Form.Item>
+
+                                            <Form.Item
+                                              label="Key Length"
+                                              name={[field.name, 'schema_options', 'pbkeylen']}
+                                              rules={[{ required: true, message: 'Please select an SRT key length' }]}
+                                              extra="Encryption key length for SRT authentication"
+                                            >
+                                              <Select
+                                                placeholder="Select key length"
+                                                options={[
+                                                  { label: '0 (Default)', value: 0 },
+                                                  { label: '16', value: 16 },
+                                                  { label: '24', value: 24 },
+                                                  { label: '32', value: 32 },
+                                                ]}
+                                                style={{ width: 180 }}
+                                              />
+                                            </Form.Item>
+                                          </>
+                                        )
+                                      }
+                                    </Form.Item>
                                   </>
                                 );
                               }
@@ -627,7 +671,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                               </Radio.Group>
                             </Form.Item>
 
-                            <Form.Item noStyle dependencies={[['destinations', field.name, 'schema']]}>
+                            <Form.Item noStyle shouldUpdate>
                               {({ getFieldValue }) => {
                                 const schema = getFieldValue(['destinations', field.name, 'schema']);
 
@@ -655,7 +699,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                         <Select allowClear loading={interfacesLoading} options={interfaceOptions} placeholder="Select interface" />
                                       </Form.Item>
 
-                                      <Form.Item noStyle dependencies={[['destinations', field.name, 'schema_options', 'mode']]}>
+                                      <Form.Item noStyle dependencies={[[field.name, 'schema_options', 'mode']]}>
                                         {({ getFieldValue: getNestedFieldValue }) => {
                                           const mode = getNestedFieldValue(['destinations', field.name, 'schema_options', 'mode']);
                                           const isCaller = mode === 'caller';
@@ -687,7 +731,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                         }}
                                       </Form.Item>
 
-                                      <Form.Item noStyle dependencies={[['destinations', field.name, 'schema_options', 'mode']]}>
+                                      <Form.Item noStyle dependencies={[[field.name, 'schema_options', 'mode']]}>
                                         {({ getFieldValue: getNestedFieldValue }) => {
                                           const mode = getNestedFieldValue(['destinations', field.name, 'schema_options', 'mode']);
                                           const isCaller = mode === 'caller';
@@ -744,7 +788,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                         <Switch />
                                       </Form.Item>
 
-                                      <Form.Item noStyle dependencies={[['destinations', field.name, 'schema_options', 'authentication']]}>
+                                      <Form.Item noStyle shouldUpdate>
                                         {({ getFieldValue: getNestedFieldValue }) =>
                                           getNestedFieldValue(['destinations', field.name, 'schema_options', 'authentication']) && (
                                             <>
