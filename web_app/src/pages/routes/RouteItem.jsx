@@ -111,24 +111,6 @@ const renderRuntimeStatusBadge = (status) => {
   return <Badge status={badgeStatus} text={formatStatusLabel(label).toLowerCase()} />;
 };
 
-const getEndpointValue = (endpoint, key) => endpoint?.schema_options?.[key];
-
-const getEndpointType = (endpoint) => {
-  if (!endpoint) return 'N/A';
-
-  if (endpoint.schema === 'SRT') {
-    return getEndpointValue(endpoint, 'mode') || 'listener';
-  }
-
-  return endpoint.schema || endpoint.type || 'N/A';
-};
-
-const getEndpointLatency = (endpoint) => {
-  if (!endpoint) return null;
-  const latency = endpoint.latency ?? getEndpointValue(endpoint, 'latency');
-  return typeof latency === 'number' ? latency : null;
-};
-
 const formatChartTimestamp = (value, includeSeconds = false) => {
   if (!value) {
     return '';
