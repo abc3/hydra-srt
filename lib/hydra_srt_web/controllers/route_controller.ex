@@ -27,7 +27,6 @@ defmodule HydraSrtWeb.RouteController do
   end
 
   def show(conn, %{"id" => id}) do
-    # :timer.sleep(1500)
     with {:ok, route} <- Db.get_route(id, true) do
       data(conn, route)
     end
@@ -87,6 +86,20 @@ defmodule HydraSrtWeb.RouteController do
     end
   end
 
+  def switch_source(conn, %{"id" => route_id, "source_id" => source_id}) do
+    with {:ok, source} <- Db.get_source(route_id, source_id),
+         true <- source["enabled"] == true or {:error, :source_disabled},
+         {:ok, route} <- switch_route_source(route_id, source_id) do
+      data(conn, route)
+    end
+  end
+
+  def switch_source(conn, _params) do
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: "Missing required 'source_id' parameter"})
+  end
+
   def analytics(conn, %{"route_id" => route_id} = params) do
     with {:ok, query_params} <- Analytics.build_query_params(params),
          {:ok, analytics_data} <- Analytics.fetch_route_timeseries(route_id, query_params) do
@@ -101,6 +114,22 @@ defmodule HydraSrtWeb.RouteController do
         conn
         |> put_status(:internal_server_error)
         |> json(%{error: "Failed to fetch analytics: #{inspect(reason)}"})
+    end
+  end
+
+  def events(conn, %{"route_id" => route_id} = params) do
+    with {:ok, payload} <- Analytics.fetch_route_events(route_id, params) do
+      data(conn, payload)
+    else
+      {:error, {:bad_request, message}} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: message})
+
+      {:error, reason} ->
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: "Failed to fetch events: #{inspect(reason)}"})
     end
   end
 
@@ -134,5 +163,26 @@ defmodule HydraSrtWeb.RouteController do
       "" -> "Failed to test source connection"
       message -> String.slice(message, 0, 500)
     end
+  end
+
+  defp switch_route_source(route_id, source_id) do
+    case HydraSrt.get_route_handler(route_id) do
+      {:ok, pid} ->
+        case HydraSrt.RouteHandler.switch_source_sync(pid, source_id, "manual") do
+          :ok -> Db.get_route(route_id, true)
+          {:error, reason} -> {:error, reason}
+        end
+
+      _ ->
+        with {:ok, route} <- Db.get_route(route_id, true),
+             true <- route_stopped?(route) or {:error, :route_handler_unavailable} do
+          Db.set_route_active_source(route_id, source_id, "manual")
+        end
+    end
+  end
+
+  defp route_stopped?(route) when is_map(route) do
+    status = Map.get(route, "status")
+    status in [nil, "", "stopped", "failed"]
   end
 end

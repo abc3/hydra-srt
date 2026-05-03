@@ -126,7 +126,21 @@ test('route and destination edit pages keep selected interfaces and endpoint val
         name: 'playwright-route-interface-persistence',
         enabled: true,
         node: 'self',
+      },
+    },
+  });
+
+  expect(createRouteResponse.ok()).toBeTruthy();
+  const routeId = (await createRouteResponse.json()).data.id;
+
+  const createSourceResponse = await request.post(`/api/routes/${routeId}/sources`, {
+    headers,
+    data: {
+      source: {
+        enabled: true,
+        name: 'Primary',
         schema: 'SRT',
+        position: 0,
         schema_options: {
           mode: 'rendezvous',
           interface_sys_name: systemInterface.sys_name,
@@ -139,8 +153,7 @@ test('route and destination edit pages keep selected interfaces and endpoint val
     },
   });
 
-  expect(createRouteResponse.ok()).toBeTruthy();
-  const routeId = (await createRouteResponse.json()).data.id;
+  expect(createSourceResponse.ok()).toBeTruthy();
 
   const createDestinationResponse = await request.post(`/api/routes/${routeId}/destinations`, {
     headers,
@@ -162,7 +175,7 @@ test('route and destination edit pages keep selected interfaces and endpoint val
   const destinationId = (await createDestinationResponse.json()).data.id;
 
   await page.goto(`/#/routes/${routeId}/edit`);
-  await expect(page.getByRole('heading', { name: 'Edit Source' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Edit Route' })).toBeVisible();
   await expect(page.locator('input[value="198.51.100.20"]').first()).toBeVisible();
   await expect(page.locator('input[value="10.0.0.10"]').first()).toBeVisible();
   await expectInterfaceSelection(page, aliasName, systemInterface.sys_name);

@@ -9,7 +9,8 @@ defmodule HydraSrtWeb.RealtimeChannel do
      socket
      |> assign(:stats_subscribed, false)
      |> assign(:system_pipelines_subscribed, false)
-     |> assign(:item_topics, MapSet.new())}
+     |> assign(:item_topics, MapSet.new())
+     |> assign(:event_topics, MapSet.new())}
   end
 
   @impl true
@@ -87,6 +88,41 @@ defmodule HydraSrtWeb.RealtimeChannel do
   end
 
   @impl true
+  def handle_in("events:subscribe", %{"route_id" => route_id}, socket) when is_binary(route_id) do
+    topic = "events:" <> route_id
+    event_topics = socket.assigns[:event_topics] || MapSet.new()
+
+    if MapSet.member?(event_topics, topic) do
+      {:reply, :ok, socket}
+    else
+      Phoenix.PubSub.subscribe(HydraSrt.PubSub, topic)
+      {:reply, :ok, assign(socket, :event_topics, MapSet.put(event_topics, topic))}
+    end
+  end
+
+  def handle_in("events:subscribe", _payload, socket) do
+    {:reply, {:error, %{reason: "invalid_route_id"}}, socket}
+  end
+
+  @impl true
+  def handle_in("events:unsubscribe", %{"route_id" => route_id}, socket)
+      when is_binary(route_id) do
+    topic = "events:" <> route_id
+    event_topics = socket.assigns[:event_topics] || MapSet.new()
+
+    if MapSet.member?(event_topics, topic) do
+      Phoenix.PubSub.unsubscribe(HydraSrt.PubSub, topic)
+      {:reply, :ok, assign(socket, :event_topics, MapSet.delete(event_topics, topic))}
+    else
+      {:reply, :ok, socket}
+    end
+  end
+
+  def handle_in("events:unsubscribe", _payload, socket) do
+    {:reply, {:error, %{reason: "invalid_route_id"}}, socket}
+  end
+
+  @impl true
   def handle_info({:stats, event}, socket) when is_map(event) do
     push(socket, "stats", event)
     {:noreply, socket}
@@ -95,6 +131,18 @@ defmodule HydraSrtWeb.RealtimeChannel do
   @impl true
   def handle_info({:item_status, event}, socket) when is_map(event) do
     push(socket, "item_status", event)
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:item_source, event}, socket) when is_map(event) do
+    push(socket, "item_source", event)
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:event, event}, socket) when is_map(event) do
+    push(socket, "event", event)
     {:noreply, socket}
   end
 

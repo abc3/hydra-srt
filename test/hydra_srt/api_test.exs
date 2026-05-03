@@ -110,7 +110,7 @@ defmodule HydraSrt.ApiTest do
   end
 
   describe "destinations" do
-    alias HydraSrt.Api.Destination
+    alias HydraSrt.Api.Endpoint
 
     import HydraSrt.ApiFixtures
 
@@ -151,7 +151,7 @@ defmodule HydraSrt.ApiTest do
         stopped_at: ~U[2025-02-19 16:24:00Z]
       }
 
-      assert {:ok, %Destination{} = destination} = Api.create_destination(valid_attrs)
+      assert {:ok, %Endpoint{} = destination} = Api.create_destination(valid_attrs)
       assert destination.alias == "some alias"
       assert destination.enabled == true
       assert destination.name == "some name"
@@ -178,7 +178,7 @@ defmodule HydraSrt.ApiTest do
         stopped_at: ~U[2025-02-20 16:24:00Z]
       }
 
-      assert {:ok, %Destination{} = destination} =
+      assert {:ok, %Endpoint{} = destination} =
                Api.update_destination(destination, update_attrs)
 
       assert destination.alias == "some updated alias"
@@ -197,7 +197,7 @@ defmodule HydraSrt.ApiTest do
 
     test "delete_destination/1 deletes the destination" do
       destination = destination_fixture()
-      assert {:ok, %Destination{}} = Api.delete_destination(destination)
+      assert {:ok, %Endpoint{}} = Api.delete_destination(destination)
       assert_raise Ecto.NoResultsError, fn -> Api.get_destination!(destination.id) end
     end
 

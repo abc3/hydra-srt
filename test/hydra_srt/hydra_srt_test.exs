@@ -48,7 +48,9 @@ defmodule HydraSrtTest do
     assert DateTime.compare(updated["started_at"], after_ts) in [:eq, :lt]
 
     assert {:ok, reloaded_route} = Db.get_route(route.id, true)
-    assert Enum.all?(reloaded_route["destinations"], &is_nil(&1["status"]))
+
+    assert [%{"enabled" => true, "status" => "starting"}] =
+             Enum.map(reloaded_route["destinations"], &Map.take(&1, ["enabled", "status"]))
   end
 
   test "set_route_status/2 sets stopped_at and keeps started_at when route stops" do

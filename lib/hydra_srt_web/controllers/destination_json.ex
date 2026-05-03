@@ -1,5 +1,5 @@
 defmodule HydraSrtWeb.DestinationJSON do
-  alias HydraSrt.Api.Destination
+  alias HydraSrt.Api.Endpoint
 
   @doc """
   Renders a list of destinations.
@@ -15,7 +15,7 @@ defmodule HydraSrtWeb.DestinationJSON do
     %{data: data(destination)}
   end
 
-  defp data(%Destination{} = destination) do
+  defp data(%Endpoint{} = destination) do
     %{
       id: destination.id,
       enabled: destination.enabled,
