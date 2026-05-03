@@ -20,6 +20,7 @@ services:
       - API_AUTH_USERNAME=admin
       - API_AUTH_PASSWORD=password123
       - DATABASE_PATH=${DATABASE_PATH:-/app/db/hydra_srt.db}
+      - ANALYTICS_DATABASE_PATH=${ANALYTICS_DATABASE_PATH:-/app/db/hydra_srt_analytics.duckdb}
       - POOL_SIZE=${POOL_SIZE:-1}
       - RLIMIT_NOFILE=65536
     volumes:
