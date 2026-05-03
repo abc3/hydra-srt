@@ -9,6 +9,7 @@ defmodule HydraSrt.RouteHandler do
   alias HydraSrt.Helpers
   alias HydraSrt.SystemInterfaces
   alias HydraSrt.Stats.EventLogger
+  import Bitwise
 
   def start_link(args), do: :gen_statem.start_link(__MODULE__, args, [])
 
@@ -897,14 +898,23 @@ defmodule HydraSrt.RouteHandler do
       address = Map.get(resolved_opts, "address") || Map.get(resolved_opts, "host")
       port = Map.get(resolved_opts, "port")
 
+      bind_address =
+        Map.get(resolved_opts, "bind-address") || Map.get(resolved_opts, "localaddress")
+
+      bind_address =
+        if ipv6_address?(address) and link_local_ipv6?(bind_address) do
+          nil
+        else
+          bind_address
+        end
+
       {:ok,
        %{
          "type" => "udpsink",
          "address" => address,
          "host" => address,
          "port" => port,
-         "bind-address" =>
-           Map.get(resolved_opts, "bind-address") || Map.get(resolved_opts, "localaddress"),
+         "bind-address" => bind_address,
          "multicast-iface" =>
            Map.get(resolved_opts, "multicast-iface") ||
              Map.get(resolved_opts, "interface_sys_name"),
@@ -1088,6 +1098,27 @@ defmodule HydraSrt.RouteHandler do
       value -> value
     end
   end
+
+  defp ipv6_address?(value) when is_binary(value) do
+    case :inet.parse_address(to_charlist(value)) do
+      {:ok, {_, _, _, _, _, _, _, _}} -> true
+      _ -> false
+    end
+  end
+
+  defp ipv6_address?(_), do: false
+
+  defp link_local_ipv6?(value) when is_binary(value) do
+    case :inet.parse_address(to_charlist(value)) do
+      {:ok, {word0, _, _, _, _, _, _, _}} when is_integer(word0) ->
+        (word0 &&& 0xFFC0) == 0xFE80
+
+      _ ->
+        false
+    end
+  end
+
+  defp link_local_ipv6?(_), do: false
 
   def dummy_params do
     %{

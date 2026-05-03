@@ -376,6 +376,33 @@ defmodule HydraSrt.RouteHandlerTest do
     assert sink["multicast-iface"] == "eno2"
   end
 
+  test "sink_from_record drops bind-address for IPv6 multicast with link-local interface ip" do
+    record = %{
+      "id" => "dest4",
+      "name" => "Destination 4",
+      "schema" => "UDP",
+      "schema_options" => %{
+        "host" => "ff15::1234",
+        "port" => 5000,
+        "bind-address" => "fe80::ae1f:6bff:febd:5295",
+        "multicast-iface" => "eno2"
+      }
+    }
+
+    assert {:ok, sink} = RouteHandler.sink_from_record(record)
+
+    assert sink == %{
+             "type" => "udpsink",
+             "address" => "ff15::1234",
+             "host" => "ff15::1234",
+             "port" => 5000,
+             "multicast-iface" => "eno2",
+             "hydra_destination_id" => "dest4",
+             "hydra_destination_name" => "Destination 4",
+             "hydra_destination_schema" => "UDP"
+           }
+  end
+
   test "sinks_from_record skips disabled destinations" do
     record = %{
       "destinations" => [
