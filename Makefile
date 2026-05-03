@@ -74,6 +74,20 @@ docker_stop:
 docker_start:
 	docker compose up -d
 
+docker_host_up:
+	PHX_HOST=$$(hostname -I | awk '{print $$1}') docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
+
+docker_host_down:
+	docker compose -f docker-compose.yml -f docker-compose.host.yml down
+
+docker_host_logs:
+	docker compose -f docker-compose.yml -f docker-compose.host.yml logs -f hydra_srt
+
+docker_host_rebuild:
+	docker compose -f docker-compose.yml -f docker-compose.host.yml down
+	PHX_HOST=$$(hostname -I | awk '{print $$1}') docker compose -f docker-compose.yml -f docker-compose.host.yml build --no-cache
+	PHX_HOST=$$(hostname -I | awk '{print $$1}') docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
+
 docker_clean:
 	docker compose down && docker compose rm -f hydra_srt
 
