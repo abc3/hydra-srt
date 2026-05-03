@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Card,
   Typography,
@@ -74,6 +74,8 @@ const LIVE_ANALYTICS_WINDOW = 'live';
 const DEFAULT_ANALYTICS_WINDOW = LIVE_ANALYTICS_WINDOW;
 const CUSTOM_ANALYTICS_WINDOW = 'custom';
 const LIVE_WINDOW_MINUTES = 5;
+const LIVE_SNAPSHOT_THROTTLE_MS = 300;
+const MAX_LIVE_POINTS = 300;
 const ANALYTICS_COLORS = ['#1677ff', '#52c41a', '#faad14', '#722ed1', '#13c2c2', '#f5222d', '#2f54eb'];
 
 const ANALYTICS_WINDOW_OPTIONS = [
@@ -217,6 +219,8 @@ const RouteItem = () => {
   const [analyticsError, setAnalyticsError] = useState(null);
   const [analyticsData, setAnalyticsData] = useState({ points: [], meta: null });
   const [analyticsRefreshTick, setAnalyticsRefreshTick] = useState(0);
+  const liveSnapshotBufferRef = useRef(null);
+  const liveSnapshotFlushTimerRef = useRef(null);
   const sourceIdsDependency = (routeData?.sources || [])
     .map((source) => source?.id)
     .filter(Boolean)
@@ -382,7 +386,7 @@ const RouteItem = () => {
     }
   };
 
-  const fetchAnalyticsData = async (queryParams) => {
+  const fetchAnalyticsData = useCallback(async (queryParams) => {
     const normalizePoint = (point) => {
       const rawDestinations = point?.destinations || {};
       const normalizedDestinations = Object.entries(rawDestinations).reduce((acc, [destinationId, value]) => {
@@ -412,7 +416,7 @@ const RouteItem = () => {
     } finally {
       setAnalyticsLoading(false);
     }
-  };
+  }, [id]);
 
   useEffect(() => {
     if (!id) {
@@ -440,12 +444,49 @@ const RouteItem = () => {
     }
 
     fetchAnalyticsData(queryParams);
-  }, [id, analyticsWindow, customRangeApplied, analyticsRefreshTick]);
+  }, [id, analyticsWindow, customRangeApplied, analyticsRefreshTick, fetchAnalyticsData]);
 
   useEffect(() => {
     if (!id || analyticsWindow !== LIVE_ANALYTICS_WINDOW) {
       return undefined;
     }
+
+    const flushBufferedSnapshot = () => {
+      const buffered = liveSnapshotBufferRef.current;
+      liveSnapshotBufferRef.current = null;
+      liveSnapshotFlushTimerRef.current = null;
+
+      if (!buffered) {
+        return;
+      }
+
+      const cutoffMs = Date.now() - (LIVE_WINDOW_MINUTES * 60 * 1000);
+
+      setAnalyticsData((prev) => {
+        const prevPoints = prev?.points || [];
+        const existingIndex = prevPoints.findIndex((point) => point.timestamp === buffered.timestamp);
+
+        let mergedPoints;
+        if (existingIndex >= 0) {
+          mergedPoints = [...prevPoints];
+          mergedPoints[existingIndex] = buffered;
+        } else {
+          mergedPoints = [...prevPoints, buffered];
+        }
+
+        const trimmedPoints = mergedPoints
+          .filter((point) => {
+            const pointMs = Date.parse(point.timestamp);
+            return !Number.isNaN(pointMs) && pointMs >= cutoffMs;
+          })
+          .slice(-MAX_LIVE_POINTS);
+
+        return {
+          ...prev,
+          points: trimmedPoints,
+        };
+      });
+    };
 
     return subscribeToStats((payload) => {
       if (payload?.route_id !== id || payload?.metric !== 'snapshot' || !payload?.stats) {
@@ -462,36 +503,32 @@ const RouteItem = () => {
         acc[destination.id] = toNumberOrNull(destination?.bytes_out_per_sec);
         return acc;
       }, {});
-      const cutoffMs = Date.now() - (LIVE_WINDOW_MINUTES * 60 * 1000);
+      liveSnapshotBufferRef.current = {
+        timestamp: snapshotTs,
+        source: snapshotSource,
+        destinations: snapshotDestinations,
+      };
 
-      setAnalyticsData((prev) => {
-        const prevPoints = prev?.points || [];
-        const existingIndex = prevPoints.findIndex((point) => point.timestamp === snapshotTs);
-        const nextPoint = {
-          timestamp: snapshotTs,
-          source: snapshotSource,
-          destinations: snapshotDestinations,
-        };
-
-        const mergedPoints =
-          existingIndex >= 0
-            ? prevPoints.map((point, index) => (index === existingIndex ? nextPoint : point))
-            : [...prevPoints, nextPoint];
-
-        const trimmedPoints = mergedPoints
-          .filter((point) => {
-            const pointMs = Date.parse(point.timestamp);
-            return !Number.isNaN(pointMs) && pointMs >= cutoffMs;
-          })
-          .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
-
-        return {
-          ...prev,
-          points: trimmedPoints,
-        };
-      });
+      if (!liveSnapshotFlushTimerRef.current) {
+        liveSnapshotFlushTimerRef.current = window.setTimeout(
+          flushBufferedSnapshot,
+          LIVE_SNAPSHOT_THROTTLE_MS
+        );
+      }
     });
   }, [id, analyticsWindow]);
+
+  useEffect(
+    () => () => {
+      if (liveSnapshotFlushTimerRef.current) {
+        window.clearTimeout(liveSnapshotFlushTimerRef.current);
+        liveSnapshotFlushTimerRef.current = null;
+      }
+
+      liveSnapshotBufferRef.current = null;
+    },
+    []
+  );
 
   const applyCustomRange = () => {
     const [customFrom, customTo] = customRangeDraft;
@@ -598,52 +635,75 @@ const RouteItem = () => {
     })),
   ];
 
-  const destinationNameById = (routeData?.destinations || []).reduce((acc, destination) => {
-    if (destination?.id) {
-      acc[destination.id] = destination.name || destination.id;
-    }
+  const destinationNameById = useMemo(
+    () =>
+      (routeData?.destinations || []).reduce((acc, destination) => {
+        if (destination?.id) {
+          acc[destination.id] = destination.name || destination.id;
+        }
 
-    return acc;
-  }, {});
-
-  const analyticsPoints = analyticsData?.points || [];
-  const switches = analyticsData?.switches || [];
-  const sourceTimeline = analyticsData?.source_timeline || [];
-  const destinationSeriesIds = Array.from(
-    new Set(
-      analyticsPoints.flatMap((point) => Object.keys(point?.destinations || {}))
-    )
+        return acc;
+      }, {}),
+    [routeData?.destinations]
   );
 
-  const chartData = analyticsPoints.map((point) => {
-    const destinationValues = Object.entries(point.destinations || {}).reduce((acc, [destinationId, value]) => {
-      acc[`dest_${destinationId}`] = value;
-      return acc;
-    }, {});
+  const analyticsPoints = useMemo(() => analyticsData?.points || [], [analyticsData?.points]);
+  const switches = analyticsData?.switches || [];
+  const sourceTimeline = analyticsData?.source_timeline || [];
+  const destinationSeriesIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          analyticsPoints.flatMap((point) => Object.keys(point?.destinations || {}))
+        )
+      ),
+    [analyticsPoints]
+  );
 
-    return {
-      timestamp: point.timestamp,
-      xLabel: formatChartTimestamp(point.timestamp, analyticsWindow === LIVE_ANALYTICS_WINDOW),
-      source: point.source,
-      ...destinationValues,
-    };
-  });
+  const chartData = useMemo(
+    () =>
+      analyticsPoints.map((point) => {
+        const destinationValues = Object.entries(point.destinations || {}).reduce(
+          (acc, [destinationId, value]) => {
+            acc[`dest_${destinationId}`] = value;
+            return acc;
+          },
+          {}
+        );
 
-  const sourceNameById = (routeData?.sources || []).reduce((acc, source) => {
-    if (source?.id) {
-      acc[source.id] = source.name || `#${source.position}`;
-    }
+        return {
+          timestamp: point.timestamp,
+          xLabel: formatChartTimestamp(point.timestamp, analyticsWindow === LIVE_ANALYTICS_WINDOW),
+          source: point.source,
+          ...destinationValues,
+        };
+      }),
+    [analyticsPoints, analyticsWindow]
+  );
 
-    return acc;
-  }, {});
-  const sourceColorById = (routeData?.sources || []).reduce((acc, source) => {
-    if (!source?.id) {
-      return acc;
-    }
+  const sourceNameById = useMemo(
+    () =>
+      (routeData?.sources || []).reduce((acc, source) => {
+        if (source?.id) {
+          acc[source.id] = source.name || `#${source.position}`;
+        }
 
-    acc[source.id] = source.position === 0 ? '#95de64' : '#ffd591';
-    return acc;
-  }, {});
+        return acc;
+      }, {}),
+    [routeData?.sources]
+  );
+  const sourceColorById = useMemo(
+    () =>
+      (routeData?.sources || []).reduce((acc, source) => {
+        if (!source?.id) {
+          return acc;
+        }
+
+        acc[source.id] = source.position === 0 ? '#95de64' : '#ffd591';
+        return acc;
+      }, {}),
+    [routeData?.sources]
+  );
 
   const resolveEndpointStatus = (record) => {
     if (record.rowType !== 'source') {
