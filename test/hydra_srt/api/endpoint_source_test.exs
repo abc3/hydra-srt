@@ -1,7 +1,7 @@
-defmodule HydraSrt.Api.SourceTest do
+defmodule HydraSrt.Api.EndpointSourceTest do
   use HydraSrt.DataCase
 
-  alias HydraSrt.Api.Source
+  alias HydraSrt.Api.Endpoint
   alias HydraSrt.Repo
 
   import HydraSrt.ApiFixtures
@@ -10,7 +10,7 @@ defmodule HydraSrt.Api.SourceTest do
     route = route_fixture()
 
     changeset =
-      Source.changeset(%Source{}, %{
+      Endpoint.source_changeset(%Endpoint{}, %{
         route_id: route.id,
         position: 0,
         schema: "UDP",
@@ -22,21 +22,27 @@ defmodule HydraSrt.Api.SourceTest do
 
   test "invalid when schema missing" do
     route = route_fixture()
-    changeset = Source.changeset(%Source{}, %{route_id: route.id, position: 0})
+    changeset = Endpoint.source_changeset(%Endpoint{}, %{route_id: route.id, position: 0})
     refute changeset.valid?
     assert {"can't be blank", _} = changeset.errors[:schema]
   end
 
   test "invalid schema value" do
     route = route_fixture()
-    changeset = Source.changeset(%Source{}, %{route_id: route.id, position: 0, schema: "RTP"})
+
+    changeset =
+      Endpoint.source_changeset(%Endpoint{}, %{route_id: route.id, position: 0, schema: "RTP"})
+
     refute changeset.valid?
     assert {"is invalid", _} = changeset.errors[:schema]
   end
 
   test "invalid negative position" do
     route = route_fixture()
-    changeset = Source.changeset(%Source{}, %{route_id: route.id, position: -1, schema: "UDP"})
+
+    changeset =
+      Endpoint.source_changeset(%Endpoint{}, %{route_id: route.id, position: -1, schema: "UDP"})
+
     refute changeset.valid?
     assert {"must be greater than or equal to %{number}", _} = changeset.errors[:position]
   end
@@ -46,8 +52,8 @@ defmodule HydraSrt.Api.SourceTest do
     _ = source_fixture(route, %{position: 0})
 
     assert {:error, changeset} =
-             %Source{}
-             |> Source.changeset(%{
+             %Endpoint{}
+             |> Endpoint.source_changeset(%{
                route_id: route.id,
                position: 0,
                schema: "SRT",

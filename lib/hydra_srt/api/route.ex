@@ -1,6 +1,10 @@
 defmodule HydraSrt.Api.Route do
   use Ecto.Schema
   import Ecto.Changeset
+  alias HydraSrt.Api.Endpoint
+
+  @source_type Endpoint.source_type()
+  @destination_type Endpoint.destination_type()
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -22,8 +26,15 @@ defmodule HydraSrt.Api.Route do
     field :stopped_at, :utc_datetime
     field :lock_version, :integer, default: 1
 
-    belongs_to :active_source, HydraSrt.Api.Source, type: :binary_id
-    has_many :sources, HydraSrt.Api.Source, preload_order: [asc: :position]
+    belongs_to :active_source, HydraSrt.Api.Endpoint, type: :binary_id
+
+    has_many :sources, HydraSrt.Api.Endpoint,
+      where: [type: @source_type],
+      preload_order: [asc: :position]
+
+    has_many :destinations, HydraSrt.Api.Endpoint,
+      where: [type: @destination_type],
+      preload_order: [desc: :inserted_at]
 
     timestamps(type: :utc_datetime_usec)
   end
