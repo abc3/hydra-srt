@@ -1,0 +1,5 @@
+rs-native/target
+target
+_build
+deps
+node_modules
