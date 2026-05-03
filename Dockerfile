@@ -97,6 +97,7 @@ RUN apt-get update -y && \
     libncurses5 \
     locales \
     iptables \
+    net-tools \
     sudo \
     tini \
     curl \
