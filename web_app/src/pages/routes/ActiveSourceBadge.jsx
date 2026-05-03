@@ -28,17 +28,20 @@ const ActiveSourceBadge = ({ route }) => {
   }
 
   const isPrimary = primary?.id === activeSource.id;
-
-  if (isPrimary) {
-    return <Tag color="green">PRIMARY</Tag>;
-  }
-
   const sourceLabel = activeSource?.name || `#${activeSource?.position ?? '?'}`;
   const tooltipTitle = formatSwitchMeta(route?.last_switch_reason, route?.last_switch_at);
 
+  if (isPrimary) {
+    return (
+      <Tooltip title={tooltipTitle}>
+        <Tag color="success">{sourceLabel}</Tag>
+      </Tooltip>
+    );
+  }
+
   return (
     <Tooltip title={tooltipTitle}>
-      <Tag color="orange">BACKUP: {sourceLabel}</Tag>
+      <Tag color="warning">{sourceLabel}</Tag>
     </Tooltip>
   );
 };

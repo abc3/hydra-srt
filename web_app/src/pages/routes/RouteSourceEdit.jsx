@@ -25,10 +25,10 @@ import {
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { interfacesApi, routesApi, sourcesApi } from '../../utils/api';
+import { destinationsApi, interfacesApi, routesApi, sourcesApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
 
-const { Title, Text } = Typography;
+const { Title } = Typography;
 
 const DEFAULT_SOURCE = {
   enabled: true,
@@ -38,6 +38,17 @@ const DEFAULT_SOURCE = {
     mode: 'listener',
     'auto-reconnect': true,
     'keep-listening': false,
+  },
+};
+
+const DEFAULT_DESTINATION = {
+  enabled: true,
+  name: 'Destination 1',
+  schema: 'UDP',
+  schema_options: {
+    mode: 'caller',
+    'auto-reconnect': true,
+    host: '127.0.0.1',
   },
 };
 
@@ -52,6 +63,7 @@ const getInitialFormValues = (initialValues) => ({
     probe_interval_ms: 5000,
   },
   sources: [DEFAULT_SOURCE],
+  destinations: [DEFAULT_DESTINATION],
   ...initialValues,
 });
 
@@ -149,6 +161,9 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         const values = {
           ...route,
           sources,
+          destinations: Array.isArray(route?.destinations) && route.destinations.length > 0
+            ? route.destinations
+            : [DEFAULT_DESTINATION],
           backup_config: {
             mode: 'passive',
             ...route.backup_config,
@@ -178,6 +193,13 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
     schema: source?.schema,
     schema_options: source?.schema_options || {},
     position,
+  });
+
+  const normalizeDestinationPayload = (destination) => ({
+    enabled: destination?.enabled !== false,
+    name: destination?.name,
+    schema: destination?.schema,
+    schema_options: destination?.schema_options || {},
   });
 
   const saveSources = async (routeId, sources, existingSources = []) => {
@@ -214,6 +236,14 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
     return keptIds;
   };
 
+  const createDestinations = async (routeId, destinations) => {
+    for (let index = 0; index < destinations.length; index += 1) {
+      const destination = destinations[index];
+      const payload = normalizeDestinationPayload(destination);
+      await destinationsApi.create(routeId, payload);
+    }
+  };
+
   const handleSave = async () => {
     try {
       const values = await form.validateFields();
@@ -228,10 +258,19 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
       };
 
       const sources = (values.sources || []).map((source, index) => normalizeSourcePayload(source, index));
+      // Destination fields are only mounted for new routes (Form.List is behind `isNew`), so on edit
+      // `values.destinations` is empty even though the route has destinations — do not validate that here.
+      const destinations = values.destinations || [];
 
       if (sources.length === 0) {
         loadingMessage();
         messageApi.error('At least one source is required');
+        return;
+      }
+
+      if (isNew && destinations.length === 0) {
+        loadingMessage();
+        messageApi.error('At least one destination is required');
         return;
       }
 
@@ -250,6 +289,10 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
       const keptIds = await saveSources(routeId, values.sources || [], existingSources);
 
+      if (isNew) {
+        await createDestinations(routeId, destinations);
+      }
+
       if (!isNew && routeData?.active_source_id && !keptIds.includes(routeData.active_source_id) && keptIds[0]) {
         await routesApi.switchSource(routeId, keptIds[0]);
       }
@@ -265,6 +308,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         form.setFieldsValue({
           ...refreshed.data,
           sources: refreshed.data?.sources || values.sources,
+          destinations: refreshed.data?.destinations || routeData?.destinations,
         });
       }
     } catch (error) {
@@ -413,7 +457,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                             </Radio.Group>
                           </Form.Item>
 
-                          <Form.Item noStyle dependencies={[[field.name, 'schema'], [field.name, 'schema_options', 'mode']]}>
+                          <Form.Item noStyle dependencies={[['sources', field.name, 'schema'], ['sources', field.name, 'schema_options', 'mode']]}>
                             {({ getFieldValue }) => {
                               const schema = getFieldValue(['sources', field.name, 'schema']);
                               const mode = getFieldValue(['sources', field.name, 'schema_options', 'mode']);
@@ -512,9 +556,243 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                 </Form.List>
 
                 {isNew && (
-                  <Card style={{ maxWidth: '700px', width: '100%' }} size="small">
-                    <Text type="secondary">Destination creation will be available after saving route and sources.</Text>
-                  </Card>
+                  <Form.List name="destinations">
+                    {(fields, { add, remove }) => (
+                      <Space direction="vertical" size="middle" style={{ width: '100%', maxWidth: '700px' }}>
+                        {fields.map((field, index) => (
+                          <Card
+                            key={field.key}
+                            size="small"
+                            title={`Destination #${index + 1}`}
+                            extra={(
+                              <Button
+                                size="small"
+                                danger
+                                icon={<DeleteOutlined />}
+                                onClick={() => remove(field.name)}
+                                disabled={fields.length === 1}
+                              >
+                                Delete
+                              </Button>
+                            )}
+                          >
+                            <Form.Item label="Name" name={[field.name, 'name']} rules={[{ required: true, message: 'Please enter a destination name' }]}>
+                              <Input placeholder="Destination name" />
+                            </Form.Item>
+
+                            <Form.Item label="Enabled" name={[field.name, 'enabled']} valuePropName="checked">
+                              <Switch />
+                            </Form.Item>
+
+                            <Form.Item label="Schema" name={[field.name, 'schema']} rules={[{ required: true, message: 'Please select a destination schema' }]}>
+                              <Radio.Group buttonStyle="solid">
+                                <Radio.Button value="SRT">SRT</Radio.Button>
+                                <Radio.Button value="UDP">UDP</Radio.Button>
+                              </Radio.Group>
+                            </Form.Item>
+
+                            <Form.Item noStyle dependencies={[['destinations', field.name, 'schema']]}>
+                              {({ getFieldValue }) => {
+                                const schema = getFieldValue(['destinations', field.name, 'schema']);
+
+                                if (schema === 'SRT') {
+                                  return (
+                                    <>
+                                      <Form.Item
+                                        label="Mode"
+                                        name={[field.name, 'schema_options', 'mode']}
+                                        rules={[{ required: true, message: 'Please select an SRT mode' }]}
+                                        extra="Caller: Actively initiates the connection. Listener: Waits for incoming connections. Rendezvous: Both endpoints connect to each other simultaneously."
+                                      >
+                                        <Radio.Group buttonStyle="solid">
+                                          <Radio.Button value="caller">Caller</Radio.Button>
+                                          <Radio.Button value="listener">Listener</Radio.Button>
+                                          <Radio.Button value="rendezvous">Rendezvous</Radio.Button>
+                                        </Radio.Group>
+                                      </Form.Item>
+
+                                      <Form.Item
+                                        label="Interface"
+                                        name={[field.name, 'schema_options', 'interface_sys_name']}
+                                        extra="Select a local interface to bind SRT socket to."
+                                      >
+                                        <Select allowClear loading={interfacesLoading} options={interfaceOptions} placeholder="Select interface" />
+                                      </Form.Item>
+
+                                      <Form.Item noStyle dependencies={[['destinations', field.name, 'schema_options', 'mode']]}>
+                                        {({ getFieldValue: getNestedFieldValue }) => {
+                                          const mode = getNestedFieldValue(['destinations', field.name, 'schema_options', 'mode']);
+                                          const isCaller = mode === 'caller';
+                                          const isRendezvous = mode === 'rendezvous';
+
+                                          return (
+                                            <>
+                                              {(isCaller || isRendezvous) && (
+                                                <Form.Item
+                                                  label="Remote Address"
+                                                  name={[field.name, 'schema_options', 'address']}
+                                                  extra={isRendezvous ? 'Remote host/IP of the rendezvous peer.' : 'Remote host/IP for caller mode.'}
+                                                >
+                                                  <Input placeholder="Enter remote address" />
+                                                </Form.Item>
+                                              )}
+
+                                              {(!isCaller || isRendezvous) && (
+                                                <Form.Item
+                                                  label="Bind Address"
+                                                  name={[field.name, 'schema_options', 'localaddress']}
+                                                  extra={isRendezvous ? 'Local address to bind before connecting to the rendezvous peer.' : 'Local address to bind.'}
+                                                >
+                                                  <Input placeholder="Enter bind address" />
+                                                </Form.Item>
+                                              )}
+                                            </>
+                                          );
+                                        }}
+                                      </Form.Item>
+
+                                      <Form.Item noStyle dependencies={[['destinations', field.name, 'schema_options', 'mode']]}>
+                                        {({ getFieldValue: getNestedFieldValue }) => {
+                                          const mode = getNestedFieldValue(['destinations', field.name, 'schema_options', 'mode']);
+                                          const isCaller = mode === 'caller';
+                                          const isRendezvous = mode === 'rendezvous';
+
+                                          return (
+                                            <>
+                                              {(isCaller || isRendezvous) && (
+                                                <Form.Item
+                                                  label="Remote Port"
+                                                  name={[field.name, 'schema_options', 'port']}
+                                                  extra="Remote port for caller/rendezvous mode."
+                                                  rules={[
+                                                    { required: true, message: 'Please enter a remote port' },
+                                                    { type: 'number', min: 1, max: 65535, message: 'Port must be between 1 and 65535' },
+                                                  ]}
+                                                >
+                                                  <InputNumber style={{ width: 150 }} placeholder="Enter remote port" />
+                                                </Form.Item>
+                                              )}
+
+                                              {(!isCaller || isRendezvous) && (
+                                                <Form.Item
+                                                  label="Bind Port"
+                                                  name={[field.name, 'schema_options', 'localport']}
+                                                  extra="Local port to bind."
+                                                  rules={[
+                                                    { required: true, message: 'Please enter a bind port' },
+                                                    { type: 'number', min: 1, max: 65535, message: 'Port must be between 1 and 65535' },
+                                                  ]}
+                                                >
+                                                  <InputNumber style={{ width: 150 }} placeholder="Enter bind port" />
+                                                </Form.Item>
+                                              )}
+                                            </>
+                                          );
+                                        }}
+                                      </Form.Item>
+
+                                      <Form.Item
+                                        label="Latency, ms"
+                                        name={[field.name, 'schema_options', 'latency']}
+                                        extra="The maximum accepted transmission latency in milliseconds"
+                                      >
+                                        <InputNumber style={{ width: 150 }} min={20} max={8000} placeholder="125" />
+                                      </Form.Item>
+
+                                      <Form.Item
+                                        label="Authentication"
+                                        name={[field.name, 'schema_options', 'authentication']}
+                                        valuePropName="checked"
+                                        extra="Enable SRT authentication"
+                                      >
+                                        <Switch />
+                                      </Form.Item>
+
+                                      <Form.Item noStyle dependencies={[['destinations', field.name, 'schema_options', 'authentication']]}>
+                                        {({ getFieldValue: getNestedFieldValue }) =>
+                                          getNestedFieldValue(['destinations', field.name, 'schema_options', 'authentication']) && (
+                                            <>
+                                              <Form.Item
+                                                label="Passphrase"
+                                                name={[field.name, 'schema_options', 'passphrase']}
+                                                rules={[{ required: true, message: 'Please enter an SRT passphrase' }]}
+                                                extra="Encryption passphrase for SRT authentication"
+                                              >
+                                                <Input.Password placeholder="Enter passphrase" />
+                                              </Form.Item>
+
+                                              <Form.Item
+                                                label="Key Length"
+                                                name={[field.name, 'schema_options', 'pbkeylen']}
+                                                rules={[{ required: true, message: 'Please select an SRT key length' }]}
+                                                extra="Encryption key length for SRT authentication"
+                                              >
+                                                <Select
+                                                  placeholder="Select key length"
+                                                  options={[
+                                                    { label: '0 (Default)', value: 0 },
+                                                    { label: '16', value: 16 },
+                                                    { label: '24', value: 24 },
+                                                    { label: '32', value: 32 },
+                                                  ]}
+                                                  style={{ width: 150 }}
+                                                />
+                                              </Form.Item>
+                                            </>
+                                          )
+                                        }
+                                      </Form.Item>
+                                    </>
+                                  );
+                                }
+
+                                if (schema === 'UDP') {
+                                  return (
+                                    <>
+                                      <Form.Item
+                                        label="Interface"
+                                        name={[field.name, 'schema_options', 'interface_sys_name']}
+                                        extra="Select a local interface for UDP bind/multicast settings."
+                                      >
+                                        <Select allowClear loading={interfacesLoading} options={interfaceOptions} placeholder="Select interface" />
+                                      </Form.Item>
+
+                                      <Form.Item
+                                        label="Address"
+                                        name={[field.name, 'schema_options', 'host']}
+                                        rules={[{ required: true, message: 'Please enter a UDP destination address' }]}
+                                        extra="The host/IP/Multicast group to send the packets to"
+                                      >
+                                        <Input placeholder="Enter address" />
+                                      </Form.Item>
+
+                                      <Form.Item
+                                        label="Port"
+                                        name={[field.name, 'schema_options', 'port']}
+                                        rules={[
+                                          { required: true, message: 'Please enter a UDP destination port' },
+                                          { type: 'number', min: 1, max: 65535, message: 'Port must be between 1 and 65535' },
+                                        ]}
+                                        extra="The port to send the packets to"
+                                      >
+                                        <InputNumber style={{ width: 150 }} placeholder="Enter port number" />
+                                      </Form.Item>
+                                    </>
+                                  );
+                                }
+
+                                return null;
+                              }}
+                            </Form.Item>
+                          </Card>
+                        ))}
+
+                        <Button icon={<PlusOutlined />} onClick={() => add({ ...DEFAULT_DESTINATION, name: `Destination ${fields.length + 1}` })}>
+                          Add Destination
+                        </Button>
+                      </Space>
+                    )}
+                  </Form.List>
                 )}
 
                 <Row justify="end" style={{ marginTop: 24 }}>

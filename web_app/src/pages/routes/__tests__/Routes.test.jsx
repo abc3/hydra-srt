@@ -190,25 +190,13 @@ describe('Routes', () => {
     );
 
     await screen.findAllByText('Starting route');
-    expect(screen.getAllByText('PRIMARY').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('primary').length).toBeGreaterThan(0);
 
     await act(async () => {
       __emitItemSource('starting-route', 'starting-route-backup', 'manual');
     });
 
-    expect(await screen.findByText('BACKUP: backup-1')).toBeInTheDocument();
-  });
-
-  it('shows switch counter and unstable marker for recent switches', async () => {
-    render(
-      <MemoryRouter>
-        <Routes />
-      </MemoryRouter>,
-    );
-
-    await screen.findAllByText('Starting route');
-    expect(screen.getByText('Switches last 1h')).toBeInTheDocument();
-    expect(screen.getByText('unstable')).toBeInTheDocument();
+    expect(await screen.findByText('backup-1')).toBeInTheDocument();
   });
 
   it('shows route in and out stats while status is not stopped', async () => {

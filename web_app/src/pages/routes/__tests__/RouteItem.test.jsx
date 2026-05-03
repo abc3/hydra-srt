@@ -5,11 +5,9 @@ import RouteItem from '../RouteItem';
 import {
   subscribeToItemSource,
   subscribeToItemStatus,
-  subscribeToRouteEvents,
   subscribeToStats,
   __emitItemSource,
   __emitItemStatus,
-  __emitRouteEvent,
   __clearRealtimeMockState,
 } from '../../../utils/realtime';
 import { routesApi } from '../../../utils/api';
@@ -28,12 +26,6 @@ vi.mock('../../../utils/api', () => {
             window: 'last_hour',
             bucket_ms: 10_000,
           },
-        },
-      })),
-      getEvents: vi.fn(async () => ({
-        data: {
-          events: [],
-          meta: { window: 'last_hour', limit: 50, offset: 0 },
         },
       })),
       getById: vi.fn(async () => ({
@@ -89,7 +81,6 @@ vi.mock('../../../utils/realtime', () => {
   const itemListeners = new Map();
   const itemSourceListeners = new Map();
   const statsListeners = new Set();
-  const routeEventsListeners = new Map();
 
   const subscribeToItemStatus = vi.fn((itemId, listener) => {
     const listeners = itemListeners.get(itemId) || [];
@@ -145,41 +136,18 @@ vi.mock('../../../utils/realtime', () => {
     });
   });
 
-  const subscribeToRouteEvents = vi.fn((routeId, listener) => {
-    const listeners = routeEventsListeners.get(routeId) || [];
-    listeners.push(listener);
-    routeEventsListeners.set(routeId, listeners);
-
-    return vi.fn(() => {
-      const current = routeEventsListeners.get(routeId) || [];
-      routeEventsListeners.set(
-        routeId,
-        current.filter((saved) => saved !== listener),
-      );
-    });
-  });
-
-  const emitRouteEvent = (routeId, payload) => {
-    const listeners = routeEventsListeners.get(routeId) || [];
-    listeners.forEach((listener) => listener({ route_id: routeId, ...payload }));
-  };
-
   return {
     subscribeToItemSource,
     subscribeToItemStatus,
-    subscribeToRouteEvents,
     subscribeToStats,
     __emitItemSource: emitItemSource,
     __emitItemStatus: emitItemStatus,
-    __emitRouteEvent: emitRouteEvent,
     __clearRealtimeMockState: () => {
       itemListeners.clear();
       itemSourceListeners.clear();
       statsListeners.clear();
-      routeEventsListeners.clear();
       subscribeToItemSource.mockClear();
       subscribeToItemStatus.mockClear();
-      subscribeToRouteEvents.mockClear();
       subscribeToStats.mockClear();
     },
   };
@@ -238,12 +206,6 @@ describe('RouteItem', () => {
         },
       },
     });
-    routesApi.getEvents.mockResolvedValue({
-      data: {
-        events: [],
-        meta: { window: 'last_hour', limit: 50, offset: 0 },
-      },
-    });
   });
 
   it('subscribes to route and destination item status topics', async () => {
@@ -256,15 +218,16 @@ describe('RouteItem', () => {
     );
 
     await screen.findByText('Endpoints');
+    expect(screen.getByText('Type')).toBeInTheDocument();
+    expect(screen.getByText('Active')).toBeInTheDocument();
 
     expect(subscribeToItemStatus).toHaveBeenCalledWith('r1', expect.any(Function));
     expect(subscribeToItemStatus).toHaveBeenCalledWith('d1', expect.any(Function));
     expect(subscribeToItemStatus).toHaveBeenCalledWith('d2', expect.any(Function));
     expect(subscribeToItemSource).toHaveBeenCalledWith('r1', expect.any(Function));
-    expect(subscribeToRouteEvents).toHaveBeenCalledWith('r1', expect.any(Function));
   });
 
-  it('updates active source badge when item source event arrives', async () => {
+  it('updates active source indicator in endpoints table when item source event arrives', async () => {
     render(
       <MemoryRouter initialEntries={['/routes/r1']}>
         <Routes>
@@ -274,13 +237,14 @@ describe('RouteItem', () => {
     );
 
     await screen.findByText('Endpoints');
-    expect(screen.getByText('PRIMARY')).toBeInTheDocument();
+    expect(screen.getAllByText('Active')).toHaveLength(1);
 
     await act(async () => {
       __emitItemSource('r1', 's2', 'manual');
     });
 
-    expect(await screen.findByText('BACKUP: backup')).toBeInTheDocument();
+    expect(screen.getAllByText('Active')).toHaveLength(1);
+    expect(screen.queryByText(/BACKUP:/)).not.toBeInTheDocument();
   });
 
   it('calls switch source from source actions', async () => {
@@ -325,26 +289,4 @@ describe('RouteItem', () => {
     expect(screen.getAllByText('stopped').length).toBeGreaterThan(0);
   });
 
-  it('prepends events when realtime event arrives', async () => {
-    render(
-      <MemoryRouter initialEntries={['/routes/r1']}>
-        <Routes>
-          <Route path="/routes/:id" element={<RouteItem />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    await screen.findByText('Events');
-
-    await act(async () => {
-      __emitRouteEvent('r1', {
-        ts: new Date().toISOString(),
-        event_type: 'source_switch',
-        source_id: 's2',
-        reason: 'manual',
-      });
-    });
-
-    expect(await screen.findByText('source_switch')).toBeInTheDocument();
-  });
 });

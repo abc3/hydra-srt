@@ -39,7 +39,6 @@ import { routesApi, destinationsApi, sourcesApi } from '../../utils/api';
 import {
   subscribeToItemSource,
   subscribeToItemStatus,
-  subscribeToRouteEvents,
   subscribeToStats,
 } from '../../utils/realtime';
 import { ROUTES } from "../../utils/constants";
@@ -51,10 +50,8 @@ import {
   resolvePendingRouteStatus,
 } from '../../utils/routes';
 import { getEndpointAddressString, renderEndpointAddress } from '../../utils/routeEndpointAddress';
-import ActiveSourceBadge from './ActiveSourceBadge';
 import SwitchMarkers from './SwitchMarkers';
 import SourceTimeline from './SourceTimeline';
-import EventsLog from './EventsLog';
 import dayjs from 'dayjs';
 import {
   LineChart,
@@ -119,36 +116,13 @@ const getEndpointType = (endpoint) => {
     return getEndpointValue(endpoint, 'mode') || 'listener';
   }
 
-  return endpoint.type || endpoint.role || endpoint.schema || 'N/A';
+  return endpoint.schema || endpoint.type || 'N/A';
 };
 
 const getEndpointLatency = (endpoint) => {
   if (!endpoint) return null;
   const latency = endpoint.latency ?? getEndpointValue(endpoint, 'latency');
   return typeof latency === 'number' ? latency : null;
-};
-
-const formatLastUpdated = (date) => {
-  if (!date) {
-    return '-';
-  }
-
-  const parsedDate = new Date(date);
-
-  if (Number.isNaN(parsedDate.getTime())) {
-    return '-';
-  }
-
-  const pad = (value) => String(value).padStart(2, '0');
-
-  const hours = pad(parsedDate.getHours());
-  const minutes = pad(parsedDate.getMinutes());
-  const seconds = pad(parsedDate.getSeconds());
-  const day = pad(parsedDate.getDate());
-  const month = pad(parsedDate.getMonth() + 1);
-  const year = parsedDate.getFullYear();
-
-  return `${hours}:${minutes}:${seconds} ${day}/${month}/${year}`;
 };
 
 const formatChartTimestamp = (value, includeSeconds = false) => {
@@ -241,9 +215,6 @@ const RouteItem = () => {
   const [analyticsError, setAnalyticsError] = useState(null);
   const [analyticsData, setAnalyticsData] = useState({ points: [], meta: null });
   const [analyticsRefreshTick, setAnalyticsRefreshTick] = useState(0);
-  const [eventsData, setEventsData] = useState({ events: [], meta: null });
-  const [eventsLoading, setEventsLoading] = useState(false);
-  const [eventsTypeFilter, setEventsTypeFilter] = useState('');
   const destinationIdsSignature = (routeData?.destinations || [])
     .map((destination) => destination?.id)
     .filter(Boolean)
@@ -367,31 +338,6 @@ const RouteItem = () => {
     });
   }, [routeData?.id]);
 
-  useEffect(() => {
-    if (!routeData?.id) {
-      return undefined;
-    }
-
-    return subscribeToRouteEvents(routeData.id, (payload) => {
-      setEventsData((prev) => {
-        const current = prev?.events || [];
-        const dedupKey = `${payload?.ts}-${payload?.event_type}-${payload?.source_id || 'none'}`;
-        const hasDuplicate = current.some(
-          (item) => `${item?.ts}-${item?.event_type}-${item?.source_id || 'none'}` === dedupKey,
-        );
-
-        if (hasDuplicate) {
-          return prev;
-        }
-
-        return {
-          ...(prev || {}),
-          events: [payload, ...current].slice(0, 50),
-        };
-      });
-    });
-  }, [routeData?.id]);
-
   const fetchRouteData = async () => {
     try {
       const result = await routesApi.getById(id);
@@ -439,23 +385,6 @@ const RouteItem = () => {
     }
   };
 
-  const fetchEventsData = async (queryParams, type = '') => {
-    try {
-      setEventsLoading(true);
-      const result = await routesApi.getEvents(id, {
-        ...queryParams,
-        type: type || undefined,
-        limit: 50,
-        offset: 0,
-      });
-      setEventsData(result?.data || { events: [], meta: null });
-    } catch (error) {
-      setEventsData({ events: [], meta: null });
-    } finally {
-      setEventsLoading(false);
-    }
-  };
-
   useEffect(() => {
     if (!id) {
       return;
@@ -482,8 +411,7 @@ const RouteItem = () => {
     }
 
     fetchAnalyticsData(queryParams);
-    fetchEventsData(queryParams, eventsTypeFilter);
-  }, [id, analyticsWindow, customRangeApplied, analyticsRefreshTick, eventsTypeFilter]);
+  }, [id, analyticsWindow, customRangeApplied, analyticsRefreshTick]);
 
   useEffect(() => {
     if (!id || analyticsWindow !== LIVE_ANALYTICS_WINDOW) {
@@ -617,7 +545,7 @@ const RouteItem = () => {
       ...source,
       id: `source-${source.id}`,
       endpointId: source.id,
-      role: source.position === 0 ? 'Primary Source' : `Backup Source #${source.position}`,
+      typeLabel: source.position === 0 ? 'Primary Source' : 'Backup Source',
       rowType: 'source',
       name: source.name || (source.position === 0 ? 'Primary Source' : `Backup Source #${source.position}`),
       schema_status: source.status,
@@ -636,7 +564,7 @@ const RouteItem = () => {
     ...filteredDestinations.map((dest) => ({
       ...dest,
       endpointId: dest.id,
-      role: 'Destination',
+      typeLabel: 'Destination',
       rowType: 'destination',
     })),
   ];
@@ -690,20 +618,34 @@ const RouteItem = () => {
 
   const endpointColumns = [
     {
-      title: 'Role',
-      dataIndex: 'role',
-      key: 'role',
-      width: 130,
-      render: (role) => (
-        <Tag color={role === 'Source' ? 'geekblue' : 'default'}>
-          {role}
-        </Tag>
-      ),
+      title: 'Type',
+      dataIndex: 'typeLabel',
+      key: 'typeLabel',
+      width: 200,
+      render: (typeLabel, record) => {
+        let color = 'default';
+        if (record.rowType === 'source') {
+          color = record.position === 0 ? 'geekblue' : 'gold';
+        }
+        const isActiveSource =
+          record.rowType === 'source' && record.endpointId === routeData?.active_source_id;
+
+        return (
+          <Space size={4} wrap>
+            <Tag color={color}>{typeLabel}</Tag>
+            {isActiveSource ? (
+              <AntTooltip title="This source is live for the route">
+                <Tag color="success">Active</Tag>
+              </AntTooltip>
+            ) : null}
+          </Space>
+        );
+      },
       filters: [
-        { text: 'Source', value: 'Source' },
-        { text: 'Destination', value: 'Destination' },
+        { text: 'Source', value: 'source' },
+        { text: 'Destination', value: 'destination' },
       ],
-      onFilter: (value, record) => record.role === value,
+      onFilter: (value, record) => record.rowType === value,
     },
     {
       title: 'Name',
@@ -1030,7 +972,6 @@ const RouteItem = () => {
 
             <Space size="small" wrap>
               {renderRuntimeStatusBadge(runtimeStatus)}
-              <ActiveSourceBadge route={routeData} />
               {routeData?.status && routeData?.schema_status && routeData.status !== routeData.schema_status && (
                 <Tag color={statusDetails.color}>
                   Route {formatStatusLabel(routeData.status)}
@@ -1188,20 +1129,6 @@ const RouteItem = () => {
             formatChartTimestamp={formatChartTimestamp}
           />
         </Space>
-      </Card>
-
-      <Card
-        title="Events"
-        extra={(
-          <EventsLog.Filter value={eventsTypeFilter} onChange={setEventsTypeFilter} />
-        )}
-      >
-        <EventsLog
-          eventsLoading={eventsLoading}
-          events={eventsData?.events || []}
-          sourceNameById={sourceNameById}
-          formatLastUpdated={formatLastUpdated}
-        />
       </Card>
 
       <Card

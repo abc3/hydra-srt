@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import ActiveSourceBadge from '../ActiveSourceBadge';
 
 describe('ActiveSourceBadge', () => {
-  it('renders PRIMARY when active source is position 0', () => {
+  it('renders primary source name with success color when active source is primary', () => {
     render(
       <ActiveSourceBadge
         route={{
@@ -16,10 +16,10 @@ describe('ActiveSourceBadge', () => {
       />,
     );
 
-    expect(screen.getByText('PRIMARY')).toBeInTheDocument();
+    expect(screen.getByText('primary')).toBeInTheDocument();
   });
 
-  it('renders BACKUP label when active source is not primary', () => {
+  it('renders backup source name with warning color when active source is not primary', () => {
     render(
       <ActiveSourceBadge
         route={{
@@ -32,6 +32,6 @@ describe('ActiveSourceBadge', () => {
       />,
     );
 
-    expect(screen.getByText('BACKUP: backup-1')).toBeInTheDocument();
+    expect(screen.getByText('backup-1')).toBeInTheDocument();
   });
 });
