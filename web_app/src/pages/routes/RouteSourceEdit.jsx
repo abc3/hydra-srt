@@ -10,6 +10,7 @@ import {
   Button,
   Row,
   Col,
+  Drawer,
   message,
   Typography,
 } from 'antd';
@@ -73,11 +74,14 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
   const { id } = useParams();
   const [messageApi, contextHolder] = message.useMessage();
   const [loading, setLoading] = useState(id !== 'new');
-  const [testingConnection, setTestingConnection] = useState(false);
+  const [testingSourceIndex, setTestingSourceIndex] = useState(null);
   const [interfacesLoading, setInterfacesLoading] = useState(false);
   const [interfaceOptions, setInterfaceOptions] = useState([]);
   const [routeData, setRouteData] = useState(null);
+  const [testResultOpen, setTestResultOpen] = useState(false);
+  const [testResultData, setTestResultData] = useState(null);
   const dataFetchedRef = useRef(false);
+  const previousSourceModesRef = useRef([]);
 
   const isNew = id === 'new';
 
@@ -214,8 +218,57 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
   const availableNodes = useMemo(() => [{ label: 'self', value: 'self' }], []);
 
   const handleValuesChange = (_changedValues, allValues) => {
+    const sources = Array.isArray(allValues?.sources) ? allValues.sources : [];
+    const previousModes = previousSourceModesRef.current;
+    const patchedSources = [...sources];
+    let hasModeSyncChanges = false;
+
+    const isEmpty = (value) => value === undefined || value === null || value === '';
+
+    for (let index = 0; index < sources.length; index += 1) {
+      const source = sources[index] || {};
+      const currentMode = source?.schema_options?.mode;
+      const previousMode = previousModes[index];
+
+      if (!currentMode || currentMode === previousMode) {
+        continue;
+      }
+
+      const options = { ...(source.schema_options || {}) };
+
+      // Keep values when switching between caller/listener style fields.
+      if ((currentMode === 'caller' || currentMode === 'rendezvous') && isEmpty(options.address) && !isEmpty(options.localaddress)) {
+        options.address = options.localaddress;
+        hasModeSyncChanges = true;
+      }
+
+      if ((currentMode === 'caller' || currentMode === 'rendezvous') && isEmpty(options.port) && !isEmpty(options.localport)) {
+        options.port = options.localport;
+        hasModeSyncChanges = true;
+      }
+
+      if ((currentMode === 'listener' || currentMode === 'rendezvous') && isEmpty(options.localaddress) && !isEmpty(options.address)) {
+        options.localaddress = options.address;
+        hasModeSyncChanges = true;
+      }
+
+      if ((currentMode === 'listener' || currentMode === 'rendezvous') && isEmpty(options.localport) && !isEmpty(options.port)) {
+        options.localport = options.port;
+        hasModeSyncChanges = true;
+      }
+
+      patchedSources[index] = { ...source, schema_options: options };
+    }
+
+    const nextSources = hasModeSyncChanges ? patchedSources : sources;
+    if (hasModeSyncChanges) {
+      form.setFieldsValue({ sources: nextSources });
+    }
+
+    previousSourceModesRef.current = nextSources.map((source) => source?.schema_options?.mode);
+
     if (onChange) {
-      onChange(allValues);
+      onChange({ ...allValues, sources: nextSources });
     }
   };
 
@@ -345,7 +398,9 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
       }
     } catch (error) {
       if (error?.errorFields) {
-        messageApi.error('Please check the form for errors');
+        const firstError = error.errorFields.find((field) => Array.isArray(field?.errors) && field.errors.length > 0);
+        const firstErrorMessage = firstError?.errors?.[0] || 'Please check the form for errors';
+        messageApi.error(`Validation error: ${firstErrorMessage}`);
         return;
       }
 
@@ -353,39 +408,75 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
     }
   };
 
-  const handleTestConnection = async () => {
-    try {
-      const values = await form.validateFields();
-      const firstSource = values?.sources?.[0];
+  const handleTestConnection = async (sourceIndex = 0) => {
+    if (testingSourceIndex !== null) {
+      return;
+    }
 
-      if (!firstSource) {
+    try {
+      const source = form.getFieldValue(['sources', sourceIndex]);
+
+      if (!source) {
         messageApi.error('At least one source is required');
         return;
       }
 
-      setTestingConnection(true);
+      const schema = source?.schema;
+      const mode = source?.schema_options?.mode;
+      const authEnabled = !!source?.schema_options?.authentication;
+      const needsRemote = mode === 'caller' || mode === 'rendezvous';
+      const needsBind = mode === 'listener' || mode === 'rendezvous';
+      const pathsToValidate = [
+        ['sources', sourceIndex, 'schema'],
+        ['sources', sourceIndex, 'schema_options', 'mode'],
+      ];
+
+      if (schema === 'SRT') {
+        if (needsRemote) {
+          pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'address']);
+          pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'port']);
+        }
+        if (needsBind) {
+          pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'localaddress']);
+          pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'localport']);
+        }
+        if (authEnabled) {
+          pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'passphrase']);
+          pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'pbkeylen']);
+        }
+      }
+
+      if (schema === 'UDP') {
+        pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'port']);
+      }
+
+      await form.validateFields(pathsToValidate);
+
+      setTestingSourceIndex(sourceIndex);
       const loadingMessage = messageApi.loading('Testing source connection...', 0);
 
       const result = isNew
         ? await routesApi.testSource({
-            schema: firstSource.schema,
-            schema_options: firstSource.schema_options || {},
+            schema: source.schema,
+            schema_options: source.schema_options || {},
           })
-        : firstSource.id
-          ? await sourcesApi.test(id, firstSource.id)
+        : source.id
+          ? await sourcesApi.test(id, source.id)
           : await routesApi.testSource({
-              schema: firstSource.schema,
-              schema_options: firstSource.schema_options || {},
+              schema: source.schema,
+              schema_options: source.schema_options || {},
             });
 
       loadingMessage();
+      setTestResultData(result?.data || result || null);
+      setTestResultOpen(true);
       messageApi.success(`Connection test completed (${(result?.data?.streams || []).length} streams)`);
     } catch (error) {
       if (!error?.errorFields) {
         messageApi.error(`Failed to test source: ${error.message}`);
       }
     } finally {
-      setTestingConnection(false);
+      setTestingSourceIndex(null);
     }
   };
 
@@ -394,10 +485,23 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
   return (
     <div>
       {contextHolder}
+      <Drawer
+        title="Source Test Result"
+        placement="right"
+        width={560}
+        open={testResultOpen}
+        onClose={() => setTestResultOpen(false)}
+      >
+        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {JSON.stringify(testResultData, null, 2)}
+        </pre>
+      </Drawer>
 
       <Form
         form={form}
         layout="vertical"
+        preserve
+        scrollToFirstError={{ behavior: 'smooth', block: 'center' }}
         initialValues={getInitialFormValues(initialValues)}
         onValuesChange={handleValuesChange}
       >
@@ -500,6 +604,14 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                           title={index === 0 ? 'Primary Source' : `Backup Source #${index}`}
                           extra={(
                             <Space>
+                              <Button
+                                size="small"
+                                icon={<ApiOutlined />}
+                                onClick={() => handleTestConnection(index)}
+                                loading={testingSourceIndex === index}
+                              >
+                                Test connection
+                              </Button>
                               <Button size="small" onClick={() => index > 0 && move(index, index - 1)} disabled={index === 0}>Up</Button>
                               <Button size="small" onClick={() => index < fields.length - 1 && move(index, index + 1)} disabled={index === fields.length - 1}>Down</Button>
                               <Button size="small" danger icon={<DeleteOutlined />} onClick={() => remove(field.name)} disabled={fields.length === 1}>
@@ -533,6 +645,8 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                               if (schema === 'SRT') {
                                 const isCaller = mode === 'caller';
                                 const isRendezvous = mode === 'rendezvous';
+                                const showRemote = isCaller || isRendezvous;
+                                const showBind = !isCaller || isRendezvous;
 
                                 return (
                                   <>
@@ -548,41 +662,57 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                       <Select allowClear loading={interfacesLoading} options={interfaceOptions} placeholder="Select interface" />
                                     </Form.Item>
 
-                                    {(isCaller || isRendezvous) && (
-                                      <>
-                                        <Form.Item label="Remote Address" name={[field.name, 'schema_options', 'address']}>
-                                          <Input placeholder="Enter remote address" />
-                                        </Form.Item>
-                                        <Form.Item
-                                          label="Remote Port"
-                                          name={[field.name, 'schema_options', 'port']}
-                                          rules={[
+                                    <Form.Item
+                                      key={`source-${field.key}-remote-address`}
+                                      label="Remote Address"
+                                      name={[field.name, 'schema_options', 'address']}
+                                      hidden={!showRemote}
+                                      preserve
+                                      rules={showRemote ? [{ required: true, message: 'Please enter a remote address' }] : []}
+                                    >
+                                      <Input placeholder="Enter remote address" />
+                                    </Form.Item>
+                                    <Form.Item
+                                      key={`source-${field.key}-remote-port`}
+                                      label="Remote Port"
+                                      name={[field.name, 'schema_options', 'port']}
+                                      hidden={!showRemote}
+                                      preserve
+                                      rules={showRemote
+                                        ? [
                                             { required: true, message: 'Please enter a remote port' },
                                             { type: 'number', min: 1, max: 65535, message: 'Port must be between 1 and 65535' },
-                                          ]}
-                                        >
-                                          <InputNumber style={{ width: 180 }} />
-                                        </Form.Item>
-                                      </>
-                                    )}
+                                          ]
+                                        : []}
+                                    >
+                                      <InputNumber style={{ width: 180 }} />
+                                    </Form.Item>
 
-                                    {(!isCaller || isRendezvous) && (
-                                      <>
-                                        <Form.Item label="Bind Address" name={[field.name, 'schema_options', 'localaddress']}>
-                                          <Input placeholder="Enter bind address" />
-                                        </Form.Item>
-                                        <Form.Item
-                                          label="Bind Port"
-                                          name={[field.name, 'schema_options', 'localport']}
-                                          rules={[
+                                    <Form.Item
+                                      key={`source-${field.key}-bind-address`}
+                                      label="Bind Address"
+                                      name={[field.name, 'schema_options', 'localaddress']}
+                                      hidden={!showBind}
+                                      preserve
+                                      rules={showBind ? [{ required: true, message: 'Please enter a bind address' }] : []}
+                                    >
+                                      <Input placeholder="Enter bind address" />
+                                    </Form.Item>
+                                    <Form.Item
+                                      key={`source-${field.key}-bind-port`}
+                                      label="Bind Port"
+                                      name={[field.name, 'schema_options', 'localport']}
+                                      hidden={!showBind}
+                                      preserve
+                                      rules={showBind
+                                        ? [
                                             { required: true, message: 'Please enter a bind port' },
                                             { type: 'number', min: 1, max: 65535, message: 'Port must be between 1 and 65535' },
-                                          ]}
-                                        >
-                                          <InputNumber style={{ width: 180 }} />
-                                        </Form.Item>
-                                      </>
-                                    )}
+                                          ]
+                                        : []}
+                                    >
+                                      <InputNumber style={{ width: 180 }} />
+                                    </Form.Item>
 
                                     <Form.Item
                                       label="Authentication"
@@ -736,28 +866,32 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                           const mode = getNestedFieldValue(['destinations', field.name, 'schema_options', 'mode']);
                                           const isCaller = mode === 'caller';
                                           const isRendezvous = mode === 'rendezvous';
+                                          const showRemote = isCaller || isRendezvous;
+                                          const showBind = !isCaller || isRendezvous;
 
                                           return (
                                             <>
-                                              {(isCaller || isRendezvous) && (
-                                                <Form.Item
-                                                  label="Remote Address"
-                                                  name={[field.name, 'schema_options', 'address']}
-                                                  extra={isRendezvous ? 'Remote host/IP of the rendezvous peer.' : 'Remote host/IP for caller mode.'}
-                                                >
-                                                  <Input placeholder="Enter remote address" />
-                                                </Form.Item>
-                                              )}
+                                              <Form.Item
+                                                label="Remote Address"
+                                                name={[field.name, 'schema_options', 'address']}
+                                                hidden={!showRemote}
+                                                preserve
+                                                rules={showRemote ? [{ required: true, message: 'Please enter a remote address' }] : []}
+                                                extra={isRendezvous ? 'Remote host/IP of the rendezvous peer.' : 'Remote host/IP for caller mode.'}
+                                              >
+                                                <Input placeholder="Enter remote address" />
+                                              </Form.Item>
 
-                                              {(!isCaller || isRendezvous) && (
-                                                <Form.Item
-                                                  label="Bind Address"
-                                                  name={[field.name, 'schema_options', 'localaddress']}
-                                                  extra={isRendezvous ? 'Local address to bind before connecting to the rendezvous peer.' : 'Local address to bind.'}
-                                                >
-                                                  <Input placeholder="Enter bind address" />
-                                                </Form.Item>
-                                              )}
+                                              <Form.Item
+                                                label="Bind Address"
+                                                name={[field.name, 'schema_options', 'localaddress']}
+                                                hidden={!showBind}
+                                                preserve
+                                                rules={showBind ? [{ required: true, message: 'Please enter a bind address' }] : []}
+                                                extra={isRendezvous ? 'Local address to bind before connecting to the rendezvous peer.' : 'Local address to bind.'}
+                                              >
+                                                <Input placeholder="Enter bind address" />
+                                              </Form.Item>
                                             </>
                                           );
                                         }}
@@ -768,36 +902,42 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                           const mode = getNestedFieldValue(['destinations', field.name, 'schema_options', 'mode']);
                                           const isCaller = mode === 'caller';
                                           const isRendezvous = mode === 'rendezvous';
+                                          const showRemote = isCaller || isRendezvous;
+                                          const showBind = !isCaller || isRendezvous;
 
                                           return (
                                             <>
-                                              {(isCaller || isRendezvous) && (
-                                                <Form.Item
-                                                  label="Remote Port"
-                                                  name={[field.name, 'schema_options', 'port']}
-                                                  extra="Remote port for caller/rendezvous mode."
-                                                  rules={[
-                                                    { required: true, message: 'Please enter a remote port' },
-                                                    { type: 'number', min: 1, max: 65535, message: 'Port must be between 1 and 65535' },
-                                                  ]}
-                                                >
-                                                  <InputNumber style={{ width: 150 }} placeholder="Enter remote port" />
-                                                </Form.Item>
-                                              )}
+                                              <Form.Item
+                                                label="Remote Port"
+                                                name={[field.name, 'schema_options', 'port']}
+                                                hidden={!showRemote}
+                                                preserve
+                                                extra="Remote port for caller/rendezvous mode."
+                                                rules={showRemote
+                                                  ? [
+                                                      { required: true, message: 'Please enter a remote port' },
+                                                      { type: 'number', min: 1, max: 65535, message: 'Port must be between 1 and 65535' },
+                                                    ]
+                                                  : []}
+                                              >
+                                                <InputNumber style={{ width: 150 }} placeholder="Enter remote port" />
+                                              </Form.Item>
 
-                                              {(!isCaller || isRendezvous) && (
-                                                <Form.Item
-                                                  label="Bind Port"
-                                                  name={[field.name, 'schema_options', 'localport']}
-                                                  extra="Local port to bind."
-                                                  rules={[
-                                                    { required: true, message: 'Please enter a bind port' },
-                                                    { type: 'number', min: 1, max: 65535, message: 'Port must be between 1 and 65535' },
-                                                  ]}
-                                                >
-                                                  <InputNumber style={{ width: 150 }} placeholder="Enter bind port" />
-                                                </Form.Item>
-                                              )}
+                                              <Form.Item
+                                                label="Bind Port"
+                                                name={[field.name, 'schema_options', 'localport']}
+                                                hidden={!showBind}
+                                                preserve
+                                                extra="Local port to bind."
+                                                rules={showBind
+                                                  ? [
+                                                      { required: true, message: 'Please enter a bind port' },
+                                                      { type: 'number', min: 1, max: 65535, message: 'Port must be between 1 and 65535' },
+                                                    ]
+                                                  : []}
+                                              >
+                                                <InputNumber style={{ width: 150 }} placeholder="Enter bind port" />
+                                              </Form.Item>
                                             </>
                                           );
                                         }}
@@ -910,7 +1050,6 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                 <Row justify="end" style={{ marginTop: 24 }}>
                   <Space>
                     <Button icon={<ArrowLeftOutlined />} onClick={handleBack}>Back</Button>
-                    <Button icon={<ApiOutlined />} onClick={handleTestConnection} loading={testingConnection}>Test</Button>
                     <Button type="primary" icon={<SaveOutlined />} onClick={handleSave}>Save</Button>
                   </Space>
                 </Row>

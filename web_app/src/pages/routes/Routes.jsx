@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Table, Card, Button, Tag, Space, Typography, message, Modal, Dropdown, Tooltip, Input, Badge, Drawer, Tree, Empty } from 'antd';
+import { Table, Card, Button, Space, Typography, message, Modal, Dropdown, Tooltip, Input, Badge, Drawer, Tree, Empty } from 'antd';
 import {
   PlusOutlined,
   EditOutlined,
@@ -17,7 +17,6 @@ import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
 import { subscribeToItemSource, subscribeToItemStatus, subscribeToStats } from '../../utils/realtime';
-import ActiveSourceBadge from './ActiveSourceBadge';
 import {
   ACTIVE_ROUTE_STATUSES,
   compareUptime,
@@ -213,6 +212,29 @@ const collectTreeKeys = (nodes) => {
   });
 
   return keys;
+};
+
+const getRouteSourceEndpoint = (route) => {
+  if (!route) {
+    return null;
+  }
+
+  const sources = Array.isArray(route.sources) ? route.sources : [];
+  const activeSource =
+    sources.find((source) => source?.id === route.active_source_id) ||
+    sources.find((source) => source?.position === 0) ||
+    sources[0];
+
+  if (activeSource) {
+    return activeSource;
+  }
+
+  // Backward compatibility for legacy route payloads.
+  if (route.source?.schema) {
+    return route.source;
+  }
+
+  return null;
 };
 
 const Routes = () => {
@@ -537,23 +559,10 @@ const Routes = () => {
     {
       title: 'Source Addr',
       key: 'addr',
-      render: (_, record) => renderEndpointAddress(record),
-      sorter: (a, b) => getEndpointAddressString(a).localeCompare(getEndpointAddressString(b)),
-    },
-    {
-      title: 'Enabled',
-      dataIndex: 'enabled',
-      key: 'enabled',
-      filters: [
-        { text: 'Enabled', value: true },
-        { text: 'Disabled', value: false },
-      ],
-      onFilter: (value, record) => record.enabled === value,
-      render: (enabled) => (
-        <Tag color={enabled ? 'green' : 'error'}>
-          {enabled ? 'Yes' : 'No'}
-        </Tag>
-      ),
+      render: (_, record) => renderEndpointAddress(getRouteSourceEndpoint(record)),
+      sorter: (a, b) =>
+        getEndpointAddressString(getRouteSourceEndpoint(a))
+          .localeCompare(getEndpointAddressString(getRouteSourceEndpoint(b))),
     },
     {
       title: 'Status',
@@ -568,11 +577,6 @@ const Routes = () => {
       ],
       onFilter: (value, record) => (getRouteRuntimeStatus(record) || '').toLowerCase() === value,
       render: (_, record) => renderStatusBadge(getRouteRuntimeStatus(record)),
-    },
-    {
-      title: 'Active Source',
-      key: 'active_source',
-      render: (_, record) => <ActiveSourceBadge route={record} />,
     },
     {
       title: 'In / Out',
@@ -695,7 +699,7 @@ const Routes = () => {
   const filteredRoutes = normalizedRoutesFilter
     ? routes.filter((route) => {
         const routeName = (route.name || '').toLowerCase();
-        const routeAddress = getEndpointAddressString(route).toLowerCase();
+        const routeAddress = getEndpointAddressString(getRouteSourceEndpoint(route)).toLowerCase();
         return routeName.includes(normalizedRoutesFilter) || routeAddress.includes(normalizedRoutesFilter);
       })
     : routes;

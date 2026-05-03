@@ -48,6 +48,7 @@ import {
   formatStatusLabel,
   getRouteRuntimeStatus,
   isRouteBusy,
+  LIVE_ROUTE_STATUSES,
   resolvePendingRouteStatus,
 } from '../../utils/routes';
 import { getEndpointAddressString, renderEndpointAddress } from '../../utils/routeEndpointAddress';
@@ -576,7 +577,7 @@ const RouteItem = () => {
       typeLabel: source.position === 0 ? 'Primary Source' : 'Backup Source',
       rowType: 'source',
       name: source.name || (source.position === 0 ? 'Primary Source' : `Backup Source #${source.position}`),
-      schema_status: source.status,
+      schema_status: source.schema_status || source.status,
     }));
   const routeBusy = isRouteBusy(routeData);
   const deleteDisabledMessage = 'If you want to delete it, stop the route first';
@@ -643,6 +644,30 @@ const RouteItem = () => {
     acc[source.id] = source.position === 0 ? '#95de64' : '#ffd591';
     return acc;
   }, {});
+
+  const resolveEndpointStatus = (record) => {
+    if (record.rowType !== 'source') {
+      return record.status;
+    }
+
+    const sourceStatus = record.schema_status || record.status;
+    if (!sourceStatus) {
+      return sourceStatus;
+    }
+
+    const routeStatus = routeData?.schema_status || routeData?.status;
+    const routeStatusNormalized = (routeStatus || '').toLowerCase();
+    const sourceStatusNormalized = (sourceStatus || '').toLowerCase();
+    const isActiveSource = record.endpointId === routeData?.active_source_id;
+    const routeIsLive = LIVE_ROUTE_STATUSES.has(routeStatusNormalized);
+    const sourceLooksStale = ['stopped', 'failed'].includes(sourceStatusNormalized);
+
+    if (isActiveSource && routeIsLive && sourceLooksStale) {
+      return routeStatus;
+    }
+
+    return sourceStatus;
+  };
 
   const endpointColumns = [
     {
@@ -716,12 +741,7 @@ const RouteItem = () => {
       title: 'Status',
       key: 'status',
       width: 160,
-      render: (_, record) => {
-        const endpointStatus =
-          record.rowType === 'source' ? (record.schema_status || record.status) : record.status;
-
-        return renderRuntimeStatusBadge(endpointStatus);
-      },
+      render: (_, record) => renderRuntimeStatusBadge(resolveEndpointStatus(record)),
       filters: [
         { text: 'Starting', value: 'starting' },
         { text: 'Processing', value: 'processing' },
@@ -730,9 +750,7 @@ const RouteItem = () => {
         { text: 'Stopped', value: 'stopped' },
       ],
       onFilter: (value, record) => {
-        const endpointStatus =
-          record.rowType === 'source' ? (record.schema_status || record.status) : record.status;
-
+        const endpointStatus = resolveEndpointStatus(record);
         return (endpointStatus || '').toLowerCase() === value;
       },
     },

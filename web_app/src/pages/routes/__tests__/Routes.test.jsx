@@ -100,8 +100,22 @@ const routeFixture = (attrs) => ({
   schema: 'SRT',
   schema_options: { localaddress: '127.0.0.1', localport: 4201 },
   sources: [
-    { id: `${attrs.id}-primary`, position: 0, enabled: true, name: 'primary' },
-    { id: `${attrs.id}-backup`, position: 1, enabled: true, name: 'backup-1' },
+    {
+      id: `${attrs.id}-primary`,
+      position: 0,
+      enabled: true,
+      name: 'primary',
+      schema: 'SRT',
+      schema_options: { mode: 'listener', localaddress: '127.0.0.1', localport: 4201 },
+    },
+    {
+      id: `${attrs.id}-backup`,
+      position: 1,
+      enabled: true,
+      name: 'backup-1',
+      schema: 'SRT',
+      schema_options: { mode: 'listener', localaddress: '127.0.0.1', localport: 4202 },
+    },
   ],
   active_source_id: `${attrs.id}-primary`,
   started_at: attrs.started_at ?? null,
@@ -182,7 +196,7 @@ describe('Routes', () => {
     expect(await screen.findByText('running')).toBeInTheDocument();
   });
 
-  it('updates active source badge on item_source event', async () => {
+  it('updates source addr on item_source event', async () => {
     render(
       <MemoryRouter>
         <Routes />
@@ -190,13 +204,13 @@ describe('Routes', () => {
     );
 
     await screen.findAllByText('Starting route');
-    expect(screen.getAllByText('primary').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('127.0.0.1:4201').length).toBeGreaterThan(0);
 
     await act(async () => {
       __emitItemSource('starting-route', 'starting-route-backup', 'manual');
     });
 
-    expect(await screen.findByText('backup-1')).toBeInTheDocument();
+    expect(await screen.findByText('127.0.0.1:4202')).toBeInTheDocument();
   });
 
   it('shows route in and out stats while status is not stopped', async () => {
