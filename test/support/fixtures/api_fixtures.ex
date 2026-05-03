@@ -12,11 +12,10 @@ defmodule HydraSrt.ApiFixtures do
       attrs
       |> Enum.into(%{
         alias: "some alias",
+        backup_config: %{"mode" => "passive"},
         enabled: true,
         name: "some name",
-        schema: "UDP",
         schema_status: nil,
-        schema_options: %{},
         source: %{},
         started_at: ~U[2025-02-18 14:51:00Z],
         status: "some status",
@@ -69,6 +68,32 @@ defmodule HydraSrt.ApiFixtures do
       |> HydraSrt.Api.create_destination()
 
     HydraSrt.Api.get_destination!(destination.id)
+  end
+
+  @doc """
+  Generate a source for a given route.
+  """
+  def source_fixture(route, attrs \\ %{}) do
+    route_id =
+      cond do
+        is_binary(route) -> route
+        is_map(route) -> Map.get(route, :id) || Map.get(route, "id")
+        true -> nil
+      end
+
+    {:ok, source} =
+      attrs
+      |> Enum.into(%{
+        route_id: route_id,
+        position: 0,
+        enabled: true,
+        name: "primary",
+        schema: "UDP",
+        schema_options: %{host: "127.0.0.1", port: 5000}
+      })
+      |> HydraSrt.Api.create_source()
+
+    HydraSrt.Api.get_source!(source.id)
   end
 
   @doc """

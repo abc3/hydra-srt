@@ -15,9 +15,10 @@ defmodule HydraSrt.Stats.Collector do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @spec ingest(binary(), map()) :: :ok
-  def ingest(route_id, stats) when is_binary(route_id) and is_map(stats) do
-    send(__MODULE__, {:ingest_route_stats, route_id, stats})
+  @spec ingest(binary(), map(), map()) :: :ok
+  def ingest(route_id, stats, metadata \\ %{})
+      when is_binary(route_id) and is_map(stats) and is_map(metadata) do
+    send(__MODULE__, {:ingest_route_stats, route_id, stats, metadata})
     :ok
   end
 
@@ -46,11 +47,12 @@ defmodule HydraSrt.Stats.Collector do
   end
 
   @impl true
-  def handle_info({:ingest_route_stats, route_id, stats}, state)
-      when is_binary(route_id) and is_map(stats) do
+  def handle_info({:ingest_route_stats, route_id, stats, metadata}, state)
+      when is_binary(route_id) and is_map(stats) and is_map(metadata) do
     envelope = %{
       route_id: route_id,
       stats: stats,
+      metadata: metadata,
       ts: DateTime.utc_now()
     }
 

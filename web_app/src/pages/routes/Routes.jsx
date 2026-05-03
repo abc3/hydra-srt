@@ -16,7 +16,8 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { routesApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
-import { subscribeToItemStatus, subscribeToStats } from '../../utils/realtime';
+import { subscribeToItemSource, subscribeToItemStatus, subscribeToStats } from '../../utils/realtime';
+import ActiveSourceBadge from './ActiveSourceBadge';
 import {
   ACTIVE_ROUTE_STATUSES,
   compareUptime,
@@ -342,6 +343,42 @@ const Routes = () => {
   }, [routeIdsSignature]);
 
   useEffect(() => {
+    const routeIds = routeIdsSignature ? routeIdsSignature.split('|') : [];
+
+    if (routeIds.length === 0) {
+      return undefined;
+    }
+
+    const unsubscribers = routeIds.map((routeId) =>
+      subscribeToItemSource(routeId, (payload) => {
+        const itemId = payload?.item_id;
+        const activeSourceId = payload?.active_source_id;
+
+        if (!itemId || !activeSourceId) {
+          return;
+        }
+
+        setRoutes((prev) =>
+          prev.map((route) =>
+            route.id === itemId
+              ? {
+                  ...route,
+                  active_source_id: activeSourceId,
+                  last_switch_reason: payload?.last_switch_reason || route.last_switch_reason,
+                  last_switch_at: payload?.last_switch_at || route.last_switch_at,
+                }
+              : route
+          )
+        );
+      })
+    );
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [routeIdsSignature]);
+
+  useEffect(() => {
     const intervalId = window.setInterval(() => {
       setNowMs(Date.now());
     }, 10_000);
@@ -531,6 +568,11 @@ const Routes = () => {
       ],
       onFilter: (value, record) => (getRouteRuntimeStatus(record) || '').toLowerCase() === value,
       render: (_, record) => renderStatusBadge(getRouteRuntimeStatus(record)),
+    },
+    {
+      title: 'Active Source',
+      key: 'active_source',
+      render: (_, record) => <ActiveSourceBadge route={record} />,
     },
     {
       title: 'In / Out',

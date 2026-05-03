@@ -17,6 +17,9 @@ const statsListeners = new Set();
 const systemPipelinesListeners = new Set();
 const itemSubscriptions = new Map();
 const itemSubscriptionsOnServer = new Set();
+const itemSourceListeners = new Map();
+const routeEventsListeners = new Map();
+const routeEventsSubscriptionsOnServer = new Set();
 
 /**
  * Same rules as the pre-refactor UI (e.g. RouteItem): pass the HTTP `/socket`
@@ -198,6 +201,50 @@ const pushAllItemSubscriptions = () => {
   });
 };
 
+const pushRouteEventsSubscription = (routeId) => {
+  if (!channel || !routeId || !routeEventsListeners.has(routeId)) {
+    return;
+  }
+
+  if (!channelJoined || channelJoinInFlight) {
+    return;
+  }
+
+  if (routeEventsSubscriptionsOnServer.has(routeId)) {
+    return;
+  }
+
+  channel
+    .push('events:subscribe', { route_id: routeId })
+    .receive('ok', () => {
+      routeEventsSubscriptionsOnServer.add(routeId);
+    })
+    .receive('error', (error) => {
+      console.error('[realtime] events subscribe failed', routeId, error);
+    });
+};
+
+const pushRouteEventsUnsubscription = (routeId) => {
+  if (!channel || !channelJoined || !routeEventsSubscriptionsOnServer.has(routeId)) {
+    return;
+  }
+
+  channel
+    .push('events:unsubscribe', { route_id: routeId })
+    .receive('ok', () => {
+      routeEventsSubscriptionsOnServer.delete(routeId);
+    })
+    .receive('error', (error) => {
+      console.error('[realtime] events unsubscribe failed', routeId, error);
+    });
+};
+
+const pushAllRouteEventsSubscriptions = () => {
+  Array.from(routeEventsListeners.keys()).forEach((routeId) => {
+    pushRouteEventsSubscription(routeId);
+  });
+};
+
 const closeRealtimeTransport = () => {
   if (channel) {
     channel.leave();
@@ -215,6 +262,7 @@ const closeRealtimeTransport = () => {
   statsSubscribedOnServer = false;
   systemPipelinesSubscribedOnServer = false;
   itemSubscriptionsOnServer.clear();
+  routeEventsSubscriptionsOnServer.clear();
 };
 
 export const connectRealtime = () => {
@@ -261,6 +309,38 @@ export const connectRealtime = () => {
     listeners.forEach((listener) => listener(payload));
   });
 
+  channel.on('item_source', (payload) => {
+    const itemId = payload?.item_id;
+
+    if (!itemId) {
+      return;
+    }
+
+    const listeners = itemSourceListeners.get(itemId);
+
+    if (!listeners || listeners.size === 0) {
+      return;
+    }
+
+    listeners.forEach((listener) => listener(payload));
+  });
+
+  channel.on('event', (payload) => {
+    const routeId = payload?.route_id;
+
+    if (!routeId) {
+      return;
+    }
+
+    const listeners = routeEventsListeners.get(routeId);
+
+    if (!listeners || listeners.size === 0) {
+      return;
+    }
+
+    listeners.forEach((listener) => listener(payload));
+  });
+
   channel.onError((error) => {
     console.error('[realtime] channel error', error);
   });
@@ -271,6 +351,7 @@ export const connectRealtime = () => {
     statsSubscribedOnServer = false;
     systemPipelinesSubscribedOnServer = false;
     itemSubscriptionsOnServer.clear();
+    routeEventsSubscriptionsOnServer.clear();
   });
 
   socket.onOpen(() => {
@@ -287,6 +368,7 @@ export const connectRealtime = () => {
     statsSubscribedOnServer = false;
     systemPipelinesSubscribedOnServer = false;
     itemSubscriptionsOnServer.clear();
+    routeEventsSubscriptionsOnServer.clear();
   });
 
   socket.connect();
@@ -306,6 +388,7 @@ export const connectRealtime = () => {
       }
 
       pushAllItemSubscriptions();
+      pushAllRouteEventsSubscriptions();
     })
     .receive('error', (error) => {
       channelJoinInFlight = false;
@@ -327,6 +410,9 @@ export const disconnectRealtime = () => {
   systemPipelinesListeners.clear();
   itemSubscriptions.clear();
   itemSubscriptionsOnServer.clear();
+  itemSourceListeners.clear();
+  routeEventsListeners.clear();
+  routeEventsSubscriptionsOnServer.clear();
 };
 
 export const subscribeToStats = (listener) => {
@@ -385,6 +471,74 @@ export const subscribeToItemStatus = (itemId, listener) => {
 
     if (remaining === 0) {
       pushItemUnsubscription(itemId);
+    }
+  };
+};
+
+export const subscribeToItemSource = (itemId, listener) => {
+  if (typeof itemId !== 'string' || itemId.length === 0) {
+    return () => {};
+  }
+
+  const listeners = itemSourceListeners.get(itemId) || new Set();
+
+  if (typeof listener === 'function') {
+    listeners.add(listener);
+  }
+
+  itemSourceListeners.set(itemId, listeners);
+
+  connectRealtime();
+  addItemListener(itemId);
+  pushItemSubscription(itemId);
+
+  return () => {
+    const currentListeners = itemSourceListeners.get(itemId);
+
+    if (currentListeners && typeof listener === 'function') {
+      currentListeners.delete(listener);
+    }
+
+    if (!currentListeners || currentListeners.size === 0) {
+      itemSourceListeners.delete(itemId);
+      const remaining = removeItemListener(itemId);
+
+      if (remaining === 0) {
+        pushItemUnsubscription(itemId);
+      }
+    } else {
+      itemSourceListeners.set(itemId, currentListeners);
+    }
+  };
+};
+
+export const subscribeToRouteEvents = (routeId, listener) => {
+  if (typeof routeId !== 'string' || routeId.length === 0) {
+    return () => {};
+  }
+
+  const listeners = routeEventsListeners.get(routeId) || new Set();
+
+  if (typeof listener === 'function') {
+    listeners.add(listener);
+  }
+
+  routeEventsListeners.set(routeId, listeners);
+  connectRealtime();
+  pushRouteEventsSubscription(routeId);
+
+  return () => {
+    const currentListeners = routeEventsListeners.get(routeId);
+
+    if (currentListeners && typeof listener === 'function') {
+      currentListeners.delete(listener);
+    }
+
+    if (!currentListeners || currentListeners.size === 0) {
+      routeEventsListeners.delete(routeId);
+      pushRouteEventsUnsubscription(routeId);
+    } else {
+      routeEventsListeners.set(routeId, currentListeners);
     }
   };
 };

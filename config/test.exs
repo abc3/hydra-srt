@@ -38,7 +38,11 @@ config :hydra_srt, HydraSrt.Repo,
   pool_size: if(e2e_mode_enabled?, do: 2, else: 5),
   pool: if(e2e_mode_enabled?, do: DBConnection.ConnectionPool, else: Ecto.Adapters.SQL.Sandbox),
   queue_target: if(e2e_mode_enabled?, do: 5_000, else: 50),
-  queue_interval: if(e2e_mode_enabled?, do: 5_000, else: 1_000)
+  queue_interval: if(e2e_mode_enabled?, do: 5_000, else: 1_000),
+  journal_mode: :wal,
+  # E2E shares one DB across HTTP + Repo; longer busy wait reduces `database is locked`
+  # under load (see test_helper E2E max_cases: 1 as well).
+  busy_timeout: if(e2e_mode_enabled?, do: 15_000, else: 2_000)
 
 config :hydra_srt,
   analytics_database_path:

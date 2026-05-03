@@ -22,10 +22,34 @@ defmodule HydraSrtWeb.FallbackController do
     |> render(:"404")
   end
 
+  def call(conn, {:error, :invalid_source_order}) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> json(%{error: "Invalid source order"})
+  end
+
+  def call(conn, {:error, :active_source_cannot_be_deleted}) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> json(%{error: "Active source cannot be deleted"})
+  end
+
+  def call(conn, {:error, :source_disabled}) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> json(%{error: "Source is disabled"})
+  end
+
+  def call(conn, {:error, :route_handler_unavailable}) do
+    conn
+    |> put_status(:conflict)
+    |> json(%{error: "Route handler is unavailable for running route"})
+  end
+
   # Catch-all for non-Ecto errors to avoid crashing controller actions that use `with`.
-  def call(conn, {:error, reason}) do
+  def call(conn, {:error, _reason}) do
     conn
     |> put_status(:internal_server_error)
-    |> json(%{error: inspect(reason)})
+    |> json(%{error: "Internal server error"})
   end
 end

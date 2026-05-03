@@ -170,6 +170,9 @@ defmodule HydraSrtWeb.RouteControllerTest do
       assert meta["window"] == "last_hour"
       assert is_integer(meta["bucket_ms"])
       assert is_list(points)
+      assert is_list(response["data"]["switches"])
+      assert is_list(response["data"]["source_timeline"])
+      assert is_list(response["data"]["srt_quality"])
 
       assert Enum.all?(points, fn point ->
                is_binary(point["timestamp"]) and is_map(point["destinations"])
@@ -177,8 +180,69 @@ defmodule HydraSrtWeb.RouteControllerTest do
     end
   end
 
+  describe "events" do
+    setup [:create_route]
+
+    test "returns route events payload", %{conn: conn, route: %{id: id}} do
+      conn = get(conn, "/api/routes/#{id}/events?window=last_hour&limit=10&offset=0")
+      response = json_response(conn, 200)
+
+      assert %{"data" => %{"events" => events, "meta" => meta}} = response
+      assert is_list(events)
+      assert meta["window"] == "last_hour"
+      assert meta["limit"] == 10
+      assert meta["offset"] == 0
+      assert is_integer(meta["total"])
+    end
+  end
+
+  describe "switch source" do
+    setup [:create_route_with_sources]
+
+    test "switches active source when source belongs to route", %{
+      conn: conn,
+      route: route,
+      secondary_source: secondary_source
+    } do
+      conn = post(conn, ~p"/api/routes/#{route.id}/switch-source", source_id: secondary_source.id)
+      response = json_response(conn, 200)["data"]
+
+      assert response["active_source_id"] == secondary_source.id
+      assert response["last_switch_reason"] == "manual"
+    end
+
+    test "returns 404 for source from another route", %{conn: conn, route: route} do
+      another_route = route_fixture()
+      other_source = source_fixture(another_route, %{position: 0})
+
+      conn = post(conn, ~p"/api/routes/#{route.id}/switch-source", source_id: other_source.id)
+      assert json_response(conn, 404)
+    end
+
+    test "returns 422 for disabled source", %{
+      conn: conn,
+      route: route,
+      secondary_source: secondary_source
+    } do
+      _ = HydraSrt.Db.update_source(route.id, secondary_source.id, %{"enabled" => false})
+
+      conn = post(conn, ~p"/api/routes/#{route.id}/switch-source", source_id: secondary_source.id)
+      assert json_response(conn, 422)["error"] == "Source is disabled"
+    end
+  end
+
   def create_route(_) do
     route = route_fixture()
     %{route: route}
+  end
+
+  def create_route_with_sources(_) do
+    route = route_fixture()
+    {:ok, _updated_route} = HydraSrt.Db.update_route(route.id, %{"status" => "stopped"})
+    primary_source = source_fixture(route, %{position: 0, name: "primary"})
+    secondary_source = source_fixture(route, %{position: 1, name: "backup"})
+    {:ok, _route} = HydraSrt.Db.set_route_active_source(route.id, primary_source.id, "manual")
+
+    %{route: route, primary_source: primary_source, secondary_source: secondary_source}
   end
 end

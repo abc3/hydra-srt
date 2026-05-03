@@ -27,7 +27,7 @@ dev_udp1:
 	-f lavfi -i sine=frequency=1000:duration=6000:sample_rate=44100 \
 	-pix_fmt yuv420p -c:v libx264 -b:v 1000k -g 25 -keyint_min 100 -profile:v baseline -preset veryfast \
 	-c:a aac -b:a 128k -ar 48000 -ac 2 \
-	-f mpegts "srt://127.0.0.1:4201?mode=caller"	
+	-f mpegts "srt://127.0.0.1:4201?mode=listener"	
 
 dev_udp:
 	ffmpeg -hide_banner -loglevel error -re \
@@ -35,13 +35,13 @@ dev_udp:
 	-f lavfi -i "sine=frequency=440:sample_rate=48000" \
 	-c:v libx264 -preset veryfast -tune zerolatency -b:v 2000k \
 	-c:a aac -b:a 128k \
-	-f mpegts "srt://127.0.0.1:4201?mode=listener"
+	-f mpegts "srt://127.0.0.1:4200?mode=listener"
 
 dev_play:
 	ffplay -hide_banner "udp://127.0.0.1:1234"
 
 dev_play1:
-	srt-live-transmit "srt://127.0.0.1:4202?mode=caller" udp://:4203 -v -statspf default -stats 1000
+	srt-live-transmit "srt://127.0.0.1:4203?mode=caller" udp://:4204 -v -statspf default -stats 1000
 
 dev_udp2:
 	ffmpeg -hide_banner -loglevel error \
