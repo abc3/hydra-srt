@@ -1,6 +1,6 @@
 # HydraSRT – An Open Source Alternative to Haivision SRT Gateway
 
-> ⚠️ **Pre-Alpha Status**: This project is in a very early development stage. Features may be incomplete, and breaking changes are expected.
+> **Project Status**: HydraSRT is under active development. Some features are still evolving, and occasional breaking changes may occur.
 
 - [Overview](#overview)
 - [Motivation](#motivation)
@@ -80,6 +80,27 @@ Coming soon...
 
 [Missed something? Add a request!](https://github.com/abc3/hydra-srt/issues/new)
 
+### Source Failover (Primary + Backup)
+
+HydraSRT supports route-level source failover with one active source at a time:
+
+- **Primary + N backup sources** per route.
+- **Automatic failover** when active source fails.
+- **Manual source switch** via UI/API.
+- **Realtime active source updates** in the route page.
+
+#### Failover Modes
+
+- **`active`**: fail over on active source failure and use background probing to return to primary when stable.
+- **`passive`**: fail over only when current active source fails; no background primary probing.
+- **`disabled`**: disables automatic failover.
+
+#### Operational Notes
+
+- Failover is implemented in Elixir control-plane by restarting the native pipeline with the selected source.
+- Native pipeline input selection is **not hot-swapped in-place**.
+- A short output interruption during source switch/restart is expected.
+
 ## Deployment
 
 ### Prerequisites
@@ -90,7 +111,7 @@ Before deploying HydraSRT, ensure your system has the following dependencies ins
 
 1. **Elixir** (version 1.17.1 or later)
 2. **Erlang/OTP** (version 27.0 or later)
-3. **Node.js** and npm (version 18.13.0 or later, for building the web ui)
+3. **Node.js** and npm (version 18.13.0 or later, for building the web UI)
 
    > **Recommended**: Use [asdf](https://asdf-vm.com/) for managing Elixir, Erlang, and Node.js versions.
    > The project includes a `.tool-versions` file with the following versions:
@@ -141,7 +162,7 @@ make dev
 
 ## Building for Production
 
-> ⚠️ **Pre-Alpha Warning**: As HydraSRT is in pre-alpha stage, production builds may have unexpected behaviors, bugs, or breaking changes. Use in production environments at your own risk and be prepared to troubleshoot issues.
+> **Production Note**: HydraSRT can be built for production, but the project is still evolving. Plan upgrades carefully and validate in staging before rollout.
 
 1. **Clone the repository**:
 
@@ -175,12 +196,12 @@ make dev
 
 ### Running in Production
 
-> ⚠️ **Pre-Alpha Stability Notice**: During this early development phase, the interactive shell mode (`start_iex`) is strongly recommended as it allows you to monitor and debug issues in real-time. Expect frequent updates and potential breaking changes.
+For day-to-day debugging, `start_iex` is usually easier than `start` (see the pre-alpha note under **Building for Production** above).
 
 1. **Start the application**:
 
    ```bash
-   # Start the application with interactive Elixir shell (recommended during early development)
+   # Interactive Elixir shell (handy for logs and debugging)
    PHX_SERVER=true DATABASE_PATH=/etc/hydra_srt/hydra_srt.db API_AUTH_USERNAME=your_username API_AUTH_PASSWORD=your_password _build/prod/rel/hydra_srt/bin/hydra_srt start_iex
    ```
 
