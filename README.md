@@ -324,7 +324,7 @@ HydraSRT supports two Docker networking modes:
 - **Default (recommended / portable)**: normal bridge networking with explicit port mappings (works on Linux + Docker Desktop).
 - **Host network (Linux-only)**: share the host network namespace (useful for certain high-performance or port-binding scenarios).
 
-#### Default mode (portable)
+#### Default mode (portable, recommended for macOS/Windows)
 
 ```bash
 docker compose up --build
@@ -336,12 +336,20 @@ The Web UI will be available at:
 http://127.0.0.1:4000
 ```
 
-#### Host network mode (Linux-only)
+Use this mode when you want a simple local setup (for example, on macOS) and only need the mapped ports from `docker-compose.yml` (e.g. `4000/tcp` and `4100-4500/udp`).
+
+#### Host network mode (Linux-only, recommended on Linux servers)
 
 Docker Desktop (macOS/Windows) does not support Linux-style `network_mode: "host"` in the same way, so this mode is intended for Linux hosts only.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.host.yml up --build
+docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
+```
+
+To stop:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.host.yml down
 ```
 
 When using Docker Compose, setting `network_mode: "host"` allows the container to share the host's networking namespace. This means:
