@@ -16,7 +16,7 @@ services:
       - RELEASE_COOKIE="test_cookie"
       - PHX_SERVER=true
       - PORT=4000
-      - PHX_HOST=localhost
+      - PHX_HOST=${PHX_HOST:-127.0.0.1}
       - API_AUTH_USERNAME=admin
       - API_AUTH_PASSWORD=password123
       - DATABASE_PATH=${DATABASE_PATH:-/app/db/hydra_srt.db}
