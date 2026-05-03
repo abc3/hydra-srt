@@ -172,14 +172,14 @@ defmodule HydraSrt.RouteHandlerTest do
     assert RouteHandler.next_enabled_source(sources, "b2", "active")["id"] == "p"
   end
 
-  test "next_enabled_source in passive mode returns nil at end" do
+  test "next_enabled_source in passive mode wraps around" do
     sources = [
       %{"id" => "p", "position" => 0, "enabled" => true},
       %{"id" => "b1", "position" => 1, "enabled" => true}
     ]
 
     assert RouteHandler.next_enabled_source(sources, "p", "passive")["id"] == "b1"
-    assert RouteHandler.next_enabled_source(sources, "b1", "passive") == nil
+    assert RouteHandler.next_enabled_source(sources, "b1", "passive")["id"] == "p"
   end
 
   test "next_enabled_source disabled mode always nil" do

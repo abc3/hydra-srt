@@ -398,8 +398,12 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                   </Form.Item>
                 </Card>
 
-                <Card title="Backup Config" size="small" style={{ maxWidth: '700px', width: '100%' }}>
-                  <Form.Item label="Mode" name={['backup_config', 'mode']}>
+                <Card title="Source failover backup" size="small" style={{ maxWidth: '700px', width: '100%' }}>
+                  <Form.Item
+                    label="Mode"
+                    name={['backup_config', 'mode']}
+                    extra="Active: auto-failover + auto-return to primary when stable. Passive: failover only, no auto-return. Disabled: no automatic failover."
+                  >
                     <Radio.Group buttonStyle="solid">
                       <Radio.Button value="active">Active</Radio.Button>
                       <Radio.Button value="passive">Passive</Radio.Button>
@@ -408,15 +412,47 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                   </Form.Item>
 
                   <Row gutter={16}>
-                    <Col><Form.Item label="Switch After (ms)" name={['backup_config', 'switch_after_ms']}><InputNumber min={0} /></Form.Item></Col>
-                    <Col><Form.Item label="Cooldown (ms)" name={['backup_config', 'cooldown_ms']}><InputNumber min={0} /></Form.Item></Col>
+                    <Col>
+                      <Form.Item
+                        label="Switch After (ms)"
+                        name={['backup_config', 'switch_after_ms']}
+                        extra="Debounce window before automatic switch on reconnecting/zero-bitrate conditions."
+                      >
+                        <InputNumber min={0} />
+                      </Form.Item>
+                    </Col>
+                    <Col>
+                      <Form.Item
+                        label="Cooldown (ms)"
+                        name={['backup_config', 'cooldown_ms']}
+                        extra="Minimum time between automatic switches to prevent flapping."
+                      >
+                        <InputNumber min={0} />
+                      </Form.Item>
+                    </Col>
                   </Row>
 
                   <Form.Item noStyle dependencies={[[ 'backup_config', 'mode' ]]}>
                     {({ getFieldValue }) => getFieldValue(['backup_config', 'mode']) === 'active' ? (
                       <Row gutter={16}>
-                        <Col><Form.Item label="Primary Stable (ms)" name={['backup_config', 'primary_stable_ms']}><InputNumber min={0} /></Form.Item></Col>
-                        <Col><Form.Item label="Probe Interval (ms)" name={['backup_config', 'probe_interval_ms']}><InputNumber min={0} /></Form.Item></Col>
+                        <Col>
+                          <Form.Item
+                            label="Primary Stable (ms)"
+                            name={['backup_config', 'primary_stable_ms']}
+                            extra="How long primary must stay healthy before automatic return from backup."
+                          >
+                            <InputNumber min={0} />
+                          </Form.Item>
+                        </Col>
+                        <Col>
+                          <Form.Item
+                            label="Probe Interval (ms)"
+                            name={['backup_config', 'probe_interval_ms']}
+                            extra="How often primary source health is checked while running on backup."
+                          >
+                            <InputNumber min={0} />
+                          </Form.Item>
+                        </Col>
                       </Row>
                     ) : null}
                   </Form.Item>

@@ -3,6 +3,10 @@ defmodule HydraSrt do
   require Logger
   alias HydraSrt.Db
 
+  @status_started "started"
+  @status_starting "starting"
+  @status_stopped "stopped"
+
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
     DynamicSupervisor.start_child(
@@ -71,7 +75,7 @@ defmodule HydraSrt do
   @spec set_route_status(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def set_route_status(id, status) do
     with {:ok, route} <- Db.update_route(id, route_runtime_status_attrs(status)) do
-      :ok = broadcast_route_items_status(id)
+      :ok = broadcast_route_items_status_for_id(id)
       {:ok, route}
     end
   end
@@ -84,64 +88,65 @@ defmodule HydraSrt do
   @spec set_route_runtime_status(String.t(), String.t() | nil) :: {:ok, map()} | {:error, term()}
   def set_route_runtime_status(id, status) do
     with {:ok, route} <- Db.update_route_runtime_status(id, status) do
-      :ok = broadcast_route_items_status(id)
+      :ok = broadcast_route_items_status_for_id(id)
       {:ok, route}
     end
   end
 
   @spec mark_route_started(String.t()) :: {:ok, map()} | {:error, term()}
   def mark_route_started(id) do
-    :ok = Db.update_destinations_status(id, nil)
-
     with {:ok, route} <-
-           Db.update_route(
+           Db.transition_route_runtime_status(
              id,
-             route_runtime_status_attrs("starting")
-             |> Map.put("schema_status", "starting")
+             route_runtime_status_attrs(@status_starting)
+             |> Map.put("schema_status", @status_starting),
+             @status_starting,
+             @status_starting
            ) do
-      :ok = broadcast_route_items_status(id)
+      :ok = broadcast_route_items_status_for_id(id)
       {:ok, route}
     end
   end
 
   @spec mark_route_stopped(String.t()) :: {:ok, map()} | {:error, term()}
   def mark_route_stopped(id) do
-    :ok = Db.update_destinations_status(id, "stopped")
-
     with {:ok, route} <-
-           Db.update_route(
+           Db.transition_route_runtime_status(
              id,
-             route_runtime_status_attrs("stopped")
-             |> Map.put("schema_status", "stopped")
+             route_runtime_status_attrs(@status_stopped)
+             |> Map.put("schema_status", @status_stopped),
+             @status_stopped,
+             @status_stopped
            ) do
-      :ok = broadcast_route_items_status(id)
+      :ok = broadcast_route_items_status_for_id(id)
       {:ok, route}
     end
   end
 
   @spec mark_route_terminated(String.t()) :: {:ok, map()} | {:error, term()}
   def mark_route_terminated(id) do
-    set_route_status(id, "stopped")
+    set_route_status(id, @status_stopped)
   end
 
   @doc false
-  def broadcast_route_items_status(route_id) when is_binary(route_id) do
-    case Db.get_route(route_id, true) do
-      {:ok, route} ->
-        route_status = route["schema_status"] || route["status"]
-        :ok = broadcast_item_status(route_id, route_status)
+  def broadcast_route_items_status(route) when is_map(route) do
+    route_id = route["id"]
+    route_status = route["schema_status"] || route["status"]
+    :ok = broadcast_item_status(route_id, route_status)
 
-        route
-        |> Map.get("destinations", [])
-        |> Enum.each(fn destination ->
-          :ok = broadcast_item_status(destination["id"], destination["status"])
-        end)
+    route
+    |> Map.get("sources", [])
+    |> Enum.each(fn source ->
+      :ok = broadcast_item_status(source["id"], source["status"])
+    end)
 
-        :ok
+    route
+    |> Map.get("destinations", [])
+    |> Enum.each(fn destination ->
+      :ok = broadcast_item_status(destination["id"], destination["status"])
+    end)
 
-      {:error, _reason} ->
-        :ok
-    end
+    :ok
   end
 
   @doc false
@@ -163,14 +168,14 @@ defmodule HydraSrt do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     case String.downcase(status) do
-      status when status in ["started", "starting"] ->
+      status when status in [@status_started, @status_starting] ->
         %{
           "status" => status,
           "started_at" => now,
           "stopped_at" => nil
         }
 
-      "stopped" ->
+      @status_stopped ->
         %{
           "status" => status,
           "stopped_at" => now
@@ -178,6 +183,13 @@ defmodule HydraSrt do
 
       _ ->
         %{"status" => status}
+    end
+  end
+
+  defp broadcast_route_items_status_for_id(route_id) when is_binary(route_id) do
+    case Db.get_route(route_id, true) do
+      {:ok, route} -> broadcast_route_items_status(route)
+      {:error, _reason} -> :ok
     end
   end
 end

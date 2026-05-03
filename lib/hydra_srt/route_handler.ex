@@ -919,7 +919,7 @@ defmodule HydraSrt.RouteHandler do
                 next_index < length(enabled_sources) ->
                   Enum.at(enabled_sources, next_index)
 
-                mode == "active" ->
+                mode in ["active", "passive"] ->
                   List.first(enabled_sources)
 
                 true ->

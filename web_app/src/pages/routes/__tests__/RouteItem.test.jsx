@@ -208,7 +208,7 @@ describe('RouteItem', () => {
     });
   });
 
-  it('subscribes to route and destination item status topics', async () => {
+  it('subscribes to route, source, and destination item status topics', async () => {
     render(
       <MemoryRouter initialEntries={['/routes/r1']}>
         <Routes>
@@ -222,6 +222,8 @@ describe('RouteItem', () => {
     expect(screen.getByText('Active')).toBeInTheDocument();
 
     expect(subscribeToItemStatus).toHaveBeenCalledWith('r1', expect.any(Function));
+    expect(subscribeToItemStatus).toHaveBeenCalledWith('s1', expect.any(Function));
+    expect(subscribeToItemStatus).toHaveBeenCalledWith('s2', expect.any(Function));
     expect(subscribeToItemStatus).toHaveBeenCalledWith('d1', expect.any(Function));
     expect(subscribeToItemStatus).toHaveBeenCalledWith('d2', expect.any(Function));
     expect(subscribeToItemSource).toHaveBeenCalledWith('r1', expect.any(Function));
@@ -287,6 +289,24 @@ describe('RouteItem', () => {
 
     expect(await screen.findByText('failed')).toBeInTheDocument();
     expect(screen.getAllByText('stopped').length).toBeGreaterThan(0);
+  });
+
+  it('updates source rows in endpoints table when item status targets a source id', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Endpoints');
+
+    await act(async () => {
+      __emitItemStatus('s2', 'reconnecting');
+    });
+
+    expect(screen.getByText('reconnecting')).toBeInTheDocument();
   });
 
 });

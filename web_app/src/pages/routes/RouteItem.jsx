@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Card,
   Typography,
@@ -215,11 +215,22 @@ const RouteItem = () => {
   const [analyticsError, setAnalyticsError] = useState(null);
   const [analyticsData, setAnalyticsData] = useState({ points: [], meta: null });
   const [analyticsRefreshTick, setAnalyticsRefreshTick] = useState(0);
-  const destinationIdsSignature = (routeData?.destinations || [])
+  const sourceIdsDependency = (routeData?.sources || [])
+    .map((source) => source?.id)
+    .filter(Boolean)
+    .sort()
+    .join('|');
+  const destinationIdsDependency = (routeData?.destinations || [])
     .map((destination) => destination?.id)
     .filter(Boolean)
     .sort()
     .join('|');
+
+  const sourceIdsSignature = useMemo(() => sourceIdsDependency, [sourceIdsDependency]);
+  const destinationIdsSignature = useMemo(
+    () => destinationIdsDependency,
+    [destinationIdsDependency]
+  );
 
   // Breadcrumb setup
   useEffect(() => {
@@ -252,6 +263,7 @@ const RouteItem = () => {
 
     const itemIds = [
       routeData.id,
+      ...(routeData.sources || []).map((source) => source.id).filter(Boolean),
       ...(routeData.destinations || []).map((destination) => destination.id).filter(Boolean),
     ];
 
@@ -278,26 +290,41 @@ const RouteItem = () => {
             };
           }
 
-          let changed = false;
+          let sourcesChanged = false;
+          const nextSources = (prev.sources || []).map((source) => {
+            if (source.id !== itemIdFromEvent) {
+              return source;
+            }
+
+            sourcesChanged = true;
+            return {
+              ...source,
+              status,
+              schema_status: status,
+            };
+          });
+
+          let destinationsChanged = false;
           const nextDestinations = (prev.destinations || []).map((destination) => {
             if (destination.id !== itemIdFromEvent) {
               return destination;
             }
 
-            changed = true;
+            destinationsChanged = true;
             return {
               ...destination,
               status,
             };
           });
 
-          if (!changed) {
+          if (!sourcesChanged && !destinationsChanged) {
             return prev;
           }
 
           return {
             ...prev,
-            destinations: nextDestinations,
+            ...(sourcesChanged ? { sources: nextSources } : {}),
+            ...(destinationsChanged ? { destinations: nextDestinations } : {}),
           };
         });
       })
@@ -308,7 +335,7 @@ const RouteItem = () => {
         unsubscribe?.();
       });
     };
-  }, [routeData?.id, destinationIdsSignature]);
+  }, [routeData?.id, sourceIdsSignature, destinationIdsSignature]);
 
   useEffect(() => {
     if (!routeData?.id) {
@@ -654,7 +681,7 @@ const RouteItem = () => {
       sorter: (a, b) => a.name.localeCompare(b.name),
       render: (text, record) => (
         <Space>
-          <a href={record.rowType === 'source' ? `#/routes/${id}/edit` : `#/routes/${id}/destinations/${record.endpointId}/edit`}>
+          <a href={record.rowType === 'source' ? `#/routes/${id}/sources/${record.endpointId}/edit` : `#/routes/${id}/destinations/${record.endpointId}/edit`}>
             {text}
           </a>
         </Space>
@@ -721,10 +748,9 @@ const RouteItem = () => {
           ...(record.rowType === 'source'
             ? [
                 {
-                  key: 'switch',
-                  icon: <PlayCircleOutlined />,
-                  label: 'Switch',
-                  disabled: routeData?.active_source_id === record.endpointId,
+                  key: 'restart_with_source',
+                  icon: <ReloadOutlined />,
+                  label: 'Restart route with this source',
                 },
                 {
                   key: 'test',
@@ -750,17 +776,17 @@ const RouteItem = () => {
 
         const handleMenuClick = ({ key }) => {
           if (key === 'edit') {
-            navigate(record.rowType === 'source' ? `/routes/${id}/edit` : `/routes/${id}/destinations/${record.endpointId}/edit`);
-            return;
-          }
-
-          if (key === 'switch') {
-            handleSwitchSource(record.endpointId);
+            navigate(record.rowType === 'source' ? `/routes/${id}/sources/${record.endpointId}/edit` : `/routes/${id}/destinations/${record.endpointId}/edit`);
             return;
           }
 
           if (key === 'test') {
             handleTestSource(record.endpointId);
+            return;
+          }
+
+          if (key === 'restart_with_source') {
+            handleRestartWithSource(record.endpointId);
             return;
           }
 
@@ -814,31 +840,41 @@ const RouteItem = () => {
     }
   };
 
+  const applySwitchedRouteState = (prev, sourceId, updatedRoute) => {
+    if (!prev) {
+      return prev;
+    }
+
+    if (!updatedRoute) {
+      return {
+        ...prev,
+        active_source_id: sourceId,
+        last_switch_reason: 'manual',
+      };
+    }
+
+    return {
+      ...prev,
+      ...updatedRoute,
+      sources: updatedRoute.sources || prev.sources,
+    };
+  };
+
+  const markRouteStartingState = (prev) =>
+    prev
+      ? {
+          ...prev,
+          status: 'starting',
+          schema_status: 'starting',
+        }
+      : prev;
+
   const handleSwitchSource = async (sourceId) => {
     try {
       const result = await routesApi.switchSource(id, sourceId);
       const updatedRoute = result?.data;
 
-      setRouteData((prev) => {
-        if (!prev) {
-          return prev;
-        }
-
-        if (!updatedRoute) {
-          return {
-            ...prev,
-            active_source_id: sourceId,
-            last_switch_reason: 'manual',
-            last_switch_at: new Date().toISOString(),
-          };
-        }
-
-        return {
-          ...prev,
-          ...updatedRoute,
-          sources: updatedRoute.sources || prev.sources,
-        };
-      });
+      setRouteData((prev) => applySwitchedRouteState(prev, sourceId, updatedRoute));
 
       messageApi.success('Source switched');
     } catch (error) {
@@ -852,6 +888,32 @@ const RouteItem = () => {
       messageApi.success('Source test completed');
     } catch (error) {
       messageApi.error(`Failed to test source: ${error.message}`);
+    }
+  };
+
+  const handleRestartWithSource = async (sourceId) => {
+    const loading = messageApi.loading('Restarting route with selected source...', 0);
+    const routeSnapshot = routeData;
+
+    try {
+      setPendingAction('restart');
+
+      if (routeData?.active_source_id !== sourceId) {
+        const result = await routesApi.switchSource(id, sourceId);
+        const updatedRoute = result?.data;
+        setRouteData((prev) => applySwitchedRouteState(prev, sourceId, updatedRoute));
+      }
+
+      setRouteData(markRouteStartingState);
+      await routesApi.restart(id);
+      await refreshRouteUntilStable('start');
+      messageApi.success('Route restarted with selected source');
+    } catch (error) {
+      setRouteData((prev) => (prev ? routeSnapshot || prev : prev));
+      messageApi.error(`Failed to restart with source: ${error.message}`);
+    } finally {
+      setPendingAction(null);
+      loading();
     }
   };
 
@@ -986,6 +1048,13 @@ const RouteItem = () => {
 
         <Col>
           <Space wrap>
+            <Button
+              icon={<EditOutlined />}
+              onClick={() => navigate(`/routes/${id}/edit`)}
+              disabled={pendingAction != null}
+            >
+              Edit route
+            </Button>
             <Button
               type={statusDetails.buttonType}
               icon={statusDetails.buttonIcon}
