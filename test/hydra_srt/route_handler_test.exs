@@ -2,6 +2,30 @@ defmodule HydraSrt.RouteHandlerTest do
   use ExUnit.Case
   alias HydraSrt.RouteHandler
 
+  defmodule TestSystemInterfaces do
+    def discover do
+      {:ok,
+       [
+         %{"sys_name" => "en0", "ip" => "172.20.20.12/24"},
+         %{"sys_name" => "en1", "ip" => "10.10.0.4"}
+       ]}
+    end
+  end
+
+  defmodule EmptySystemInterfaces do
+    def discover, do: {:ok, []}
+  end
+
+  defmodule FailingSystemInterfaces do
+    def discover, do: {:error, :ifconfig_failed}
+  end
+
+  defmodule TestDb do
+    def get_interface_by_sys_name("en0"), do: {:ok, %{"sys_name" => "en0", "ip" => "10.0.0.2/24"}}
+    def get_interface_by_sys_name("en9"), do: {:ok, %{"sys_name" => "en9", "ip" => "192.0.2.10"}}
+    def get_interface_by_sys_name(_), do: {:error, :not_found}
+  end
+
   test "source_from_record with valid SRT schema" do
     record = %{
       "schema" => "SRT",
@@ -60,6 +84,42 @@ defmodule HydraSrt.RouteHandlerTest do
     assert RouteHandler.strip_cidr_suffix("172.20.20.12/24") == "172.20.20.12"
     assert RouteHandler.strip_cidr_suffix("fe80::1%en0/64") == "fe80::1%en0"
     assert RouteHandler.strip_cidr_suffix("10.0.0.5") == "10.0.0.5"
+  end
+
+  test "resolve_interface_bind_ip prefers live system interface ip over DB value" do
+    Application.put_env(:hydra_srt, :system_interfaces_module, TestSystemInterfaces)
+    Application.put_env(:hydra_srt, :db_module, TestDb)
+
+    on_exit(fn ->
+      Application.delete_env(:hydra_srt, :system_interfaces_module)
+      Application.delete_env(:hydra_srt, :db_module)
+    end)
+
+    assert {:ok, "172.20.20.12"} = RouteHandler.resolve_interface_bind_ip("en0")
+  end
+
+  test "resolve_interface_bind_ip falls back to DB when system lookup misses interface" do
+    Application.put_env(:hydra_srt, :system_interfaces_module, EmptySystemInterfaces)
+    Application.put_env(:hydra_srt, :db_module, TestDb)
+
+    on_exit(fn ->
+      Application.delete_env(:hydra_srt, :system_interfaces_module)
+      Application.delete_env(:hydra_srt, :db_module)
+    end)
+
+    assert {:ok, "192.0.2.10"} = RouteHandler.resolve_interface_bind_ip("en9")
+  end
+
+  test "resolve_interface_bind_ip falls back to DB when system discovery fails" do
+    Application.put_env(:hydra_srt, :system_interfaces_module, FailingSystemInterfaces)
+    Application.put_env(:hydra_srt, :db_module, TestDb)
+
+    on_exit(fn ->
+      Application.delete_env(:hydra_srt, :system_interfaces_module)
+      Application.delete_env(:hydra_srt, :db_module)
+    end)
+
+    assert {:ok, "10.0.0.2"} = RouteHandler.resolve_interface_bind_ip("en0")
   end
 
   test "source_from_record with valid UDP schema" do
@@ -199,6 +259,15 @@ defmodule HydraSrt.RouteHandlerTest do
     ]
 
     assert RouteHandler.next_enabled_source(sources, "p", "passive")["id"] == "b2"
+  end
+
+  test "next_enabled_source returns current source when it is the only enabled source" do
+    sources = [
+      %{"id" => "p", "position" => 0, "enabled" => true},
+      %{"id" => "b1", "position" => 1, "enabled" => false}
+    ]
+
+    assert RouteHandler.next_enabled_source(sources, "p", "active")["id"] == "p"
   end
 
   test "in_cooldown? boundary behavior" do

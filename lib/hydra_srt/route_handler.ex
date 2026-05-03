@@ -7,6 +7,7 @@ defmodule HydraSrt.RouteHandler do
 
   alias HydraSrt.Db
   alias HydraSrt.Helpers
+  alias HydraSrt.SystemInterfaces
   alias HydraSrt.Stats.EventLogger
 
   def start_link(args), do: :gen_statem.start_link(__MODULE__, args, [])
@@ -289,7 +290,9 @@ defmodule HydraSrt.RouteHandler do
   defp send_initial_command(port, route_id, source_id) do
     with {:ok, params} <- route_data_to_params(route_id, source_id),
          {:ok, params} <- Jason.encode(params),
-         :ok <- command_port(port, params <> "\n") do
+         payload = params <> "\n",
+         _ = Logger.info("RouteHandler: initial command payload: #{params}"),
+         :ok <- command_port(port, payload) do
       Logger.info("RouteHandler: sent initial command")
       :ok
     else
@@ -515,7 +518,11 @@ defmodule HydraSrt.RouteHandler do
   defp next_source_for_failover(data) do
     mode = get_in(data, [:route, "backup_config", "mode"]) || "passive"
     sources = get_in(data, [:route, "sources"]) || []
-    next_enabled_source(sources, data.active_source_id, mode)
+
+    case next_enabled_source(sources, data.active_source_id, mode) do
+      %{"id" => id} = source when is_binary(id) and id != data.active_source_id -> source
+      _ -> nil
+    end
   end
 
   defp failover_to_source(data, source_id, reason) do
@@ -1011,22 +1018,58 @@ defmodule HydraSrt.RouteHandler do
         {:ok, opts}
 
       sys_name when is_binary(sys_name) ->
-        with {:ok, interface} <- Db.get_interface_by_sys_name(sys_name),
-             ip when is_binary(ip) and ip != "" and ip != "-" <- Map.get(interface, "ip"),
-             bind_ip when is_binary(bind_ip) and bind_ip != "" <- strip_cidr_suffix(ip) do
+        with {:ok, bind_ip} <- resolve_interface_bind_ip(sys_name) do
           {:ok,
            opts
            |> Map.put("localaddress", bind_ip)
            |> Map.put("bind-address", bind_ip)
            |> Map.put("multicast-iface", sys_name)}
         else
-          {:error, :not_found} -> {:ok, opts}
+          {:error, _reason} -> {:ok, opts}
           _ -> {:ok, opts}
         end
     end
   end
 
   def resolve_interface_options(_), do: {:error, :invalid_schema_options}
+
+  @doc false
+  def resolve_interface_bind_ip(sys_name) when is_binary(sys_name) do
+    with {:error, _reason} <- resolve_interface_bind_ip_from_system(sys_name),
+         {:error, _reason} <- resolve_interface_bind_ip_from_db(sys_name) do
+      {:error, :not_found}
+    else
+      {:ok, bind_ip} -> {:ok, bind_ip}
+    end
+  end
+
+  @doc false
+  def resolve_interface_bind_ip_from_system(sys_name) when is_binary(sys_name) do
+    system_interfaces_module =
+      Application.get_env(:hydra_srt, :system_interfaces_module, SystemInterfaces)
+
+    with {:ok, interfaces} <- system_interfaces_module.discover(),
+         %{} = interface <- Enum.find(interfaces, &(&1["sys_name"] == sys_name)),
+         ip when is_binary(ip) and ip != "" and ip != "-" <- Map.get(interface, "ip"),
+         bind_ip when is_binary(bind_ip) and bind_ip != "" <- strip_cidr_suffix(ip) do
+      {:ok, bind_ip}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc false
+  def resolve_interface_bind_ip_from_db(sys_name) when is_binary(sys_name) do
+    db_module = Application.get_env(:hydra_srt, :db_module, Db)
+
+    with {:ok, interface} <- db_module.get_interface_by_sys_name(sys_name),
+         ip when is_binary(ip) and ip != "" and ip != "-" <- Map.get(interface, "ip"),
+         bind_ip when is_binary(bind_ip) and bind_ip != "" <- strip_cidr_suffix(ip) do
+      {:ok, bind_ip}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
 
   @doc false
   def drop_nil_values(map) when is_map(map) do
