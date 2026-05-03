@@ -1,6 +1,6 @@
 # HydraSRT – An Open Source Alternative to Haivision SRT Gateway
 
-> ⚠️ **Pre-Alpha Status**: This project is in a very early development stage. Features may be incomplete, and breaking changes are expected.
+> **Project Status**: HydraSRT is under active development. Some features are still evolving, and occasional breaking changes may occur.
 
 - [Overview](#overview)
 - [Motivation](#motivation)
@@ -79,6 +79,27 @@ Coming soon...
 - [ ] WebRTC
 
 [Missed something? Add a request!](https://github.com/abc3/hydra-srt/issues/new)
+
+### Source Failover (Primary + Backup)
+
+HydraSRT supports route-level source failover with one active source at a time:
+
+- **Primary + N backup sources** per route.
+- **Automatic failover** when active source fails.
+- **Manual source switch** via UI/API.
+- **Realtime active source updates** in the route page.
+
+#### Failover Modes
+
+- **`active`**: fail over on active source failure and use background probing to return to primary when stable.
+- **`passive`**: fail over only when current active source fails; no background primary probing.
+- **`disabled`**: disables automatic failover.
+
+#### Operational Notes
+
+- Failover is implemented in Elixir control-plane by restarting the native pipeline with the selected source.
+- Native pipeline input selection is **not hot-swapped in-place**.
+- A short output interruption during source switch/restart is expected.
 
 ## Deployment
 
