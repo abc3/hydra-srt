@@ -1,6 +1,8 @@
 defmodule HydraSrt.MonitoringTest do
   use ExUnit.Case
   alias HydraSrt.Monitoring.OsMon
+  alias HydraSrt.Monitoring.NodeStats
+  alias HydraSrt.PromEx.Plugins.OsMon, as: PromExOsMon
   alias HydraSrt.ProcessMonitor
   alias HydraSrt.SignalHandler
   alias HydraSrt.ErlSysMon
@@ -49,6 +51,46 @@ defmodule HydraSrt.MonitoringTest do
     if is_float(swap_usage) do
       assert swap_usage >= 0 and swap_usage <= 100
     end
+  end
+
+  test "PromEx OsMon execute_metrics populates persistent_term cache" do
+    PromExOsMon.execute_metrics()
+    stats = PromExOsMon.get_stats()
+    assert is_map(stats)
+    assert is_float(stats.ram)
+    assert stats.ram >= 0 and stats.ram <= 100
+    assert is_map(stats.cpu_la)
+    assert is_float(stats.cpu_la.avg1)
+    assert is_float(stats.cpu_la.avg5)
+    assert is_float(stats.cpu_la.avg15)
+    assert is_float(stats.swap) or is_nil(stats.swap)
+  end
+
+  test "NodeStats.all_nodes returns current node stats" do
+    stats = NodeStats.all_nodes()
+    assert is_list(stats)
+    assert length(stats) == 1
+
+    [self_stat] = stats
+    assert self_stat.status == "self"
+    assert Map.has_key?(self_stat, :host)
+    assert Map.has_key?(self_stat, :cpu)
+    assert Map.has_key?(self_stat, :ram)
+    assert Map.has_key?(self_stat, :swap)
+    assert Map.has_key?(self_stat, :la)
+  end
+
+  test "NodeStats.self_node_stats returns self node" do
+    stats = NodeStats.self_node_stats()
+    assert stats.status == "self"
+    assert stats.host == node()
+    assert Map.has_key?(stats, :la)
+  end
+
+  test "NodeStats.format_float formats floats correctly" do
+    assert NodeStats.format_float(1.5) == "1.5"
+    assert NodeStats.format_float(nil) == "N/A"
+    assert NodeStats.format_float(:bad) == "N/A"
   end
 
   test "ProcessMonitor lists pipeline processes" do

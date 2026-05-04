@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Table, Card, Button, Space, Typography, message, Tooltip, Tag, Progress } from 'antd';
-import { ReloadOutlined, HomeOutlined } from '@ant-design/icons';
-import { nodesApi } from '../../utils/api';
+import { Table, Card, Space, Typography, Tag, Progress } from 'antd';
+import { HomeOutlined } from '@ant-design/icons';
+import { subscribeToNodes } from '../../utils/realtime';
 import { ROUTES } from '../../utils/constants';
 
 const { Title } = Typography;
@@ -9,7 +9,6 @@ const { Title } = Typography;
 const SystemNodes = () => {
   const [nodes, setNodes] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [messageApi, contextHolder] = message.useMessage();
 
   // Set breadcrumb items for the System Nodes page
   useEffect(() => {
@@ -28,26 +27,13 @@ const SystemNodes = () => {
   }, []);
 
   useEffect(() => {
-    fetchNodes();
-    // Set up auto-refresh every 5 seconds
-    const intervalId = setInterval(fetchNodes, 5000);
-    
-    // Clean up interval on component unmount
-    return () => clearInterval(intervalId);
+    return subscribeToNodes((payload) => {
+      if (Array.isArray(payload?.nodes)) {
+        setNodes(payload.nodes);
+        setLoading(false);
+      }
+    });
   }, []);
-
-  const fetchNodes = async () => {
-    try {
-      setLoading(true);
-      const data = await nodesApi.getAll();
-      setNodes(data);
-    } catch (error) {
-      messageApi.error(`Failed to fetch nodes: ${error.message}`);
-      console.error('Error:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -183,18 +169,8 @@ const SystemNodes = () => {
 
   return (
     <div>
-      {contextHolder}
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
-        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Title level={3} style={{ margin: 0, fontSize: '2rem', fontWeight: 600 }}>Nodes List</Title>
-          <Button
-            type="primary"
-            icon={<ReloadOutlined />}
-            onClick={fetchNodes}
-          >
-            Refresh
-          </Button>
-        </Space>
+        <Title level={3} style={{ margin: 0, fontSize: '2rem', fontWeight: 600 }}>Nodes List</Title>
 
         <Card>
           <Table

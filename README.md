@@ -252,6 +252,8 @@ Configure HydraSRT using the following environment variables:
 | `RELEASE_COOKIE`       | Erlang distribution cookie              | (auto-generated) |
 | `DATABASE_PATH`        | Path to SQLite database file            | (required)       |
 | `POOL_SIZE`            | DB pool size                            | 5                |
+| `METRICS_SECRET`       | Bearer token for `GET /metrics`. If not set, the endpoint is open to everyone | (optional) |
+| `PROM_POLL_RATE`       | Prometheus metrics polling interval (ms) | 5000             |
 
 ### Troubleshooting
 
