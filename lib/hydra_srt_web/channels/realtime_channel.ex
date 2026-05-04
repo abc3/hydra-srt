@@ -2,6 +2,7 @@ defmodule HydraSrtWeb.RealtimeChannel do
   use HydraSrtWeb, :channel
 
   @system_pipelines_interval_ms 5_000
+  @nodes_interval_ms 5_000
 
   @impl true
   def join("realtime", _payload, socket) do
@@ -9,6 +10,7 @@ defmodule HydraSrtWeb.RealtimeChannel do
      socket
      |> assign(:stats_subscribed, false)
      |> assign(:system_pipelines_subscribed, false)
+     |> assign(:nodes_subscribed, false)
      |> assign(:item_topics, MapSet.new())
      |> assign(:event_topics, MapSet.new())}
   end
@@ -48,6 +50,26 @@ defmodule HydraSrtWeb.RealtimeChannel do
   def handle_in("system_pipelines:unsubscribe", _payload, socket) do
     if socket.assigns[:system_pipelines_subscribed] do
       {:reply, :ok, assign(socket, :system_pipelines_subscribed, false)}
+    else
+      {:reply, :ok, socket}
+    end
+  end
+
+  @impl true
+  def handle_in("nodes:subscribe", _payload, socket) do
+    if socket.assigns[:nodes_subscribed] do
+      {:reply, :ok, socket}
+    else
+      push(socket, "nodes", %{nodes: HydraSrt.Monitoring.NodeStats.all_nodes()})
+      Process.send_after(self(), :push_nodes, @nodes_interval_ms)
+      {:reply, :ok, assign(socket, :nodes_subscribed, true)}
+    end
+  end
+
+  @impl true
+  def handle_in("nodes:unsubscribe", _payload, socket) do
+    if socket.assigns[:nodes_subscribed] do
+      {:reply, :ok, assign(socket, :nodes_subscribed, false)}
     else
       {:reply, :ok, socket}
     end
@@ -151,6 +173,16 @@ defmodule HydraSrtWeb.RealtimeChannel do
     if socket.assigns[:system_pipelines_subscribed] do
       push(socket, "system_pipelines", system_pipelines_snapshot())
       Process.send_after(self(), :push_system_pipelines, @system_pipelines_interval_ms)
+    end
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info(:push_nodes, socket) do
+    if socket.assigns[:nodes_subscribed] do
+      push(socket, "nodes", %{nodes: HydraSrt.Monitoring.NodeStats.all_nodes()})
+      Process.send_after(self(), :push_nodes, @nodes_interval_ms)
     end
 
     {:noreply, socket}

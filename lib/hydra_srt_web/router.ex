@@ -22,6 +22,10 @@ defmodule HydraSrtWeb.Router do
     get "/", HealthController, :index
   end
 
+  scope "/metrics", HydraSrtWeb do
+    get "/", MetricsController, :index
+  end
+
   scope "/api", HydraSrtWeb do
     pipe_through :api
 

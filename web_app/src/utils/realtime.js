@@ -13,8 +13,12 @@ let statsSubscribedOnServer = false;
 let systemPipelinesSubscribed = false;
 let systemPipelinesSubscribePending = false;
 let systemPipelinesSubscribedOnServer = false;
+let nodesSubscribed = false;
+let nodesSubscribePending = false;
+let nodesSubscribedOnServer = false;
 const statsListeners = new Set();
 const systemPipelinesListeners = new Set();
+const nodesListeners = new Set();
 const itemSubscriptions = new Map();
 const itemSubscriptionsOnServer = new Set();
 const itemSourceListeners = new Map();
@@ -121,6 +125,44 @@ const pushSystemPipelinesUnsubscription = () => {
     })
     .receive('error', (error) => {
       console.error('[realtime] system pipelines unsubscribe failed', error);
+    });
+};
+
+const pushNodesSubscription = () => {
+  if (!channel || !nodesSubscribed) {
+    return;
+  }
+
+  if (!channelJoined || channelJoinInFlight) {
+    nodesSubscribePending = true;
+    return;
+  }
+
+  nodesSubscribePending = false;
+  channel
+    .push('nodes:subscribe', {})
+    .receive('ok', () => {
+      nodesSubscribedOnServer = true;
+    })
+    .receive('error', (error) => {
+      console.error('[realtime] nodes subscribe failed', error);
+    });
+};
+
+const pushNodesUnsubscription = () => {
+  nodesSubscribePending = false;
+
+  if (!channel || !channelJoined || !nodesSubscribedOnServer) {
+    return;
+  }
+
+  channel
+    .push('nodes:unsubscribe', {})
+    .receive('ok', () => {
+      nodesSubscribedOnServer = false;
+    })
+    .receive('error', (error) => {
+      console.error('[realtime] nodes unsubscribe failed', error);
     });
 };
 
@@ -261,6 +303,7 @@ const closeRealtimeTransport = () => {
   channelJoinInFlight = false;
   statsSubscribedOnServer = false;
   systemPipelinesSubscribedOnServer = false;
+  nodesSubscribedOnServer = false;
   itemSubscriptionsOnServer.clear();
   routeEventsSubscriptionsOnServer.clear();
 };
@@ -291,6 +334,10 @@ export const connectRealtime = () => {
 
   channel.on('system_pipelines', (payload) => {
     systemPipelinesListeners.forEach((listener) => listener(payload));
+  });
+
+  channel.on('nodes', (payload) => {
+    nodesListeners.forEach((listener) => listener(payload));
   });
 
   channel.on('item_status', (payload) => {
@@ -350,6 +397,7 @@ export const connectRealtime = () => {
     channelJoinInFlight = false;
     statsSubscribedOnServer = false;
     systemPipelinesSubscribedOnServer = false;
+    nodesSubscribedOnServer = false;
     itemSubscriptionsOnServer.clear();
     routeEventsSubscriptionsOnServer.clear();
   });
@@ -367,6 +415,7 @@ export const connectRealtime = () => {
     channelJoinInFlight = false;
     statsSubscribedOnServer = false;
     systemPipelinesSubscribedOnServer = false;
+    nodesSubscribedOnServer = false;
     itemSubscriptionsOnServer.clear();
     routeEventsSubscriptionsOnServer.clear();
   });
@@ -385,6 +434,10 @@ export const connectRealtime = () => {
 
       if (systemPipelinesSubscribePending || systemPipelinesSubscribed) {
         pushSystemPipelinesSubscription();
+      }
+
+      if (nodesSubscribePending || nodesSubscribed) {
+        pushNodesSubscription();
       }
 
       pushAllItemSubscriptions();
@@ -406,8 +459,12 @@ export const disconnectRealtime = () => {
   systemPipelinesSubscribed = false;
   systemPipelinesSubscribePending = false;
   systemPipelinesSubscribedOnServer = false;
+  nodesSubscribed = false;
+  nodesSubscribePending = false;
+  nodesSubscribedOnServer = false;
   statsListeners.clear();
   systemPipelinesListeners.clear();
+  nodesListeners.clear();
   itemSubscriptions.clear();
   itemSubscriptionsOnServer.clear();
   itemSourceListeners.clear();
@@ -432,6 +489,27 @@ export const subscribeToStats = (listener) => {
     if (statsListeners.size === 0) {
       statsSubscribed = false;
       pushStatsUnsubscription();
+    }
+  };
+};
+
+export const subscribeToNodes = (listener) => {
+  if (typeof listener === 'function') {
+    nodesListeners.add(listener);
+  }
+
+  nodesSubscribed = true;
+  connectRealtime();
+  pushNodesSubscription();
+
+  return () => {
+    if (typeof listener === 'function') {
+      nodesListeners.delete(listener);
+    }
+
+    if (nodesListeners.size === 0) {
+      nodesSubscribed = false;
+      pushNodesUnsubscription();
     }
   };
 };

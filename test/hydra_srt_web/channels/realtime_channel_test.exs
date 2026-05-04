@@ -124,6 +124,33 @@ defmodule HydraSrtWeb.RealtimeChannelTest do
     refute_push "item_status", _, 150
   end
 
+  test "subscribes to nodes and pushes snapshot immediately", %{token: token} do
+    assert {:ok, socket} = connect(HydraSrtWeb.UserSocket, %{"token" => token})
+    assert {:ok, _, socket} = subscribe_and_join(socket, HydraSrtWeb.RealtimeChannel, "realtime")
+
+    ref = push(socket, "nodes:subscribe", %{})
+
+    assert_push "nodes", %{nodes: nodes}
+    assert is_list(nodes)
+    assert_reply ref, :ok
+
+    unsub_ref = push(socket, "nodes:unsubscribe", %{})
+    assert_reply unsub_ref, :ok
+  end
+
+  test "nodes subscribe is idempotent", %{token: token} do
+    assert {:ok, socket} = connect(HydraSrtWeb.UserSocket, %{"token" => token})
+    assert {:ok, _, socket} = subscribe_and_join(socket, HydraSrtWeb.RealtimeChannel, "realtime")
+
+    first_ref = push(socket, "nodes:subscribe", %{})
+    assert_push "nodes", %{nodes: _}
+    assert_reply first_ref, :ok
+
+    second_ref = push(socket, "nodes:subscribe", %{})
+    assert_reply second_ref, :ok
+    refute_push "nodes", _, 100
+  end
+
   test "subscribes to events topic and pushes event payload", %{token: token} do
     assert {:ok, socket} = connect(HydraSrtWeb.UserSocket, %{"token" => token})
     assert {:ok, _, socket} = subscribe_and_join(socket, HydraSrtWeb.RealtimeChannel, "realtime")

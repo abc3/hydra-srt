@@ -45,7 +45,9 @@ config :hydra_srt, HydraSrtWeb.Endpoint, secret_key_base: secret_key_base
 
 unless config_env() == :test do
   config :hydra_srt,
-    default_bind_ip: System.get_env("HYDRA_DEFAULT_BIND_IP") || "127.0.0.1"
+    default_bind_ip: System.get_env("HYDRA_DEFAULT_BIND_IP") || "127.0.0.1",
+    prom_poll_rate: System.get_env("PROM_POLL_RATE", "5000") |> String.to_integer(),
+    metrics_secret: System.get_env("METRICS_SECRET")
 end
 
 case config_env() do

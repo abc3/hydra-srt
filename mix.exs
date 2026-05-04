@@ -52,6 +52,8 @@ defmodule HydraSrt.MixProject do
       {:syn, "~> 3.3"},
       {:cachex, "~> 3.6"},
       {:observer_cli, "~> 1.7"},
+      {:prom_ex, "~> 1.11"},
+      {:peep, "~> 4.2", override: true},
       {:meck, "~> 1.0", only: [:dev, :test], override: true},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},

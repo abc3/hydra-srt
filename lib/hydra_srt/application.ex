@@ -16,12 +16,13 @@ defmodule HydraSrt.Application do
     runtime_schedulers = System.schedulers_online()
 
     children = [
+      HydraSrtWeb.Telemetry,
+      HydraSrt.PromEx,
       HydraSrt.ErlSysMon,
       {PartitionSupervisor,
        child_spec: DynamicSupervisor, strategy: :one_for_one, name: HydraSrt.DynamicSupervisor},
       {Registry,
        keys: :unique, name: HydraSrt.Registry.MsgHandlers, partitions: runtime_schedulers},
-      HydraSrtWeb.Telemetry,
       HydraSrt.Repo,
       HydraSrt.AuthCleanup,
       {Task.Supervisor, name: HydraSrt.TaskSupervisor},
