@@ -28,6 +28,8 @@ defmodule HydraSrt.Api.Route do
 
     belongs_to :active_source, HydraSrt.Api.Endpoint, type: :binary_id
 
+    many_to_many :tags, HydraSrt.Api.Tag, join_through: "route_tags", on_replace: :delete
+
     has_many :sources, HydraSrt.Api.Endpoint,
       where: [type: @source_type],
       preload_order: [asc: :position]
@@ -69,12 +71,15 @@ defmodule HydraSrt.Api.Route do
 
   @doc false
   def normalize_attrs(attrs) when is_map(attrs) do
-    gst_debug_key =
-      if Enum.any?(Map.keys(attrs), &is_atom/1), do: :gst_debug, else: "gst_debug"
+    is_atom_map = Enum.any?(Map.keys(attrs), &is_atom/1)
+    gst_debug_key = if is_atom_map, do: :gst_debug, else: "gst_debug"
+    tags_key = if is_atom_map, do: :tags, else: "tags"
 
     attrs
     |> normalize_key("gstDebug", gst_debug_key)
     |> normalize_key(:gstDebug, gst_debug_key)
+    |> normalize_key("tags", tags_key)
+    |> normalize_key(:tags, tags_key)
   end
 
   @doc false
