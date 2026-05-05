@@ -19,6 +19,9 @@ vi.mock('../../../utils/api', () => ({
     stop: vi.fn(async () => ({ data: { status: 'stopped' } })),
     delete: vi.fn(async () => ({ success: true })),
   },
+  tagsApi: {
+    getAll: vi.fn(async () => ({ data: [] })),
+  },
 }));
 
 vi.mock('../../../utils/realtime', () => {

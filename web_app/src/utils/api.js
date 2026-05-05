@@ -338,6 +338,15 @@ export const backupApi = {
   },
 };
 
+// Tags API
+export const tagsApi = {
+  // Get all unique tags used across all routes
+  getAll: async () => {
+    const response = await authFetch('/api/tags');
+    return response.json();
+  },
+};
+
 // Destinations API
 export const destinationsApi = {
   // Get all destinations for a route
