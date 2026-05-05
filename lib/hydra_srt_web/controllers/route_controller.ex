@@ -18,6 +18,10 @@ defmodule HydraSrtWeb.RouteController do
     end
   end
 
+  def list_tags(conn, _params) do
+    data(conn, Db.list_all_tags())
+  end
+
   def create(conn, %{"route" => route_params}) do
     with {:ok, route} <- Db.create_route(route_params) do
       conn

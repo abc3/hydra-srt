@@ -124,6 +124,39 @@ defmodule HydraSrtWeb.RouteControllerTest do
     end
   end
 
+  describe "tags" do
+    test "GET /api/tags returns empty list when no routes exist", %{conn: conn} do
+      conn = get(conn, ~p"/api/tags")
+      assert json_response(conn, 200)["data"] == []
+    end
+
+    test "GET /api/tags returns unique sorted tags from all routes", %{conn: conn} do
+      route1_attrs = @create_attrs |> Map.put("tags", ["sport", "news"])
+
+      route2_attrs =
+        @create_attrs |> Map.put("name", "route 2") |> Map.put("tags", ["news", "live"])
+
+      post(conn, ~p"/api/routes", route: route1_attrs)
+      post(conn, ~p"/api/routes", route: route2_attrs)
+
+      conn = get(conn, ~p"/api/tags")
+      assert Enum.sort(json_response(conn, 200)["data"]) == ["live", "news", "sport"]
+    end
+
+    test "create route with tags returns tags in response", %{conn: conn} do
+      conn = post(conn, ~p"/api/routes", route: Map.put(@create_attrs, "tags", ["sport", "live"]))
+      assert Enum.sort(json_response(conn, 201)["data"]["tags"]) == ["live", "sport"]
+    end
+
+    test "update route tags replaces previous tags", %{conn: conn} do
+      create_conn = post(conn, ~p"/api/routes", route: Map.put(@create_attrs, "tags", ["sport"]))
+      %{"id" => id} = json_response(create_conn, 201)["data"]
+
+      conn = put(conn, ~p"/api/routes/#{id}", route: %{"tags" => ["news", "live"]})
+      assert Enum.sort(json_response(conn, 200)["data"]["tags"]) == ["live", "news"]
+    end
+  end
+
   describe "test source" do
     test "returns probe validation error for invalid udp source", %{conn: conn} do
       conn =

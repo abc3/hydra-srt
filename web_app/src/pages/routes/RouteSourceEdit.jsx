@@ -26,7 +26,7 @@ import {
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { destinationsApi, interfacesApi, routesApi, sourcesApi } from '../../utils/api';
+import { destinationsApi, interfacesApi, routesApi, sourcesApi, tagsApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
 
 const { Title } = Typography;
@@ -77,6 +77,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
   const [testingSourceIndex, setTestingSourceIndex] = useState(null);
   const [interfacesLoading, setInterfacesLoading] = useState(false);
   const [interfaceOptions, setInterfaceOptions] = useState([]);
+  const [availableTags, setAvailableTags] = useState([]);
   const [routeData, setRouteData] = useState(null);
   const [testResultOpen, setTestResultOpen] = useState(false);
   const [testResultData, setTestResultData] = useState(null);
@@ -173,6 +174,25 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
     };
 
     loadInterfaces();
+
+    return () => {
+      mounted = false;
+    };
+  }, [messageApi]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    tagsApi.getAll()
+      .then((result) => {
+        if (mounted) {
+          const tags = Array.isArray(result?.data) ? result.data : [];
+          setAvailableTags(tags.map((tag) => ({ label: tag, value: tag })));
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load tag suggestions', error);
+      });
 
     return () => {
       mounted = false;
@@ -340,6 +360,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         node: values.node,
         gstDebug: values.gstDebug,
         backup_config: values.backup_config || {},
+        tags: Array.isArray(values.tags) ? values.tags : [],
       };
 
       const sources = (values.sources || []).map((source, index) => normalizeSourcePayload(source, index));
@@ -531,6 +552,16 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
                   <Form.Item label="Node" name="node" rules={[{ required: true, message: 'Please select a node' }]}>
                     <Select options={availableNodes} disabled />
+                  </Form.Item>
+
+                  <Form.Item label="Tags" name="tags">
+                    <Select
+                      mode="tags"
+                      placeholder="Select or create tags"
+                      tokenSeparators={[',', ' ']}
+                      options={availableTags}
+                      style={{ width: '100%' }}
+                    />
                   </Form.Item>
                 </Card>
 
