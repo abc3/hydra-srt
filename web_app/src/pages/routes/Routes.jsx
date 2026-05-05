@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Table, Card, Button, Space, Typography, message, Modal, Dropdown, Tooltip, Input, Badge, Drawer, Tree, Empty } from 'antd';
+import { Table, Card, Button, Space, Typography, message, Modal, Dropdown, Tooltip, Input, Badge, Drawer, Tree, Empty, Tag, Select } from 'antd';
 import {
   PlusOutlined,
   EditOutlined,
@@ -14,7 +14,7 @@ import {
   DownOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { routesApi } from '../../utils/api';
+import { routesApi, tagsApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
 import { subscribeToItemSource, subscribeToItemStatus, subscribeToStats } from '../../utils/realtime';
 import {
@@ -240,6 +240,9 @@ const getRouteSourceEndpoint = (route) => {
 const Routes = () => {
   const [routes, setRoutes] = useState([]);
   const [routesFilter, setRoutesFilter] = useState('');
+  const [selectedTags, setSelectedTags] = useState([]);
+  const [availableTags, setAvailableTags] = useState([]);
+  const [tagsLoadFailed, setTagsLoadFailed] = useState(false);
   const [routeStats, setRouteStats] = useState({});
   const [statsDrawerRouteId, setStatsDrawerRouteId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -271,6 +274,7 @@ const Routes = () => {
 
   useEffect(() => {
     fetchRoutes();
+    fetchAvailableTags();
   }, []);
 
   useEffect(() => {
@@ -426,6 +430,19 @@ const Routes = () => {
     return result.data;
   };
 
+  const fetchAvailableTags = async () => {
+    try {
+      const result = await tagsApi.getAll();
+      const tags = Array.isArray(result?.data) ? result.data : [];
+      setAvailableTags(tags.map((tag) => ({ label: tag, value: tag })));
+      setTagsLoadFailed(false);
+    } catch (error) {
+      setAvailableTags([]);
+      setTagsLoadFailed(true);
+      console.error('Failed to load tag filters', error);
+    }
+  };
+
   const refreshRoutesUntilStable = async (routeId, action) => {
     for (let attempt = 0; attempt < ROUTE_ACTION_POLL_ATTEMPTS; attempt += 1) {
       const nextRoutes = await fetchRoutesData();
@@ -565,6 +582,20 @@ const Routes = () => {
           .localeCompare(getEndpointAddressString(getRouteSourceEndpoint(b))),
     },
     {
+      title: 'Tags',
+      key: 'tags',
+      render: (_, record) => {
+        const tags = Array.isArray(record.tags) ? record.tags : [];
+        return (
+          <Space size={[0, 4]} wrap>
+            {tags.map((tag) => (
+              <Tag key={tag}>{tag}</Tag>
+            ))}
+          </Space>
+        );
+      },
+    },
+    {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
@@ -696,13 +727,24 @@ const Routes = () => {
   ];
 
   const normalizedRoutesFilter = routesFilter.trim().toLowerCase();
-  const filteredRoutes = normalizedRoutesFilter
-    ? routes.filter((route) => {
-        const routeName = (route.name || '').toLowerCase();
-        const routeAddress = getEndpointAddressString(getRouteSourceEndpoint(route)).toLowerCase();
-        return routeName.includes(normalizedRoutesFilter) || routeAddress.includes(normalizedRoutesFilter);
-      })
-    : routes;
+  const filteredRoutes = routes.filter((route) => {
+    if (normalizedRoutesFilter) {
+      const routeName = (route.name || '').toLowerCase();
+      const routeAddress = getEndpointAddressString(getRouteSourceEndpoint(route)).toLowerCase();
+      if (!routeName.includes(normalizedRoutesFilter) && !routeAddress.includes(normalizedRoutesFilter)) {
+        return false;
+      }
+    }
+
+    if (selectedTags.length > 0) {
+      const routeTags = Array.isArray(route.tags) ? route.tags : [];
+      if (!selectedTags.some((tag) => routeTags.includes(tag))) {
+        return false;
+      }
+    }
+
+    return true;
+  });
   const statsDrawerRoute = routes.find((route) => route.id === statsDrawerRouteId);
   const statsSnapshot = statsDrawerRouteId ? routeStats[statsDrawerRouteId]?.snapshot : null;
   const statsTreeData = statsSnapshot ? [buildStatsTreeData(statsSnapshot)] : [];
@@ -727,13 +769,26 @@ const Routes = () => {
         </Space>
 
         <Card>
-          <Input
-            prefix={<SearchOutlined />}
-            placeholder="Filter routes by name or address"
-            style={{ marginBottom: 16, width: '100%' }}
-            value={routesFilter}
-            onChange={(event) => setRoutesFilter(event.target.value)}
-          />
+          <Space style={{ marginBottom: 16, width: '100%' }} wrap>
+            <Input
+              prefix={<SearchOutlined />}
+              placeholder="Filter routes by name or address"
+              style={{ width: 280 }}
+              value={routesFilter}
+              onChange={(event) => setRoutesFilter(event.target.value)}
+            />
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder={tagsLoadFailed ? 'Tag filters unavailable' : 'Filter by tags'}
+              style={{ minWidth: 200 }}
+              options={availableTags}
+              value={selectedTags}
+              onChange={setSelectedTags}
+              status={tagsLoadFailed ? 'error' : undefined}
+            />
+          </Space>
+
           <Table
             columns={columns}
             dataSource={filteredRoutes}

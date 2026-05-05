@@ -35,6 +35,7 @@ defmodule HydraSrtWeb.Router do
   scope "/api", HydraSrtWeb do
     pipe_through [:api, :auth]
     post "/routes/test-source", RouteController, :test_source
+    get "/tags", RouteController, :list_tags
     resources "/routes", RouteController, except: [:new, :edit]
     get "/routes/:route_id/analytics", RouteController, :analytics
     get "/routes/:route_id/events", RouteController, :events

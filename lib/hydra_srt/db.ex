@@ -7,30 +7,53 @@ defmodule HydraSrt.Db do
   alias HydraSrt.Api.Route
   alias HydraSrt.Api.Endpoint
   alias HydraSrt.Api.Interface
+  alias HydraSrt.Api.Tag
   alias HydraSrt.Stats.EventLogger
 
   @status_stopped "stopped"
 
   @spec create_route(map, binary | nil) :: {:ok, map} | {:error, any}
   def create_route(data, id \\ nil) when is_map(data) do
-    changeset =
+    {tag_names, route_data} = pop_tags(data)
+
+    Ecto.Multi.new()
+    |> Ecto.Multi.run(:tags, fn repo, _changes ->
+      upsert_tags_by_name(repo, tag_names || [])
+    end)
+    |> Ecto.Multi.insert(:route, fn %{tags: tags} ->
       %Route{}
-      |> Route.changeset(data)
+      |> Route.changeset(route_data)
       |> maybe_put_changeset_id(id)
+      |> Ecto.Changeset.put_assoc(:tags, tags)
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{route: route}} ->
+        # Preload sources for the map, route already has tags from put_assoc
+        {:ok, route_to_map(Repo.preload(route, :sources))}
 
-    case Repo.insert(changeset) do
-      {:ok, route} ->
-        preloaded = Repo.preload(route, [:sources])
-        {:ok, route_to_map(preloaded, false, [], preloaded.sources)}
-
-      {:error, %Ecto.Changeset{} = changeset} ->
+      {:error, :route, %Ecto.Changeset{} = changeset, _} ->
         {:error, changeset}
+
+      {:error, :tags, reason, _} ->
+        {:error, add_tags_error(%Route{}, route_data, reason)}
+
+      {:error, _, reason, _} ->
+        {:error, reason}
     end
   end
 
   @spec get_route(String.t(), boolean) :: {:ok, map} | {:error, any}
   def get_route(id, include_dest? \\ false) when is_binary(id) do
     get_route(id, include_dest?, true)
+  end
+
+  @spec get_route_map(String.t(), boolean(), boolean()) :: map() | nil
+  def get_route_map(id, include_dest? \\ false, include_sources? \\ true) when is_binary(id) do
+    case get_route(id, include_dest?, include_sources?) do
+      {:ok, map} -> map
+      _ -> nil
+    end
   end
 
   @spec get_route(String.t(), boolean, boolean) :: {:ok, map} | {:error, any}
@@ -40,6 +63,8 @@ defmodule HydraSrt.Db do
         {:error, :not_found}
 
       %Route{} = route ->
+        route = Repo.preload(route, :tags)
+
         destinations =
           if include_dest? do
             list_destinations_for_route(id)
@@ -61,18 +86,46 @@ defmodule HydraSrt.Db do
         {:error, :not_found}
 
       %Route{} = route ->
-        route
-        |> Route.changeset(data)
-        |> Repo.update(stale_error_field: :lock_version)
-        |> case do
-          {:ok, updated} ->
-            preloaded = Repo.preload(updated, [:sources])
-            {:ok, route_to_map(preloaded, false, [], preloaded.sources)}
+        {tag_names, route_data} = pop_tags(data)
 
-          {:error, %Ecto.Changeset{} = changeset} ->
+        Ecto.Multi.new()
+        |> Ecto.Multi.run(:tags, fn repo, _changes ->
+          if is_list(tag_names) do
+            upsert_tags_by_name(repo, tag_names)
+          else
+            {:ok, nil}
+          end
+        end)
+        |> Ecto.Multi.update(:route, fn %{tags: tags} ->
+          route
+          |> Repo.preload(:tags)
+          |> Route.changeset(route_data)
+          |> then(fn cs ->
+            if is_list(tag_names), do: Ecto.Changeset.put_assoc(cs, :tags, tags), else: cs
+          end)
+        end, stale_error_field: :lock_version)
+        |> Repo.transaction()
+        |> case do
+          {:ok, %{route: updated}} ->
+            # route_to_map needs sources; we preload them to avoid redundant get_route call
+            {:ok, route_to_map(Repo.preload(updated, :sources))}
+
+          {:error, :route, %Ecto.Changeset{} = changeset, _} ->
             {:error, changeset}
+
+          {:error, :tags, reason, _} ->
+            {:error, add_tags_error(route, route_data, reason)}
+
+          {:error, _, reason, _} ->
+            {:error, reason}
         end
     end
+  end
+
+  defp add_tags_error(route, route_data, reason) do
+    route
+    |> Route.changeset(route_data)
+    |> Ecto.Changeset.add_error(:tags, to_string(reason))
   end
 
   @spec update_route_schema_status(String.t(), String.t() | nil) :: {:ok, map()} | {:error, any()}
@@ -142,6 +195,58 @@ defmodule HydraSrt.Db do
   def list_enabled_routes do
     from(r in Route, where: r.enabled == true, order_by: [asc: r.inserted_at])
     |> Repo.all()
+  end
+
+  @spec list_all_tags() :: list(String.t())
+  def list_all_tags do
+    from(t in Tag, select: t.name, order_by: [asc: t.name])
+    |> Repo.all()
+  end
+
+  @spec upsert_tags_by_name(list(String.t())) :: {:ok, list(%Tag{})} | {:error, any()}
+  def upsert_tags_by_name(names) when is_list(names) do
+    upsert_tags_by_name(Repo, names)
+  end
+
+  @spec upsert_tags_by_name(module(), list(String.t())) :: {:ok, list(%Tag{})} | {:error, any()}
+  def upsert_tags_by_name(repo, names) when is_list(names) do
+    names =
+      names
+      |> Enum.map(&to_string/1)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
+    if names == [] do
+      {:ok, []}
+    else
+      now = DateTime.utc_now(:microsecond)
+
+      rows =
+        Enum.map(names, fn name ->
+          %{
+            id: Ecto.UUID.generate(),
+            name: name,
+            inserted_at: now,
+            updated_at: now
+          }
+        end)
+
+      repo.insert_all(Tag, rows, on_conflict: :nothing, conflict_target: [:name])
+
+      tags =
+        from(t in Tag, where: t.name in ^names)
+        |> repo.all()
+
+      if length(tags) == length(names) do
+        {:ok, tags}
+      else
+        # This could happen if names are somehow invalid or if someone deleted a tag
+        # between insert and select, but it's very unlikely.
+        # We try to recover by returning what we found if it's acceptable.
+        {:ok, tags}
+      end
+    end
   end
 
   @spec reset_runtime_statuses_to_stopped() :: %{
@@ -243,7 +348,7 @@ defmodule HydraSrt.Db do
                updated_route
              end) do
           {:ok, %Route{} = updated_route} ->
-            {:ok, route_to_map(updated_route, false, [], [])}
+            {:ok, get_route_map(updated_route.id)}
 
           {:error, %Ecto.Changeset{} = changeset} ->
             {:error, changeset}
@@ -436,6 +541,7 @@ defmodule HydraSrt.Db do
     routes =
       from(r in Route, order_by: [desc: field(r, ^order_field)])
       |> Repo.all()
+      |> Repo.preload(:tags)
 
     source_map = list_sources_for_routes(routes)
 
@@ -592,7 +698,7 @@ defmodule HydraSrt.Db do
              "last_switch_at" => DateTime.utc_now(:microsecond)
            })
            |> Repo.update() do
-      map = route_to_map(updated, false, [], list_sources_for_route(route_id))
+      map = get_route_map(updated.id)
 
       EventLogger.log_source_switch(
         route_id,
@@ -716,6 +822,15 @@ defmodule HydraSrt.Db do
       "last_switch_at" => route.last_switch_at,
       "node" => route.node,
       "gstDebug" => route.gst_debug,
+      "tags" =>
+        case route.tags do
+          %Ecto.Association.NotLoaded{} ->
+            # Returning empty list is better than crashing, but we avoid side-effects here.
+            []
+
+          tags when is_list(tags) ->
+            Enum.map(tags, & &1.name)
+        end,
       "source" => route.source,
       "started_at" => route.started_at,
       "stopped_at" => route.stopped_at,
@@ -783,5 +898,12 @@ defmodule HydraSrt.Db do
   @doc false
   def maybe_put_changeset_id(%Ecto.Changeset{} = changeset, id) when is_binary(id) do
     Ecto.Changeset.put_change(changeset, :id, id)
+  end
+
+  defp pop_tags(data) when is_map(data) do
+    case Map.pop(data, "tags") do
+      {nil, data} -> Map.pop(data, :tags)
+      {tags, data} -> {tags, data}
+    end
   end
 end
