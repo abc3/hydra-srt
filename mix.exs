@@ -118,7 +118,7 @@ defmodule HydraSrt.MixProject do
   defp rs_native_build_config do
     profile = if Mix.env() == :prod, do: "release", else: "debug"
     project_root = project_root()
-    rs_native_dir = Path.join(project_root, "rs-native")
+    rs_native_dir = Path.join(project_root, "native")
     priv_native_dir = Path.join(project_root, "priv/native")
 
     %{

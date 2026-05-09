@@ -190,7 +190,7 @@ make dev
    The release process will:
 
    - Compile the Elixir application
-   - Build the Rust pipeline from `./rs-native` via `mix compile.rs_native`
+   - Build the Rust pipeline from `./native` via `mix compile.rs_native`
    - Build the web application using `npm run build`
    - Package everything into a self-contained release
 

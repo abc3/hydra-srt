@@ -27,9 +27,9 @@ jobs:
     - name: Cache Rust artifacts
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: rs-native
-    - name: Run rs-native unit tests
-      run: cd rs-native && cargo test -- --nocapture
+        workspaces: native
+    - name: Run native unit tests
+      run: cd native && cargo test -- --nocapture
 
   rs_native_e2e_test:
     name: Rust Native E2E Tests
@@ -62,12 +62,12 @@ jobs:
     - name: Cache Rust artifacts
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: rs-native
+        workspaces: native
     - name: Install Elixir dependencies
       run: mix deps.get
     - name: Compile Elixir dependencies
       run: mix deps.compile
-    - name: Run rs-native E2E tests
+    - name: Run native E2E tests
       run: make test_rs_native_e2e
 
   js_unit_test:
@@ -114,7 +114,7 @@ jobs:
     - name: Compile dependencies
       run: mix deps.compile
     - name: Build Rust Native Pipeline
-      run: cd rs-native && cargo build
+      run: cd native && cargo build
 
     - uses: actions/setup-node@v4
       with:
@@ -136,7 +136,7 @@ jobs:
       MIX_ENV: test
     steps:
     - uses: actions/checkout@v4
-    - name: Install native dependencies (GStreamer / GLib / SRT for rs-native)
+    - name: Install native dependencies (GStreamer / GLib / SRT for native)
       run: |
         sudo apt-get update
         sudo apt-get install -y pkg-config \
@@ -148,7 +148,7 @@ jobs:
     - name: Cache Rust artifacts
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: rs-native
+        workspaces: native
     - name: Set up Elixir
       uses: erlef/setup-beam@v1
       with:
@@ -201,10 +201,10 @@ jobs:
     - name: Install dependencies
       run: mix deps.get
     - name: Build Rust Native App
-      run: cd rs-native && cargo build
+      run: cd native && cargo build
     - name: Prepare Native Binary
       run: |
         mkdir -p priv/native/build
-        cp rs-native/target/debug/hydra_srt_pipeline priv/native/build/
+        cp native/target/debug/hydra_srt_pipeline priv/native/build/
     - name: Run E2E Tests
       run: mix test --only e2e

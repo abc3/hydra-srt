@@ -62,7 +62,7 @@ RUN mix deps.compile
 # Copy the rest of the application code
 COPY priv priv
 COPY lib lib
-COPY rs-native rs-native
+COPY native native
 COPY web_app web_app
 COPY rel rel
 
@@ -71,7 +71,7 @@ RUN cd web_app \
     && npm install \
     && npm run build
 
-# Compile the Elixir application. This also builds rs-native in release mode via mix compiler.
+# Compile the Elixir application. This also builds native in release mode via mix compiler.
 RUN mix compile
 
 # Changes to config/runtime.exs don't require recompiling the code

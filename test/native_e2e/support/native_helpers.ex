@@ -25,7 +25,7 @@ defmodule HydraSrt.E2E.Native.Helpers do
       do: :ok,
       else:
         raise(
-          "rs-native binary not found at #{binary}. Build it first with `make test_rs_native_e2e`."
+          "native binary not found at #{binary}. Build it first with `make test_rs_native_e2e`."
         )
   end
 

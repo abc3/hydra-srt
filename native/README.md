@@ -1,4 +1,4 @@
-# rs-native
+# native
 
 Rust implementation of the `hydra_srt_pipeline` process.
 
@@ -42,11 +42,11 @@ Notes and current limitations:
 
 - `starting` is emitted before `set_state(Playing)` so the lifecycle state is armed before the source can deliver early buffers.
 - `processing` is emitted from the first real source buffer, not from process spawn or `set_state` alone.
-- `processing` is a one-shot transition for each startup/reconnect cycle. rs-native does not keep checking lifecycle state on every buffer after the pipeline is already processing.
-- after `reconnecting`, rs-native re-arms `processing` and emits it again only when a new real source buffer arrives.
-- `reconnecting` is currently emitted only when the source provides an explicit runtime reconnect hook. For `srtsrc`, rs-native uses the `connection-removed` element message, which GStreamer emits when `keep-listening=true` and the remote caller disconnects.
-- `srtsrc` caller-mode `auto-reconnect=true` does not currently expose a clean machine-readable reconnect callback/message that rs-native can rely on. We intentionally do not infer reconnecting from log text like "Trying to reconnect".
-- To support caller-mode reconnecting reliably in the future, rs-native needs either:
+- `processing` is a one-shot transition for each startup/reconnect cycle. native does not keep checking lifecycle state on every buffer after the pipeline is already processing.
+- after `reconnecting`, native re-arms `processing` and emits it again only when a new real source buffer arrives.
+- `reconnecting` is currently emitted only when the source provides an explicit runtime reconnect hook. For `srtsrc`, native uses the `connection-removed` element message, which GStreamer emits when `keep-listening=true` and the remote caller disconnects.
+- `srtsrc` caller-mode `auto-reconnect=true` does not currently expose a clean machine-readable reconnect callback/message that native can rely on. We intentionally do not infer reconnecting from log text like "Trying to reconnect".
+- To support caller-mode reconnecting reliably in the future, native needs either:
   - a dedicated GStreamer element message for reconnect-attempt-start / reconnect-attempt-finished, or
   - an exposed signal/callback from the SRT source object for reconnect loop entry.
 
@@ -67,21 +67,21 @@ mix compile.rs_native
 Run examples:
 
 ```bash
-cd rs-native
+cd native
 make demo_srt_to_udp
 ```
 
 Send a test SRT stream into the Rust runner:
 
 ```bash
-cd rs-native
+cd native
 make dummy_signal
 ```
 
 Watch the forwarded UDP output:
 
 ```bash
-cd rs-native
+cd native
 make play_udp
 ```
 
@@ -94,16 +94,16 @@ Other useful demo targets:
 You can override ports and route id:
 
 ```bash
-cd rs-native
+cd native
 make demo_srt_to_udp ROUTE_ID=my_route SOURCE_PORT=9000 UDP_PORT=9003
 ```
 
 Manual QA:
 
-1. Build and run rs-native:
+1. Build and run native:
 
 ```bash
-cd rs-native
+cd native
 make build
 make demo_srt_to_udp ROUTE_ID=qa_route SOURCE_PORT=9000 UDP_PORT=9003
 ```
@@ -116,31 +116,31 @@ make demo_srt_to_udp ROUTE_ID=qa_route SOURCE_PORT=9000 UDP_PORT=9003
 3. Confirm `processing`:
 
 ```bash
-cd rs-native
+cd native
 make dummy_signal SOURCE_PORT=9000
 ```
 
 - once the source pushes real buffers, stdout should include:
   `{"event":"pipeline_status","status":"processing"}`
-- rs-native emits this once for the current processing cycle; it does not re-emit `processing` for every subsequent buffer
+- native emits this once for the current processing cycle; it does not re-emit `processing` for every subsequent buffer
 
 4. Confirm `reconnecting` for SRT listener mode:
 
-- run rs-native with `keep-listening=true` in the source config
+- run native with `keep-listening=true` in the source config
 - start `make dummy_signal SOURCE_PORT=9000`
 - stop the sender abruptly
 - when `srtsrc` emits `connection-removed`, stdout should include:
   `{"event":"pipeline_status","status":"reconnecting"}`
-- start the sender again; once real source buffers resume, rs-native should emit `processing` again for that new cycle
+- start the sender again; once real source buffers resume, native should emit `processing` again for that new cycle
 
 5. Confirm `stopped`:
 
-- stop rs-native cleanly or let the pipeline reach EOS
+- stop native cleanly or let the pipeline reach EOS
 - stdout should include:
   `{"event":"pipeline_status","status":"stopped","reason":"shutdown"}`
   or
   `{"event":"pipeline_status","status":"stopped","reason":"eos"}`
-- if a runtime error occurs first, rs-native should emit:
+- if a runtime error occurs first, native should emit:
   `{"event":"pipeline_status","status":"failed","reason":"runtime_error"}`
   followed by
   `{"event":"pipeline_status","status":"stopped","reason":"failure"}`

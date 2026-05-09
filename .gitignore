@@ -40,7 +40,7 @@ tmp-*
 
 web_app/test-results
 
-rs-native/target
+native/target
 priv/native/
 # TODO: make it open
 /deployment/
