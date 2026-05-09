@@ -49,7 +49,8 @@ config :hydra_srt,
     Path.join(
       System.tmp_dir!(),
       "hydra_srt_analytics_test_#{System.unique_integer([:positive])}.duckdb"
-    )
+    ),
+  system_metrics_history: [enabled: false]
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
