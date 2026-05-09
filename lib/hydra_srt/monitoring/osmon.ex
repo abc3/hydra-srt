@@ -6,11 +6,8 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
   use PromEx.Plugin
   require Logger
 
-  @event_memory [:prom_ex, :plugin, :osmon, :memory]
-  @event_ram_usage [:prom_ex, :plugin, :osmon, :ram_usage]
-  @event_cpu_util [:prom_ex, :plugin, :osmon, :cpu_util]
-  @event_cpu_la [:prom_ex, :plugin, :osmon, :cpu_avg1]
-  @event_swap_usage [:prom_ex, :plugin, :osmon, :swap_usage]
+  alias HydraSrt.Monitoring.OsMonTelemetry
+
   @prefix [:hydra_srt, :prom_ex]
   @cache_key {__MODULE__, :last_stats}
 
@@ -31,80 +28,80 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
       [
         last_value(
           @prefix ++ [:osmon, :ram_usage],
-          event_name: @event_ram_usage,
+          event_name: OsMonTelemetry.ram_usage_event(),
           description: "The total percentage usage of operative memory.",
           measurement: :ram
         ),
         last_value(
           @prefix ++ [:osmon, :memory, :available],
-          event_name: @event_memory,
+          event_name: OsMonTelemetry.memory_event(),
           description: "The total available memory in the operating system",
           unit: :bytes,
           measurement: :available
         ),
         last_value(
           @prefix ++ [:osmon, :memory, :buffered],
-          event_name: @event_memory,
+          event_name: OsMonTelemetry.memory_event(),
           description: "The buffered memory in the operating system",
           unit: :bytes,
           measurement: :buffered
         ),
         last_value(
           @prefix ++ [:osmon, :memory, :cached],
-          event_name: @event_memory,
+          event_name: OsMonTelemetry.memory_event(),
           description: "The cached memory in the operating system",
           unit: :bytes,
           measurement: :cached
         ),
         last_value(
           @prefix ++ [:osmon, :memory, :free],
-          event_name: @event_memory,
+          event_name: OsMonTelemetry.memory_event(),
           description: "The free memory in the operating system",
           unit: :bytes,
           measurement: :free
         ),
         last_value(
           @prefix ++ [:osmon, :memory, :total],
-          event_name: @event_memory,
+          event_name: OsMonTelemetry.memory_event(),
           description: "The total memory in the operating system",
           unit: :bytes,
           measurement: :total
         ),
         last_value(
           @prefix ++ [:osmon, :memory, :system_total],
-          event_name: @event_memory,
+          event_name: OsMonTelemetry.memory_event(),
           description: "The total system memory",
           unit: :bytes,
           measurement: :system_total
         ),
         last_value(
           @prefix ++ [:osmon, :cpu_util],
-          event_name: @event_cpu_util,
+          event_name: OsMonTelemetry.cpu_util_event(),
           description:
             "The sum of the percentage shares of the CPU cycles spent in all busy processor states in average on all CPUs.",
           measurement: :cpu
         ),
         last_value(
           @prefix ++ [:osmon, :cpu_avg1],
-          event_name: @event_cpu_la,
+          event_name: OsMonTelemetry.cpu_la_event(),
           description: "The average system load in the last minute.",
           measurement: :avg1
         ),
         last_value(
           @prefix ++ [:osmon, :cpu_avg5],
-          event_name: @event_cpu_la,
+          event_name: OsMonTelemetry.cpu_la_event(),
           description: "The average system load in the last five minutes.",
           measurement: :avg5
         ),
         last_value(
           @prefix ++ [:osmon, :cpu_avg15],
-          event_name: @event_cpu_la,
+          event_name: OsMonTelemetry.cpu_la_event(),
           description: "The average system load in the last 15 minutes.",
           measurement: :avg15
         ),
         last_value(
           @prefix ++ [:osmon, :swap_usage],
-          event_name: @event_swap_usage,
+          event_name: OsMonTelemetry.swap_usage_event(),
           description: "The total percentage usage of swap memory.",
           measurement: :swap
         )
@@ -123,11 +120,11 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
 
     :persistent_term.put(@cache_key, stats)
 
-    execute_metrics(@event_memory, stats.memory)
-    execute_metrics(@event_ram_usage, %{ram: stats.ram})
-    execute_metrics(@event_cpu_util, %{cpu: stats.cpu})
-    execute_metrics(@event_cpu_la, stats.cpu_la)
-    execute_metrics(@event_swap_usage, %{swap: stats.swap})
+    execute_metrics(OsMonTelemetry.memory_event(), stats.memory)
+    execute_metrics(OsMonTelemetry.ram_usage_event(), %{ram: stats.ram})
+    execute_metrics(OsMonTelemetry.cpu_util_event(), %{cpu: stats.cpu})
+    execute_metrics(OsMonTelemetry.cpu_la_event(), stats.cpu_la)
+    execute_metrics(OsMonTelemetry.swap_usage_event(), %{swap: stats.swap})
   end
 
   def execute_metrics(event, metrics) do

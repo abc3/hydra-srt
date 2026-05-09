@@ -33,6 +33,8 @@ defmodule HydraSrt.Application do
       {Adbc.Connection,
        database: HydraSrt.AnalyticsDb, process_options: [name: HydraSrt.AnalyticsConn]},
       {HydraSrt.Stats.Collector, %{}},
+      {HydraSrt.Stats.SystemTelemetryCollector,
+       Application.get_env(:hydra_srt, :system_metrics_history, [])},
       {HydraSrt.Stats.EventLogger, %{}},
       HydraSrt.Stats.Cleaner,
       # {Ecto.Migrator,
