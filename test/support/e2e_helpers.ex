@@ -288,11 +288,10 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     route_params = Map.put_new(route_params, "enabled", true)
 
     schema = Map.get(route_params, "schema")
-    schema_options = Map.get(route_params, "schema_options") || %{}
 
     route_for_post =
       route_params
-      |> Map.drop(["schema", "schema_options"])
+      |> Map.drop(["schema"])
 
     body = Jason.encode!(%{"route" => route_for_post})
 
@@ -306,7 +305,22 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
         "enabled" => true,
         "name" => Map.get(route_params, "source_name", "Primary"),
         "schema" => schema,
-        "schema_options" => schema_options,
+        "mode" => Map.get(route_params, "mode"),
+        "interface_sys_name" => Map.get(route_params, "interface_sys_name"),
+        "localaddress" => Map.get(route_params, "localaddress"),
+        "localport" => Map.get(route_params, "localport"),
+        "address" => Map.get(route_params, "address"),
+        "port" => Map.get(route_params, "port"),
+        "host" => Map.get(route_params, "host"),
+        "latency" => Map.get(route_params, "latency"),
+        "authentication" => Map.get(route_params, "authentication"),
+        "passphrase" => Map.get(route_params, "passphrase"),
+        "pbkeylen" => Map.get(route_params, "pbkeylen"),
+        "poll_timeout" => Map.get(route_params, "poll_timeout"),
+        "auto_reconnect" => Map.get(route_params, "auto_reconnect"),
+        "keep_listening" => Map.get(route_params, "keep_listening"),
+        "multicast_iface" => Map.get(route_params, "multicast_iface"),
+        "bind_address_option" => Map.get(route_params, "bind_address_option"),
         "position" => 0
       }
 

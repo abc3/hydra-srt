@@ -21,7 +21,8 @@ defmodule HydraSrt.RouteHandlerFailoverTest do
         "position" => 0,
         "name" => "primary",
         "schema" => "UDP",
-        "schema_options" => %{"address" => "127.0.0.1", "port" => 15_000}
+        "address" => "127.0.0.1",
+        "port" => 15_000
       })
 
     backup =
@@ -29,7 +30,8 @@ defmodule HydraSrt.RouteHandlerFailoverTest do
         "position" => 1,
         "name" => "backup",
         "schema" => "UDP",
-        "schema_options" => %{"address" => "127.0.0.1", "port" => 15_001}
+        "address" => "127.0.0.1",
+        "port" => 15_001
       })
 
     {:ok, _route} = Db.set_route_active_source(route["id"], primary["id"], "manual")
@@ -140,21 +142,24 @@ defmodule HydraSrt.RouteHandlerFailoverTest do
       DbFixtures.source_fixture(route, %{
         "position" => 0,
         "name" => "primary",
-        "schema_options" => %{"address" => "127.0.0.1", "port" => 16_000}
+        "address" => "127.0.0.1",
+        "port" => 16_000
       })
 
     backup1 =
       DbFixtures.source_fixture(route, %{
         "position" => 1,
         "name" => "backup-1",
-        "schema_options" => %{"address" => "127.0.0.1", "port" => 16_001}
+        "address" => "127.0.0.1",
+        "port" => 16_001
       })
 
     _backup2 =
       DbFixtures.source_fixture(route, %{
         "position" => 2,
         "name" => "backup-2",
-        "schema_options" => %{"address" => "127.0.0.1", "port" => 16_002}
+        "address" => "127.0.0.1",
+        "port" => 16_002
       })
 
     {:ok, _route} = Db.set_route_active_source(route["id"], primary["id"], "manual")
@@ -214,14 +219,16 @@ defmodule HydraSrt.RouteHandlerFailoverTest do
       DbFixtures.source_fixture(route, %{
         "position" => 0,
         "name" => "primary",
-        "schema_options" => %{"address" => "127.0.0.1", "port" => 17_000}
+        "address" => "127.0.0.1",
+        "port" => 17_000
       })
 
     backup =
       DbFixtures.source_fixture(route, %{
         "position" => 1,
         "name" => "backup",
-        "schema_options" => %{"address" => "127.0.0.1", "port" => 17_001}
+        "address" => "127.0.0.1",
+        "port" => 17_001
       })
 
     {:ok, _route} = Db.set_route_active_source(route["id"], backup["id"], "manual")

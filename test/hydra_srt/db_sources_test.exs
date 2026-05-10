@@ -14,7 +14,8 @@ defmodule HydraSrt.DbSourcesTest do
                "enabled" => true,
                "name" => "primary",
                "schema" => "UDP",
-               "schema_options" => %{"host" => "127.0.0.1", "port" => 5000}
+               "host" => "127.0.0.1",
+               "port" => 5000
              })
 
     assert {:ok, listed} = Db.get_all_sources(route["id"])

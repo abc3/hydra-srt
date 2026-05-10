@@ -1,6 +1,5 @@
 import { Space, Tag } from 'antd';
-
-const getSchemaOption = (endpoint, key) => endpoint?.schema_options?.[key];
+import { getEndpointOption } from '../pages/routes/endpointOptions';
 
 export const getEndpointAddressString = (endpoint) => {
   if (!endpoint) {
@@ -9,20 +8,20 @@ export const getEndpointAddressString = (endpoint) => {
 
   switch (endpoint.schema) {
     case 'SRT': {
-      const mode = getSchemaOption(endpoint, 'mode');
+      const mode = getEndpointOption(endpoint, 'mode');
       const address =
         mode === 'caller' || mode === 'rendezvous'
-          ? getSchemaOption(endpoint, 'address') || getSchemaOption(endpoint, 'host') || getSchemaOption(endpoint, 'localaddress')
-          : getSchemaOption(endpoint, 'localaddress');
+          ? getEndpointOption(endpoint, 'address') || getEndpointOption(endpoint, 'host') || getEndpointOption(endpoint, 'localaddress')
+          : getEndpointOption(endpoint, 'localaddress');
       const port =
         mode === 'caller' || mode === 'rendezvous'
-          ? getSchemaOption(endpoint, 'port') || getSchemaOption(endpoint, 'localport')
-          : getSchemaOption(endpoint, 'localport') || getSchemaOption(endpoint, 'port');
+          ? getEndpointOption(endpoint, 'port') || getEndpointOption(endpoint, 'localport')
+          : getEndpointOption(endpoint, 'localport') || getEndpointOption(endpoint, 'port');
 
       return `${address || 'N/A'}:${port || 'N/A'}`;
     }
     case 'UDP':
-      return `${getSchemaOption(endpoint, 'host') || getSchemaOption(endpoint, 'address') || 'N/A'}:${getSchemaOption(endpoint, 'port') || 'N/A'}`;
+      return `${getEndpointOption(endpoint, 'host') || getEndpointOption(endpoint, 'address') || 'N/A'}:${getEndpointOption(endpoint, 'port') || 'N/A'}`;
     default:
       return 'N/A';
   }
@@ -58,7 +57,7 @@ export const renderEndpointAddress = (endpoint) => {
   }
 
   const srtModeTag =
-    endpoint.schema === 'SRT' ? renderSrtModeTag(getSchemaOption(endpoint, 'mode')) : null;
+    endpoint.schema === 'SRT' ? renderSrtModeTag(getEndpointOption(endpoint, 'mode')) : null;
 
   return (
     <Space size="small">

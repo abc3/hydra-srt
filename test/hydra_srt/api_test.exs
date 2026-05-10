@@ -34,7 +34,6 @@ defmodule HydraSrt.ApiTest do
         enabled: true,
         name: "some name",
         schema: "UDP",
-        schema_options: %{},
         status: "some status",
         started_at: ~U[2025-02-18 14:51:00Z],
         source: %{},
@@ -63,7 +62,7 @@ defmodule HydraSrt.ApiTest do
         enabled: false,
         name: "some updated name",
         schema: "SRT",
-        schema_options: %{"mode" => "listener"},
+        mode: "listener",
         status: "some updated status",
         started_at: ~U[2025-02-19 14:51:00Z],
         source: %{},
@@ -121,7 +120,6 @@ defmodule HydraSrt.ApiTest do
       name: nil,
       status: nil,
       schema: nil,
-      schema_options: nil,
       started_at: nil,
       stopped_at: nil
     }
@@ -146,7 +144,8 @@ defmodule HydraSrt.ApiTest do
         name: "some name",
         status: "some status",
         schema: "UDP",
-        schema_options: %{"host" => "127.0.0.1", "port" => 5000},
+        host: "127.0.0.1",
+        port: 5000,
         started_at: ~U[2025-02-19 16:24:00Z],
         stopped_at: ~U[2025-02-19 16:24:00Z]
       }
@@ -157,7 +156,8 @@ defmodule HydraSrt.ApiTest do
       assert destination.name == "some name"
       assert destination.status == "some status"
       assert destination.schema == "UDP"
-      assert destination.schema_options == %{"host" => "127.0.0.1", "port" => 5000}
+      assert destination.host == "127.0.0.1"
+      assert destination.port == 5000
       assert destination.started_at == ~U[2025-02-19 16:24:00Z]
       assert destination.stopped_at == ~U[2025-02-19 16:24:00Z]
     end

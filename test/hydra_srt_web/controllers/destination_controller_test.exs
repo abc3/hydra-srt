@@ -8,7 +8,8 @@ defmodule HydraSrtWeb.DestinationControllerTest do
     "enabled" => true,
     "name" => "some name",
     "schema" => "UDP",
-    "schema_options" => %{"host" => "127.0.0.1", "port" => 5000},
+    "host" => "127.0.0.1",
+    "port" => 5000,
     "status" => "some status",
     "started_at" => ~U[2025-02-19 16:24:00Z],
     "stopped_at" => ~U[2025-02-19 16:24:00Z]
@@ -18,7 +19,8 @@ defmodule HydraSrtWeb.DestinationControllerTest do
     "enabled" => false,
     "name" => "some updated name",
     "schema" => "UDP",
-    "schema_options" => %{"host" => "127.0.0.1", "port" => 5001},
+    "host" => "127.0.0.1",
+    "port" => 5001,
     "status" => "some updated status",
     "started_at" => ~U[2025-02-20 16:24:00Z],
     "stopped_at" => ~U[2025-02-20 16:24:00Z]
@@ -28,7 +30,6 @@ defmodule HydraSrtWeb.DestinationControllerTest do
     "enabled" => nil,
     "name" => nil,
     "schema" => nil,
-    "schema_options" => nil,
     "status" => nil,
     "started_at" => nil,
     "stopped_at" => nil

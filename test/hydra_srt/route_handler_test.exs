@@ -29,14 +29,12 @@ defmodule HydraSrt.RouteHandlerTest do
   test "source_from_record with valid SRT schema" do
     record = %{
       "schema" => "SRT",
-      "schema_options" => %{
-        "localaddress" => "127.0.0.1",
-        "localport" => 4201,
-        "mode" => "listener",
-        "latency" => 200,
-        "auto-reconnect" => true,
-        "keep-listening" => true
-      }
+      "localaddress" => "127.0.0.1",
+      "localport" => 4201,
+      "mode" => "listener",
+      "latency" => 200,
+      "auto_reconnect" => true,
+      "keep_listening" => true
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
@@ -51,13 +49,11 @@ defmodule HydraSrt.RouteHandlerTest do
   test "source_from_record with SRT schema and passphrase" do
     record = %{
       "schema" => "SRT",
-      "schema_options" => %{
-        "localaddress" => "127.0.0.1",
-        "localport" => 4201,
-        "mode" => "listener",
-        "passphrase" => "secret",
-        "pbkeylen" => 16
-      }
+      "localaddress" => "127.0.0.1",
+      "localport" => 4201,
+      "mode" => "listener",
+      "passphrase" => "secret",
+      "pbkeylen" => 16
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
@@ -125,12 +121,10 @@ defmodule HydraSrt.RouteHandlerTest do
   test "source_from_record with valid UDP schema" do
     record = %{
       "schema" => "UDP",
-      "schema_options" => %{
-        "address" => "127.0.0.1",
-        "port" => 4201,
-        "buffer-size" => 65536,
-        "mtu" => 1500
-      }
+      "address" => "127.0.0.1",
+      "port" => 4201,
+      "buffer-size" => 65536,
+      "mtu" => 1500
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
@@ -144,10 +138,8 @@ defmodule HydraSrt.RouteHandlerTest do
   test "source_from_record with UDP schema and minimal options" do
     record = %{
       "schema" => "UDP",
-      "schema_options" => %{
-        "address" => "127.0.0.1",
-        "port" => 4201
-      }
+      "address" => "127.0.0.1",
+      "port" => 4201
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
@@ -158,14 +150,13 @@ defmodule HydraSrt.RouteHandlerTest do
 
   test "source_from_record with invalid schema" do
     record = %{
-      "schema" => "INVALID",
-      "schema_options" => %{}
+      "schema" => "INVALID"
     }
 
     assert {:error, :invalid_source} = RouteHandler.source_from_record(record)
   end
 
-  test "source_from_record with missing schema_options" do
+  test "source_from_record with missing options" do
     record = %{"schema" => "SRT"}
     assert {:error, :invalid_source} = RouteHandler.source_from_record(record)
   end
@@ -174,8 +165,8 @@ defmodule HydraSrt.RouteHandlerTest do
     route = %{
       "active_source_id" => "s2",
       "sources" => [
-        %{"id" => "s1", "position" => 0, "schema" => "UDP", "schema_options" => %{}},
-        %{"id" => "s2", "position" => 1, "schema" => "SRT", "schema_options" => %{}}
+        %{"id" => "s1", "position" => 0, "schema" => "UDP"},
+        %{"id" => "s2", "position" => 1, "schema" => "SRT"}
       ]
     }
 
@@ -187,8 +178,8 @@ defmodule HydraSrt.RouteHandlerTest do
     route = %{
       "active_source_id" => "missing",
       "sources" => [
-        %{"id" => "s1", "position" => 0, "schema" => "UDP", "schema_options" => %{}},
-        %{"id" => "s2", "position" => 1, "schema" => "SRT", "schema_options" => %{}}
+        %{"id" => "s1", "position" => 0, "schema" => "UDP"},
+        %{"id" => "s2", "position" => 1, "schema" => "SRT"}
       ]
     }
 
@@ -200,8 +191,8 @@ defmodule HydraSrt.RouteHandlerTest do
     route = %{
       "active_source_id" => "s1",
       "sources" => [
-        %{"id" => "s1", "position" => 0, "schema" => "UDP", "schema_options" => %{}},
-        %{"id" => "s2", "position" => 1, "schema" => "SRT", "schema_options" => %{}}
+        %{"id" => "s1", "position" => 0, "schema" => "UDP"},
+        %{"id" => "s2", "position" => 1, "schema" => "SRT"}
       ]
     }
 
@@ -213,7 +204,7 @@ defmodule HydraSrt.RouteHandlerTest do
     route = %{
       "active_source_id" => "s1",
       "sources" => [
-        %{"id" => "s1", "position" => 0, "schema" => "UDP", "schema_options" => %{}}
+        %{"id" => "s1", "position" => 0, "schema" => "UDP"}
       ]
     }
 
@@ -323,11 +314,9 @@ defmodule HydraSrt.RouteHandlerTest do
       "id" => "dest1",
       "name" => "Destination 1",
       "schema" => "SRT",
-      "schema_options" => %{
-        "localaddress" => "127.0.0.1",
-        "localport" => 4202,
-        "mode" => "caller"
-      }
+      "localaddress" => "127.0.0.1",
+      "localport" => 4202,
+      "mode" => "caller"
     }
 
     assert {:ok, sink} = RouteHandler.sink_from_record(record)
@@ -342,10 +331,8 @@ defmodule HydraSrt.RouteHandlerTest do
       "id" => "dest2",
       "name" => "Destination 2",
       "schema" => "UDP",
-      "schema_options" => %{
-        "host" => "127.0.0.1",
-        "port" => 4203
-      }
+      "host" => "127.0.0.1",
+      "port" => 4203
     }
 
     assert {:ok, sink} = RouteHandler.sink_from_record(record)
@@ -360,12 +347,10 @@ defmodule HydraSrt.RouteHandlerTest do
       "id" => "dest3",
       "name" => "Destination 3",
       "schema" => "UDP",
-      "schema_options" => %{
-        "host" => "239.1.1.1",
-        "port" => 5004,
-        "bind-address" => "10.10.0.2",
-        "multicast-iface" => "eno2"
-      }
+      "host" => "239.1.1.1",
+      "port" => 5004,
+      "bind_address_option" => "10.10.0.2",
+      "multicast_iface" => "eno2"
     }
 
     assert {:ok, sink} = RouteHandler.sink_from_record(record)
@@ -381,12 +366,10 @@ defmodule HydraSrt.RouteHandlerTest do
       "id" => "dest4",
       "name" => "Destination 4",
       "schema" => "UDP",
-      "schema_options" => %{
-        "host" => "ff15::1234",
-        "port" => 5000,
-        "bind-address" => "fe80::ae1f:6bff:febd:5295",
-        "multicast-iface" => "eno2"
-      }
+      "host" => "ff15::1234",
+      "port" => 5000,
+      "bind_address_option" => "fe80::ae1f:6bff:febd:5295",
+      "multicast_iface" => "eno2"
     }
 
     assert {:ok, sink} = RouteHandler.sink_from_record(record)
@@ -411,20 +394,16 @@ defmodule HydraSrt.RouteHandlerTest do
           "enabled" => true,
           "name" => "Enabled destination",
           "schema" => "UDP",
-          "schema_options" => %{
-            "host" => "127.0.0.1",
-            "port" => 4203
-          }
+          "host" => "127.0.0.1",
+          "port" => 4203
         },
         %{
           "id" => "dest-disabled",
           "enabled" => false,
           "name" => "Disabled destination",
           "schema" => "UDP",
-          "schema_options" => %{
-            "host" => "127.0.0.1",
-            "port" => 4204
-          }
+          "host" => "127.0.0.1",
+          "port" => 4204
         }
       ]
     }
@@ -441,29 +420,23 @@ defmodule HydraSrt.RouteHandlerTest do
           "enabled" => true,
           "name" => "Enabled destination",
           "schema" => "UDP",
-          "schema_options" => %{
-            "host" => "127.0.0.1",
-            "port" => 4203
-          }
+          "host" => "127.0.0.1",
+          "port" => 4203
         },
         %{
           "id" => "dest-missing-enabled",
           "name" => "Missing enabled flag",
           "schema" => "UDP",
-          "schema_options" => %{
-            "host" => "127.0.0.1",
-            "port" => 4204
-          }
+          "host" => "127.0.0.1",
+          "port" => 4204
         },
         %{
           "id" => "dest-nil-enabled",
           "enabled" => nil,
           "name" => "Nil enabled flag",
           "schema" => "UDP",
-          "schema_options" => %{
-            "host" => "127.0.0.1",
-            "port" => 4205
-          }
+          "host" => "127.0.0.1",
+          "port" => 4205
         }
       ]
     }

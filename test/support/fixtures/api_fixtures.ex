@@ -60,7 +60,8 @@ defmodule HydraSrt.ApiFixtures do
         enabled: true,
         name: "some name",
         schema: "UDP",
-        schema_options: %{host: "127.0.0.1", port: 5000},
+        host: "127.0.0.1",
+        port: 5000,
         started_at: ~U[2025-02-19 16:24:00Z],
         status: "some status",
         stopped_at: ~U[2025-02-19 16:24:00Z]
@@ -81,15 +82,19 @@ defmodule HydraSrt.ApiFixtures do
         true -> nil
       end
 
+    default_position = Map.get(attrs, :position) || Map.get(attrs, "position") || 0
+    route_port_seed = abs(:erlang.phash2(route_id || "route")) |> rem(20_000)
+
     {:ok, source} =
       attrs
       |> Enum.into(%{
         route_id: route_id,
-        position: 0,
+        position: default_position,
         enabled: true,
         name: "primary",
         schema: "UDP",
-        schema_options: %{host: "127.0.0.1", port: 5000}
+        host: "127.0.0.1",
+        port: 5000 + default_position + route_port_seed
       })
       |> HydraSrt.Api.create_source()
 

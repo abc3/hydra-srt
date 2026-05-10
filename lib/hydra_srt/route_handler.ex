@@ -873,7 +873,9 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  def sink_from_record(%{"id" => id, "schema" => "SRT", "schema_options" => opts} = destination) do
+  def sink_from_record(%{"id" => id, "schema" => "SRT"} = destination) do
+    opts = endpoint_options_from_record(destination)
+
     with {:ok, resolved_opts} <- resolve_interface_options(opts) do
       name = Map.get(destination, "name", id)
 
@@ -890,7 +892,9 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  def sink_from_record(%{"id" => id, "schema" => "UDP", "schema_options" => opts} = destination) do
+  def sink_from_record(%{"id" => id, "schema" => "UDP"} = destination) do
+    opts = endpoint_options_from_record(destination)
+
     with {:ok, resolved_opts} <- resolve_interface_options(opts) do
       name = Map.get(destination, "name", id)
 
@@ -928,15 +932,22 @@ defmodule HydraSrt.RouteHandler do
 
   def sink_from_record(_), do: {:error, :invalid_destination}
 
-  def source_from_record(%{"schema" => "SRT", "schema_options" => opts}) do
-    with {:ok, resolved_opts} <- resolve_interface_options(opts) do
+  def source_from_record(%{"schema" => "SRT"} = source) do
+    opts = endpoint_options_from_record(source)
+
+    with false <- map_size(opts) == 0,
+         {:ok, resolved_opts} <- resolve_interface_options(opts) do
       # Native pipeline expects SRT properties directly on the element config (not a URI).
       {:ok,
        %{"type" => "srtsrc", "uri" => build_srt_uri(resolved_opts)} |> Map.merge(resolved_opts)}
+    else
+      true -> {:error, :invalid_source}
     end
   end
 
-  def source_from_record(%{"schema" => "UDP", "schema_options" => opts}) do
+  def source_from_record(%{"schema" => "UDP"} = source) do
+    opts = endpoint_options_from_record(source)
+
     with {:ok, resolved_opts} <- resolve_interface_options(opts) do
       # Native pipeline expects `address` and `port` for udpsrc.
       {:ok, %{"type" => "udpsrc"} |> Map.merge(resolved_opts)}
@@ -1041,7 +1052,39 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  def resolve_interface_options(_), do: {:error, :invalid_schema_options}
+  def resolve_interface_options(_), do: {:error, :invalid_options}
+
+  defp endpoint_options_from_record(record) when is_map(record) do
+    %{}
+    |> put_opt(record, "mode")
+    |> put_opt(record, "interface_sys_name")
+    |> put_opt(record, "localaddress")
+    |> put_opt(record, "localport")
+    |> put_opt(record, "address")
+    |> put_opt(record, "port")
+    |> put_opt(record, "host")
+    |> put_opt(record, "latency")
+    |> put_opt(record, "authentication")
+    |> put_opt(record, "passphrase")
+    |> put_opt(record, "pbkeylen")
+    |> put_opt(record, "poll-timeout", "poll_timeout")
+    |> put_opt(record, "auto-reconnect", "auto_reconnect")
+    |> put_opt(record, "keep-listening", "keep_listening")
+    |> put_opt(record, "multicast-iface", "multicast_iface")
+    |> put_opt(record, "bind-address", "bind_address_option")
+    |> put_opt(record, "buffer-size")
+    |> put_opt(record, "buffer-size", "buffer_size")
+    |> put_opt(record, "mtu")
+  end
+
+  defp put_opt(opts, record, key), do: put_opt(opts, record, key, key)
+
+  defp put_opt(opts, record, key, source_key) do
+    case Map.get(record, source_key) do
+      nil -> opts
+      value -> Map.put(opts, key, value)
+    end
+  end
 
   @doc false
   def resolve_interface_bind_ip(sys_name) when is_binary(sys_name) do

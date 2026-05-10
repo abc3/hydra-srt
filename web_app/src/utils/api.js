@@ -4,6 +4,47 @@
 import { authFetch } from './auth';
 import { API_BASE_URL } from './constants';
 
+const parseJsonResponse = async (response) => {
+  const contentType = response.headers.get('content-type');
+
+  if (!contentType || !contentType.includes('application/json')) {
+    return null;
+  }
+
+  return response.json();
+};
+
+const throwApiErrorIfNeeded = async (response, fallbackMessage) => {
+  if (response.ok) {
+    return;
+  }
+
+  const payload = await parseJsonResponse(response);
+  const message =
+    payload?.error ||
+    payload?.message ||
+    (payload?.errors ? 'Validation failed' : null) ||
+    fallbackMessage;
+  const error = new Error(message);
+  error.status = response.status;
+  error.payload = payload;
+  error.errors = payload?.errors;
+  throw error;
+};
+
+const requestJson = async (url, options = {}, fallbackMessage = 'Request failed') => {
+  const response = await authFetch(url, options);
+  await throwApiErrorIfNeeded(response, fallbackMessage);
+  return response.json();
+};
+
+const requestOptionalJson = async (url, options = {}, fallbackMessage = 'Request failed') => {
+  const response = await authFetch(url, options);
+  await throwApiErrorIfNeeded(response, fallbackMessage);
+  const payload = await parseJsonResponse(response);
+  return payload ?? { success: true };
+};
+
 // System Pipelines API
 export const systemPipelinesApi = {
   // Get all pipeline processes
@@ -107,59 +148,47 @@ export const routesApi = {
 
   // Create a new route
   create: async (routeData) => {
-    const response = await authFetch('/api/routes', {
+    return requestJson('/api/routes', {
       method: 'POST',
       body: JSON.stringify({ route: routeData }),
-    });
-    return response.json();
+    }, 'Failed to create route');
   },
 
   // Update a route
   update: async (id, routeData) => {
-    const response = await authFetch(`/api/routes/${id}`, {
+    return requestJson(`/api/routes/${id}`, {
       method: 'PUT',
       body: JSON.stringify({ route: routeData }),
-    });
-    return response.json();
+    }, 'Failed to update route');
   },
 
   // Delete a route
   delete: async (id) => {
-    const response = await authFetch(`/api/routes/${id}`, {
+    return requestOptionalJson(`/api/routes/${id}`, {
       method: 'DELETE',
-    });
-    // Check if response has content before parsing as JSON
-    const contentType = response.headers.get("content-type");
-    if (contentType && contentType.includes("application/json")) {
-      return response.json();
-    }
-    return { success: true };
+    }, 'Failed to delete route');
   },
 
   // Start a route
   start: async (id) => {
-    const response = await authFetch(`/api/routes/${id}/start`);
-    return response.json();
+    return requestJson(`/api/routes/${id}/start`, {}, 'Failed to start route');
   },
 
   // Stop a route
   stop: async (id) => {
-    const response = await authFetch(`/api/routes/${id}/stop`);
-    return response.json();
+    return requestJson(`/api/routes/${id}/stop`, {}, 'Failed to stop route');
   },
 
   // Restart a route
   restart: async (id) => {
-    const response = await authFetch(`/api/routes/${id}/restart`);
-    return response.json();
+    return requestJson(`/api/routes/${id}/restart`, {}, 'Failed to restart route');
   },
 
   switchSource: async (id, sourceId) => {
-    const response = await authFetch(`/api/routes/${id}/switch-source`, {
+    return requestJson(`/api/routes/${id}/switch-source`, {
       method: 'POST',
       body: JSON.stringify({ source_id: sourceId }),
-    });
-    return response.json();
+    }, 'Failed to switch source');
   },
 
   // Test a route source with ffprobe
@@ -191,39 +220,30 @@ export const sourcesApi = {
   },
 
   create: async (routeId, sourceData) => {
-    const response = await authFetch(`/api/routes/${routeId}/sources`, {
+    return requestJson(`/api/routes/${routeId}/sources`, {
       method: 'POST',
       body: JSON.stringify({ source: sourceData }),
-    });
-    return response.json();
+    }, 'Failed to create source');
   },
 
   update: async (routeId, id, sourceData) => {
-    const response = await authFetch(`/api/routes/${routeId}/sources/${id}`, {
+    return requestJson(`/api/routes/${routeId}/sources/${id}`, {
       method: 'PATCH',
       body: JSON.stringify({ source: sourceData }),
-    });
-    return response.json();
+    }, 'Failed to update source');
   },
 
   delete: async (routeId, id) => {
-    const response = await authFetch(`/api/routes/${routeId}/sources/${id}`, {
+    return requestOptionalJson(`/api/routes/${routeId}/sources/${id}`, {
       method: 'DELETE',
-    });
-
-    if (response.status === 204) {
-      return { success: true };
-    }
-
-    return response.json();
+    }, 'Failed to delete source');
   },
 
   reorder: async (routeId, sourceIds) => {
-    const response = await authFetch(`/api/routes/${routeId}/sources/reorder`, {
+    return requestJson(`/api/routes/${routeId}/sources/reorder`, {
       method: 'POST',
       body: JSON.stringify({ source_ids: sourceIds }),
-    });
-    return response.json();
+    }, 'Failed to reorder sources');
   },
 
   test: async (routeId, id) => {
@@ -379,32 +399,24 @@ export const destinationsApi = {
 
   // Create a new destination
   create: async (routeId, destData) => {
-    const response = await authFetch(`/api/routes/${routeId}/destinations`, {
+    return requestJson(`/api/routes/${routeId}/destinations`, {
       method: 'POST',
       body: JSON.stringify({ destination: destData }),
-    });
-    return response.json();
+    }, 'Failed to create destination');
   },
 
   // Update a destination
   update: async (routeId, destId, destData) => {
-    const response = await authFetch(`/api/routes/${routeId}/destinations/${destId}`, {
+    return requestJson(`/api/routes/${routeId}/destinations/${destId}`, {
       method: 'PUT',
       body: JSON.stringify({ destination: destData }),
-    });
-    return response.json();
+    }, 'Failed to update destination');
   },
 
   // Delete a destination
   delete: async (routeId, destId) => {
-    const response = await authFetch(`/api/routes/${routeId}/destinations/${destId}`, {
+    return requestOptionalJson(`/api/routes/${routeId}/destinations/${destId}`, {
       method: 'DELETE',
-    });
-    // Check if response has content before parsing as JSON
-    const contentType = response.headers.get("content-type");
-    if (contentType && contentType.includes("application/json")) {
-      return response.json();
-    }
-    return { success: true };
+    }, 'Failed to delete destination');
   },
 }; 
