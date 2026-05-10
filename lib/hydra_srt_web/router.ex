@@ -71,6 +71,10 @@ defmodule HydraSrtWeb.Router do
     get "/system/pipelines", SystemController, :list_pipelines
     get "/system/pipelines/detailed", SystemController, :list_pipelines_detailed
     post "/system/pipelines/:pid/kill", SystemController, :kill_pipeline
+    get "/system/signal-generation", SystemController, :signal_generation_status
+    put "/system/signal-generation", SystemController, :signal_generation_configure
+    post "/system/signal-generation/start", SystemController, :signal_generation_start
+    post "/system/signal-generation/stop", SystemController, :signal_generation_stop
 
     get "/nodes", NodeController, :index
     get "/nodes/:id", NodeController, :show

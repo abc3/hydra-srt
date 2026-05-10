@@ -174,7 +174,7 @@ const App = () => {
           </ProtectedRoute>
         } />
 
-        <Route path={ROUTES.SETTINGS} element={
+        <Route path="/settings/*" element={
           <ProtectedRoute>
             <MainLayout>
               <Settings />

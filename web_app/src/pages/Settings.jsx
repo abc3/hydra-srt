@@ -1,14 +1,36 @@
 import { useEffect, useState, useRef } from 'react';
 import { Typography, Button, Card, Space, message, Tabs, Modal, Descriptions, Table, Form, Input, Popconfirm } from 'antd';
 import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
-import { backupApi, tagsApi } from '../utils/api';
+import { backupApi, tagsApi, signalGenerationApi } from '../utils/api';
 import { ROUTES } from '../utils/constants';
 import { useInit } from '../context/InitContext';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 const { Title } = Typography;
 
 const Settings = () => {
-  const [activeTab, setActiveTab] = useState('about');
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const tabPathByKey = {
+    about: 'about',
+    'route-tags': 'route-tags',
+    backup: 'backup',
+    routes: 'routes',
+    'signal-generation': 'signal-generation',
+  };
+
+  const tabKeyByPath = Object.fromEntries(
+    Object.entries(tabPathByKey).map(([k, v]) => [v, k])
+  );
+
+  const getTabFromPath = () => {
+    const parts = location.pathname.split('/').filter(Boolean);
+    const section = parts[1];
+    return tabKeyByPath[section] || 'about';
+  };
+
+  const [activeTab, setActiveTab] = useState(getTabFromPath());
   const [isDownloading, setIsDownloading] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [isDownloadingRoutes, setIsDownloadingRoutes] = useState(false);
@@ -18,7 +40,14 @@ const Settings = () => {
   const [savingTag, setSavingTag] = useState(false);
   const [editingTag, setEditingTag] = useState(null);
   const [tagForm] = Form.useForm();
+  const [signalForm] = Form.useForm();
+  const [signalInitialLoading, setSignalInitialLoading] = useState(false);
+  const [signalSaving, setSignalSaving] = useState(false);
+  const [signalStarting, setSignalStarting] = useState(false);
+  const [signalStopping, setSignalStopping] = useState(false);
+  const [signalStatus, setSignalStatus] = useState({ running: false, host: '127.0.0.1', port: 4200 });
   const fileInputRef = useRef(null);
+  const signalFormHydratedRef = useRef(false);
   const [modal, modalContextHolder] = Modal.useModal();
   const [messageApi, contextHolder] = message.useMessage();
   const initData = useInit();
@@ -39,6 +68,16 @@ const Settings = () => {
     }
   }, []);
 
+  useEffect(() => {
+    const tab = getTabFromPath();
+    setActiveTab(tab);
+
+    const parts = location.pathname.split('/').filter(Boolean);
+    if (parts.length < 2 || !tabKeyByPath[parts[1]]) {
+      navigate('/settings/about', { replace: true });
+    }
+  }, [location.pathname]);
+
   const loadTags = async () => {
     setTagsLoading(true);
     try {
@@ -56,6 +95,47 @@ const Settings = () => {
     if (activeTab === 'route-tags') {
       loadTags();
     }
+  }, [activeTab]);
+
+  const loadSignalStatus = async ({ initial = false, hydrateForm = false } = {}) => {
+    if (initial) {
+      setSignalInitialLoading(true);
+    }
+
+    try {
+      const status = await signalGenerationApi.status();
+      setSignalStatus(status);
+
+      if (hydrateForm && !signalForm.isFieldsTouched()) {
+        signalForm.setFieldsValue({ host: status.host, port: status.port });
+        signalFormHydratedRef.current = true;
+      }
+    } catch (error) {
+      messageApi.error(`Failed to load signal generation status: ${error.message}`);
+    } finally {
+      if (initial) {
+        setSignalInitialLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'signal-generation') {
+      const shouldHydrate = !signalFormHydratedRef.current;
+      loadSignalStatus({ initial: true, hydrateForm: shouldHydrate });
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'signal-generation') {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      loadSignalStatus({ initial: false, hydrateForm: false });
+    }, 3000);
+
+    return () => window.clearInterval(intervalId);
   }, [activeTab]);
 
   const handleBackupDownload = async () => {
@@ -377,6 +457,97 @@ const Settings = () => {
     );
   };
 
+  const SignalGenerationTabContent = () => {
+    const handleSave = async () => {
+      try {
+        const values = await signalForm.validateFields();
+        setSignalSaving(true);
+        const status = await signalGenerationApi.configure({
+          host: values.host,
+          port: Number(values.port),
+        });
+        setSignalStatus(status);
+        signalForm.setFieldsValue({ host: status.host, port: status.port });
+        signalFormHydratedRef.current = true;
+        messageApi.success('Signal generation settings saved');
+      } catch (error) {
+        if (error?.errorFields) {
+          return;
+        }
+        messageApi.error(error.message || 'Failed to save signal generation settings');
+      } finally {
+        setSignalSaving(false);
+      }
+    };
+
+    const handleStart = async () => {
+      setSignalStarting(true);
+      try {
+        const status = await signalGenerationApi.start();
+        setSignalStatus(status);
+        messageApi.success('Signal generation started');
+      } catch (error) {
+        messageApi.error(error.message || 'Failed to start signal generation');
+      } finally {
+        setSignalStarting(false);
+      }
+    };
+
+    const handleStop = async () => {
+      setSignalStopping(true);
+      try {
+        const status = await signalGenerationApi.stop();
+        setSignalStatus(status);
+        messageApi.success('Signal generation stopped');
+      } catch (error) {
+        messageApi.error(error.message || 'Failed to stop signal generation');
+      } finally {
+        setSignalStopping(false);
+      }
+    };
+
+    return (
+      <Card title="Signal generation" loading={signalInitialLoading}>
+        <Form form={signalForm} layout="vertical">
+          <Form.Item
+            label="Host"
+            name="host"
+            rules={[
+              { required: true, message: 'Please enter host' },
+              { whitespace: true, message: 'Host cannot be empty' },
+            ]}
+          >
+            <Input placeholder="127.0.0.1" disabled={signalStatus.running} />
+          </Form.Item>
+          <Form.Item
+            label="Port"
+            name="port"
+            rules={[
+              { required: true, message: 'Please enter port' },
+              { pattern: /^\d+$/, message: 'Port must be a number' },
+            ]}
+          >
+            <Input placeholder="4200" disabled={signalStatus.running} />
+          </Form.Item>
+          <Space>
+            <Button onClick={handleSave} loading={signalSaving} disabled={signalStatus.running}>
+              Save
+            </Button>
+            <Button type="primary" onClick={handleStart} loading={signalStarting} disabled={signalStatus.running}>
+              Start
+            </Button>
+            <Button danger onClick={handleStop} loading={signalStopping} disabled={!signalStatus.running}>
+              Stop
+            </Button>
+          </Space>
+          <p style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>
+            Status: {signalStatus.running ? 'running' : 'stopped'}
+          </p>
+        </Form>
+      </Card>
+    );
+  };
+
   const items = [
     {
       key: 'about',
@@ -431,6 +602,11 @@ const Settings = () => {
       label: 'Routes',
       children: <RoutesTabContent />,
     },
+    {
+      key: 'signal-generation',
+      label: 'Signal generation',
+      children: <SignalGenerationTabContent />,
+    },
   ];
 
   return (
@@ -446,7 +622,10 @@ const Settings = () => {
         <Card>
           <Tabs
             activeKey={activeTab}
-            onChange={setActiveTab}
+            onChange={(key) => {
+              setActiveTab(key);
+              navigate(`/settings/${tabPathByKey[key]}`);
+            }}
             items={items}
             tabPosition="left"
           />

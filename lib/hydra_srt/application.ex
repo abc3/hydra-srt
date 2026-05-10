@@ -28,6 +28,7 @@ defmodule HydraSrt.Application do
        keys: :unique, name: HydraSrt.Registry.MsgHandlers, partitions: runtime_schedulers},
       HydraSrt.Repo,
       HydraSrt.AuthCleanup,
+      HydraSrt.SignalGenerator,
       {Task.Supervisor, name: HydraSrt.TaskSupervisor},
       {Adbc.Database,
        driver: :duckdb,
@@ -54,10 +55,6 @@ defmodule HydraSrt.Application do
     :ok = HydraSrt.Auth.startup_cleanup()
     :ok = HydraSrt.Demo.bootstrap(demo_enabled?)
     :ok = recover_routes_after_startup()
-
-    if demo_enabled? do
-      {:ok, _child} = Supervisor.start_child(pid, HydraSrt.DemoFfmpegServer)
-    end
 
     {:ok, pid}
   end

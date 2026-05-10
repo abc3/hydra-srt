@@ -83,6 +83,23 @@ export const systemPipelinesApi = {
   },
 };
 
+export const signalGenerationApi = {
+  status: async () => requestJson('/api/system/signal-generation', {}, 'Failed to load signal generation status'),
+
+  configure: async ({ host, port }) => requestJson('/api/system/signal-generation', {
+    method: 'PUT',
+    body: JSON.stringify({ host, port }),
+  }, 'Failed to save signal generation settings'),
+
+  start: async () => requestJson('/api/system/signal-generation/start', {
+    method: 'POST',
+  }, 'Failed to start signal generation'),
+
+  stop: async () => requestJson('/api/system/signal-generation/stop', {
+    method: 'POST',
+  }, 'Failed to stop signal generation'),
+};
+
 // Nodes API
 export const nodesApi = {
   // Get all nodes

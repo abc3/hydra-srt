@@ -46,7 +46,7 @@ defmodule HydraSrt.Demo do
         {:ok, route} =
           Api.create_route(%{
             name: @demo_route_name,
-            enabled: true
+            enabled: false
           })
 
         route

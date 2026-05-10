@@ -3,6 +3,7 @@ defmodule HydraSrtWeb.SystemController do
 
   alias HydraSrt.ProcessMonitor
   alias HydraSrt.Helpers
+  alias HydraSrt.SignalGenerator
 
   def list_pipelines(conn, _params) do
     pipelines = ProcessMonitor.list_pipeline_processes()
@@ -30,4 +31,63 @@ defmodule HydraSrtWeb.SystemController do
         |> json(%{error: "Failed to kill process: #{inspect(error)}"})
     end
   end
+
+  def signal_generation_status(conn, _params) do
+    json(conn, SignalGenerator.status())
+  end
+
+  def signal_generation_configure(conn, %{"host" => host, "port" => port}) do
+    with {:ok, port_i} <- parse_port(port),
+         {:ok, status} <- SignalGenerator.configure(host, port_i) do
+      json(conn, status)
+    else
+      {:error, :invalid_port} ->
+        conn
+        |> put_status(400)
+        |> json(%{error: "Invalid port"})
+
+      {:error, :invalid_host} ->
+        conn
+        |> put_status(400)
+        |> json(%{error: "Invalid host"})
+
+      {:error, :running} ->
+        conn
+        |> put_status(409)
+        |> json(%{error: "Stop signal generation before changing host/port"})
+    end
+  end
+
+  def signal_generation_start(conn, _params) do
+    case SignalGenerator.start_generation() do
+      {:ok, status} ->
+        json(conn, status)
+
+      {:error, :already_running} ->
+        conn
+        |> put_status(409)
+        |> json(%{error: "Signal generation already running"})
+
+      {:error, :ffmpeg_not_found} ->
+        conn
+        |> put_status(500)
+        |> json(%{error: "ffmpeg is not installed or not available in PATH"})
+    end
+  end
+
+  def signal_generation_stop(conn, _params) do
+    {:ok, status} = SignalGenerator.stop_generation()
+    json(conn, status)
+  end
+
+  defp parse_port(port) when is_integer(port), do: {:ok, port}
+
+  defp parse_port(port) when is_binary(port) do
+    case Integer.parse(port) do
+      {value, ""} -> {:ok, value}
+      _ -> {:error, :invalid_port}
+    end
+  end
+
+  defp parse_port(_port), do: {:error, :invalid_port}
 end

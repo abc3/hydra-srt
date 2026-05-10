@@ -160,9 +160,30 @@ To run HydraSRT locally, start the Elixir app and Phoenix will also launch the V
 make dev
 ```
 
+Web UI dev server is fixed to:
+
+- `host: localhost`
+- `port: 5173`
+- `strictPort: true`
+
+If `5173` is already in use, Vite will fail to start instead of switching to another port.
+
+For Docker/remote dev you can override this behavior:
+
+- `VITE_DEV_HOST` (example: `0.0.0.0`)
+- `VITE_DEV_PORT` (example: `5173`)
+- `VITE_DEV_STRICT_PORT` (example: `false`)
+
+Example:
+
+```bash
+cd web_app
+VITE_DEV_HOST=0.0.0.0 VITE_DEV_STRICT_PORT=false yarn dev
+```
+
 ### Demo Mode
 
-HydraSRT can bootstrap a local demo route and start a generated test stream when `DEMO_DATA=true`.
+HydraSRT can bootstrap local demo entities when `DEMO_DATA=true`.
 
 ```bash
 DEMO_DATA=true make dev
@@ -176,8 +197,15 @@ When demo mode is enabled:
 - destinations:
   - `srt://127.0.0.1:4201?mode=listener`
   - `udp://127.0.0.1:4202` (for local playback)
+- `demo_route` is created with `enabled: false` (it is not auto-started)
 
-You can verify playback with `ffplay`:
+After startup with `DEMO_DATA=true`, run signal generation manually:
+
+1. Open [http://localhost:5173/#/settings/signal-generation](http://localhost:5173/#/settings/signal-generation)
+2. Click `Start` in the `Signal generation` section
+3. Start `demo_route` from the Routes UI
+
+Then verify playback with `ffplay`:
 
 ```bash
 # SRT destination
