@@ -13,6 +13,7 @@ import Interfaces from './pages/interfaces/Interfaces';
 import InterfaceEdit from './pages/interfaces/InterfaceEdit';
 import SystemPipelines from './pages/system/SystemPipelines';
 import SystemNodes from './pages/system/SystemNodes';
+import SystemNodeMetrics from './pages/system/SystemNodeMetrics';
 import Login from './pages/Login';
 import { isAuthenticated } from './utils/auth';
 import { ROUTES } from './utils/constants';
@@ -192,6 +193,22 @@ const App = () => {
           <ProtectedRoute>
             <MainLayout>
               <SystemNodes />
+            </MainLayout>
+          </ProtectedRoute>
+        } />
+
+        <Route path="/system/nodes/:id" element={
+          <ProtectedRoute>
+            <MainLayout>
+              <SystemNodeMetrics />
+            </MainLayout>
+          </ProtectedRoute>
+        } />
+
+        <Route path="/system/nodes/:id/metrics" element={
+          <ProtectedRoute>
+            <MainLayout>
+              <SystemNodeMetrics />
             </MainLayout>
           </ProtectedRoute>
         } />

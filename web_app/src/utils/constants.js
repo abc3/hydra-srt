@@ -48,4 +48,5 @@ export const ROUTES = {
   SETTINGS: '/settings',
   SYSTEM_PIPELINES: '/system/pipelines',
   SYSTEM_NODES: '/system/nodes',
+  SYSTEM_NODE_METRICS: '/system/nodes/:id',
 };

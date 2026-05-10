@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Table, Card, Space, Typography, Progress, theme } from 'antd';
 import { ArrowDownOutlined, ArrowUpOutlined, HomeOutlined } from '@ant-design/icons';
+import { Link } from 'react-router-dom';
 import { subscribeToNodes } from '../../utils/realtime';
 import { ROUTES } from '../../utils/constants';
 
@@ -73,7 +74,11 @@ const SystemNodes = () => {
       title: 'Host',
       dataIndex: 'host',
       key: 'host',
-      render: (text) => <strong>{formatHostOnly(text)}</strong>,
+      render: (text) => (
+        <Link to={`/system/nodes/${encodeURIComponent(String(text || ''))}`}>
+          <strong>{formatHostOnly(text)}</strong>
+        </Link>
+      ),
     },
     {
       title: 'CPU',

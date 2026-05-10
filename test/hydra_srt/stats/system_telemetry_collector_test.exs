@@ -71,7 +71,7 @@ defmodule HydraSrt.Stats.SystemTelemetryCollectorTest do
            ]
 
     assert Enum.all?(net_rows, &(&1.entity_type == "net_if"))
-    assert Enum.all?(net_rows, &(&1.entity_id == "eth0"))
+    assert Enum.all?(net_rows, &String.ends_with?(&1.entity_id, ":eth0"))
 
     assert Enum.map(net_rows, & &1.metric_key) |> Enum.sort() == [
              "net_rx_bytes_per_sec",

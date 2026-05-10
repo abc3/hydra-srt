@@ -12,6 +12,12 @@ defmodule HydraSrt.Stats.Analytics do
   @bucket_30_seconds_ms 30_000
   @bucket_1_minute_ms 60_000
   @bucket_5_minutes_ms 300_000
+  @bucket_15_minutes_ms 900_000
+  @bucket_30_minutes_ms 1_800_000
+  @bucket_1_hour_ms 3_600_000
+  @default_max_points 300
+  @min_max_points 50
+  @max_max_points 2_000
 
   @type query_params :: %{
           required(:from) => DateTime.t(),
@@ -22,8 +28,10 @@ defmodule HydraSrt.Stats.Analytics do
 
   @spec build_query_params(map()) :: {:ok, query_params()} | {:error, {:bad_request, binary()}}
   def build_query_params(params) when is_map(params) do
+    max_points = parse_max_points(Map.get(params, "max_points"), @default_max_points)
+
     with {:ok, range} <- parse_range(params),
-         {:ok, bucket_ms} <- bucket_ms_for_range(range.from, range.to) do
+         {:ok, bucket_ms} <- bucket_ms_for_range(range.from, range.to, max_points) do
       {:ok,
        %{
          from: range.from,
@@ -79,6 +87,65 @@ defmodule HydraSrt.Stats.Analytics do
            source_timeline:
              source_timeline_from_switches(switches, query_params, initial_source_id),
            srt_quality: srt_quality,
+           meta: %{
+             from: DateTime.to_iso8601(query_params.from),
+             to: DateTime.to_iso8601(query_params.to),
+             window: query_params.window,
+             bucket_ms: query_params.bucket_ms
+           }
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @spec fetch_node_timeseries(binary(), query_params(), GenServer.server()) ::
+          {:ok, map()} | {:error, term()}
+  def fetch_node_timeseries(node_id, query_params, conn \\ HydraSrt.AnalyticsConn)
+      when is_binary(node_id) and is_map(query_params) do
+    node_netif_prefix = "#{node_id}:%"
+
+    sql = """
+    WITH sampled AS (
+      SELECT
+        to_timestamp(FLOOR(epoch_ms(ts)::DOUBLE / ?) * ? / 1000.0) AS bucket_ts,
+        entity_type,
+        entity_id,
+        metric_key,
+        avg(value_double) AS metric_value
+      FROM stats_samples
+      WHERE route_id IS NULL
+        AND (
+          (entity_type = 'node' AND entity_id = ? AND metric_key IN ('cpu_util', 'ram_usage', 'swap_usage', 'cpu_la_avg1', 'cpu_la_avg5', 'cpu_la_avg15'))
+          OR
+          (entity_type = 'net_if' AND entity_id LIKE ? AND metric_key IN ('net_rx_bytes_per_sec', 'net_tx_bytes_per_sec'))
+        )
+        AND ts >= CAST(? AS TIMESTAMP)
+        AND ts <= CAST(? AS TIMESTAMP)
+      GROUP BY 1, 2, 3, 4
+    )
+    SELECT bucket_ts, entity_type, entity_id, metric_key, metric_value
+    FROM sampled
+    ORDER BY bucket_ts ASC, entity_type ASC, entity_id ASC, metric_key ASC
+    """
+
+    params = [
+      query_params.bucket_ms,
+      query_params.bucket_ms,
+      node_id,
+      node_netif_prefix,
+      DateTime.to_iso8601(query_params.from),
+      DateTime.to_iso8601(query_params.to)
+    ]
+
+    case Adbc.Connection.query(conn, sql, params) do
+      {:ok, result} ->
+        rows = result |> Adbc.Result.to_map() |> node_rows_from_columns()
+
+        {:ok,
+         %{
+           points: node_points_from_rows(rows),
            meta: %{
              from: DateTime.to_iso8601(query_params.from),
              to: DateTime.to_iso8601(query_params.to),
@@ -200,22 +267,53 @@ defmodule HydraSrt.Stats.Analytics do
     end
   end
 
-  @spec bucket_ms_for_range(DateTime.t(), DateTime.t()) ::
+  @spec bucket_ms_for_range(DateTime.t(), DateTime.t(), pos_integer()) ::
           {:ok, pos_integer()} | {:error, {:bad_request, binary()}}
-  def bucket_ms_for_range(from_dt, to_dt) do
+  def bucket_ms_for_range(from_dt, to_dt, max_points \\ @default_max_points) do
     range_seconds = DateTime.diff(to_dt, from_dt, :second)
 
     if range_seconds <= 0 do
       {:error, {:bad_request, "Invalid range: from must be earlier than to"}}
     else
-      cond do
-        range_seconds <= 60 * 60 -> {:ok, @bucket_10_seconds_ms}
-        range_seconds <= 6 * 60 * 60 -> {:ok, @bucket_30_seconds_ms}
-        range_seconds <= 24 * 60 * 60 -> {:ok, @bucket_1_minute_ms}
-        true -> {:ok, @bucket_5_minutes_ms}
-      end
+      normalized_max_points = parse_max_points(max_points, @default_max_points)
+      range_ms = range_seconds * 1_000
+      raw_bucket_ms = ceil(range_ms / normalized_max_points)
+      {:ok, normalize_bucket_ms(raw_bucket_ms)}
     end
   end
+
+  defp normalize_bucket_ms(raw_bucket_ms) when is_integer(raw_bucket_ms) and raw_bucket_ms > 0 do
+    [
+      @bucket_10_seconds_ms,
+      @bucket_30_seconds_ms,
+      @bucket_1_minute_ms,
+      @bucket_5_minutes_ms,
+      @bucket_15_minutes_ms,
+      @bucket_30_minutes_ms,
+      @bucket_1_hour_ms
+    ]
+    |> Enum.find(@bucket_1_hour_ms, fn bucket -> bucket >= raw_bucket_ms end)
+  end
+
+  defp parse_max_points(nil, default), do: default
+
+  defp parse_max_points(value, _default) when is_integer(value) do
+    value
+    |> max(@min_max_points)
+    |> min(@max_max_points)
+  end
+
+  defp parse_max_points(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} ->
+        parse_max_points(parsed, default)
+
+      _ ->
+        default
+    end
+  end
+
+  defp parse_max_points(_value, default), do: default
 
   @spec rows_from_columns(map()) :: [map()]
   def rows_from_columns(columns) when is_map(columns) do
@@ -585,4 +683,96 @@ defmodule HydraSrt.Stats.Analytics do
       end)
     end
   end
+
+  defp node_rows_from_columns(columns) when is_map(columns) do
+    length =
+      columns
+      |> Map.values()
+      |> List.first([])
+      |> Kernel.length()
+
+    if length == 0 do
+      []
+    else
+      Enum.map(0..(length - 1), fn index ->
+        %{
+          bucket_ts: value_at(columns, "bucket_ts", index),
+          entity_type: value_at(columns, "entity_type", index),
+          entity_id: value_at(columns, "entity_id", index),
+          metric_key: value_at(columns, "metric_key", index),
+          metric_value: value_at(columns, "metric_value", index)
+        }
+      end)
+      |> Enum.reject(&is_nil(&1.bucket_ts))
+    end
+  end
+
+  defp node_points_from_rows(rows) when is_list(rows) do
+    rows
+    |> Enum.reduce(%{}, fn row, acc ->
+      timestamp = normalize_timestamp(row.bucket_ts)
+
+      current =
+        Map.get(acc, timestamp, %{
+          timestamp: timestamp,
+          cpu: nil,
+          ram: nil,
+          swap: nil,
+          la_avg1: nil,
+          la_avg5: nil,
+          la_avg15: nil
+        })
+
+      value = number_or_nil(row.metric_value)
+
+      updated =
+        cond do
+          row.entity_type == "node" and row.metric_key == "cpu_util" ->
+            Map.put(current, :cpu, value)
+
+          row.entity_type == "node" and row.metric_key == "ram_usage" ->
+            Map.put(current, :ram, value)
+
+          row.entity_type == "node" and row.metric_key == "swap_usage" ->
+            Map.put(current, :swap, value)
+
+          row.entity_type == "node" and row.metric_key == "cpu_la_avg1" ->
+            Map.put(current, :la_avg1, value)
+
+          row.entity_type == "node" and row.metric_key == "cpu_la_avg5" ->
+            Map.put(current, :la_avg5, value)
+
+          row.entity_type == "node" and row.metric_key == "cpu_la_avg15" ->
+            Map.put(current, :la_avg15, value)
+
+          row.entity_type == "net_if" and row.metric_key == "net_rx_bytes_per_sec" ->
+            case net_interface_name(row.entity_id) do
+              nil -> current
+              interface_name -> Map.put(current, :"net_in_#{interface_name}", value)
+            end
+
+          row.entity_type == "net_if" and row.metric_key == "net_tx_bytes_per_sec" ->
+            case net_interface_name(row.entity_id) do
+              nil -> current
+              interface_name -> Map.put(current, :"net_out_#{interface_name}", value)
+            end
+
+          true ->
+            current
+        end
+
+      Map.put(acc, timestamp, updated)
+    end)
+    |> Map.values()
+    |> Enum.sort_by(& &1.timestamp)
+  end
+
+  defp net_interface_name(entity_id) when is_binary(entity_id) do
+    case String.split(entity_id, ":", parts: 2) do
+      [_node, interface_name] when interface_name != "" -> interface_name
+      _ -> entity_id
+    end
+  end
+
+  defp net_interface_name(_entity_id), do: nil
 end

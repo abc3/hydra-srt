@@ -35,7 +35,7 @@ import {
   ApiOutlined,
   SwapOutlined,
 } from '@ant-design/icons';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { routesApi, destinationsApi, sourcesApi } from '../../utils/api';
 import {
   subscribeToItemSource,
@@ -86,6 +86,7 @@ const ANALYTICS_WINDOW_OPTIONS = [
   { label: 'last 24 hour', value: 'last_24_hour' },
   { label: 'custom range', value: CUSTOM_ANALYTICS_WINDOW },
 ];
+const ANALYTICS_WINDOW_VALUES = new Set(ANALYTICS_WINDOW_OPTIONS.map((item) => item.value));
 
 const getRuntimeStatusMeta = (status) => {
   switch ((status || '').toLowerCase()) {
@@ -182,6 +183,7 @@ const hasRouteReachedActionResult = (route, action) => {
 const RouteItem = () => {
   const navigate = useNavigate();
   const { id } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [routeData, setRouteData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [messageApi, contextHolder] = message.useMessage();
@@ -203,6 +205,7 @@ const RouteItem = () => {
   const [analyticsRefreshTick, setAnalyticsRefreshTick] = useState(0);
   const liveSnapshotBufferRef = useRef(null);
   const liveSnapshotFlushTimerRef = useRef(null);
+  const didInitFromUrlRef = useRef(false);
   const sourceIdsDependency = (routeData?.sources || [])
     .map((source) => source?.id)
     .filter(Boolean)
@@ -399,6 +402,29 @@ const RouteItem = () => {
       setAnalyticsLoading(false);
     }
   }, [id]);
+
+  useEffect(() => {
+    if (didInitFromUrlRef.current) {
+      return;
+    }
+
+    didInitFromUrlRef.current = true;
+    const timeFromUrl = searchParams.get('time');
+    if (timeFromUrl && ANALYTICS_WINDOW_VALUES.has(timeFromUrl)) {
+      setAnalyticsWindow(timeFromUrl);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('time', analyticsWindow);
+
+    const current = searchParams.toString();
+    const next = nextParams.toString();
+    if (current !== next) {
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [analyticsWindow, searchParams, setSearchParams]);
 
   useEffect(() => {
     if (!id) {

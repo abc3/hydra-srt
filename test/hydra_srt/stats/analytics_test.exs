@@ -6,8 +6,20 @@ defmodule HydraSrt.Stats.AnalyticsTest do
   test "build_query_params resolves known window" do
     assert {:ok, params} = Analytics.build_query_params(%{"window" => "last_hour"})
     assert params.window == "last_hour"
-    assert params.bucket_ms == 10_000
+    assert params.bucket_ms == 30_000
     assert DateTime.compare(params.from, params.to) == :lt
+  end
+
+  test "build_query_params downsamples 24h window with default max_points" do
+    assert {:ok, params} = Analytics.build_query_params(%{"window" => "last_24_hour"})
+    assert params.bucket_ms == 300_000
+  end
+
+  test "build_query_params honors max_points override" do
+    assert {:ok, params} =
+             Analytics.build_query_params(%{"window" => "last_24_hour", "max_points" => "120"})
+
+    assert params.bucket_ms == 900_000
   end
 
   test "source_timeline_from_switches builds contiguous segments" do

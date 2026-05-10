@@ -215,13 +215,15 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
   end
 
   defp network_rows(measurements, interface) when is_map(measurements) and is_binary(interface) do
+    node_interface_id = "#{Atom.to_string(node())}:#{interface}"
+
     [
       metric_rows(measurements, NetIfMetrics.total_metric_keys()),
       metric_rows(measurements, net_rate_measurement_keys())
     ]
     |> List.flatten()
     |> Enum.map(&Map.put(&1, :entity_type, "net_if"))
-    |> Enum.map(&Map.put(&1, :entity_id, interface))
+    |> Enum.map(&Map.put(&1, :entity_id, node_interface_id))
   end
 
   defp network_rows(_measurements, _interface), do: []
