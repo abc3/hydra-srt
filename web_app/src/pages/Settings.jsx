@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
-import { Typography, Button, Card, Space, message, Tabs, Modal, Descriptions } from 'antd';
-import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
-import { backupApi } from '../utils/api';
+import { Typography, Button, Card, Space, message, Tabs, Modal, Descriptions, Table, Form, Input, Popconfirm } from 'antd';
+import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import { backupApi, tagsApi } from '../utils/api';
 import { ROUTES } from '../utils/constants';
 import { useInit } from '../context/InitContext';
 
@@ -12,6 +12,12 @@ const Settings = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [isDownloadingRoutes, setIsDownloadingRoutes] = useState(false);
+  const [tags, setTags] = useState([]);
+  const [tagsLoading, setTagsLoading] = useState(false);
+  const [tagModalOpen, setTagModalOpen] = useState(false);
+  const [savingTag, setSavingTag] = useState(false);
+  const [editingTag, setEditingTag] = useState(null);
+  const [tagForm] = Form.useForm();
   const fileInputRef = useRef(null);
   const [modal, modalContextHolder] = Modal.useModal();
   const [messageApi, contextHolder] = message.useMessage();
@@ -32,6 +38,25 @@ const Settings = () => {
       ]);
     }
   }, []);
+
+  const loadTags = async () => {
+    setTagsLoading(true);
+    try {
+      const result = await tagsApi.list();
+      setTags(Array.isArray(result?.data) ? result.data : []);
+    } catch (error) {
+      messageApi.error(`Failed to load tags: ${error.message}`);
+      setTags([]);
+    } finally {
+      setTagsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'route-tags') {
+      loadTags();
+    }
+  }, [activeTab]);
 
   const handleBackupDownload = async () => {
     setIsDownloading(true);
@@ -174,6 +199,59 @@ const Settings = () => {
     });
   };
 
+  const openCreateTagModal = () => {
+    setEditingTag(null);
+    tagForm.setFieldsValue({ name: '' });
+    setTagModalOpen(true);
+  };
+
+  const openEditTagModal = (tag) => {
+    setEditingTag(tag);
+    tagForm.setFieldsValue({ name: tag?.name || '' });
+    setTagModalOpen(true);
+  };
+
+  const handleTagModalCancel = () => {
+    setTagModalOpen(false);
+    setEditingTag(null);
+    tagForm.resetFields();
+  };
+
+  const handleTagSave = async () => {
+    try {
+      const values = await tagForm.validateFields();
+      setSavingTag(true);
+
+      if (editingTag?.id) {
+        await tagsApi.update(editingTag.id, { name: values.name });
+        messageApi.success('Tag updated');
+      } else {
+        await tagsApi.create({ name: values.name });
+        messageApi.success('Tag created');
+      }
+
+      handleTagModalCancel();
+      await loadTags();
+    } catch (error) {
+      if (error?.errorFields) {
+        return;
+      }
+      messageApi.error(error.message || 'Failed to save tag');
+    } finally {
+      setSavingTag(false);
+    }
+  };
+
+  const handleDeleteTag = async (tagId) => {
+    try {
+      await tagsApi.delete(tagId);
+      messageApi.success('Tag deleted');
+      await loadTags();
+    } catch (error) {
+      messageApi.error(`Failed to delete tag: ${error.message}`);
+    }
+  };
+
   // Backup tab content
   const BackupTabContent = () => {
     return (
@@ -246,6 +324,59 @@ const Settings = () => {
     );
   };
 
+  const RouteTagsTabContent = () => {
+    const columns = [
+      {
+        title: 'Name',
+        dataIndex: 'name',
+        key: 'name',
+      },
+      {
+        title: 'Actions',
+        key: 'actions',
+        width: 180,
+        render: (_, record) => (
+          <Space>
+            <Button icon={<EditOutlined />} onClick={() => openEditTagModal(record)}>
+              Edit
+            </Button>
+            <Popconfirm
+              title="Delete tag?"
+              description="This will remove the tag from all routes."
+              okText="Delete"
+              cancelText="Cancel"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => handleDeleteTag(record.id)}
+            >
+              <Button danger icon={<DeleteOutlined />}>
+                Delete
+              </Button>
+            </Popconfirm>
+          </Space>
+        ),
+      },
+    ];
+
+    return (
+      <Card
+        title="Route tags"
+        extra={(
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateTagModal}>
+            Add tag
+          </Button>
+        )}
+      >
+        <Table
+          rowKey="id"
+          columns={columns}
+          dataSource={tags}
+          loading={tagsLoading}
+          pagination={false}
+        />
+      </Card>
+    );
+  };
+
   const items = [
     {
       key: 'about',
@@ -286,6 +417,11 @@ const Settings = () => {
       ),
     },
     {
+      key: 'route-tags',
+      label: 'Route tags',
+      children: <RouteTagsTabContent />,
+    },
+    {
       key: 'backup',
       label: 'Backup',
       children: <BackupTabContent />,
@@ -316,6 +452,28 @@ const Settings = () => {
           />
         </Card>
       </Space>
+      <Modal
+        title={editingTag ? 'Edit route tag' : 'Add route tag'}
+        open={tagModalOpen}
+        onOk={handleTagSave}
+        onCancel={handleTagModalCancel}
+        okText="Save"
+        cancelText="Cancel"
+        confirmLoading={savingTag}
+      >
+        <Form form={tagForm} layout="vertical">
+          <Form.Item
+            label="Name"
+            name="name"
+            rules={[
+              { required: true, message: 'Please enter tag name' },
+              { whitespace: true, message: 'Tag name cannot be empty' },
+            ]}
+          >
+            <Input placeholder="Tag name" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

@@ -207,6 +207,50 @@ defmodule HydraSrt.Db do
     |> Repo.all()
   end
 
+  @spec list_tags() :: list(%Tag{})
+  def list_tags do
+    from(t in Tag, order_by: [asc: t.name])
+    |> Repo.all()
+  end
+
+  @spec create_tag(map()) :: {:ok, %Tag{}} | {:error, %Ecto.Changeset{}}
+  def create_tag(attrs) when is_map(attrs) do
+    name =
+      attrs
+      |> Map.get("name", Map.get(attrs, :name))
+      |> to_string()
+      |> String.trim()
+
+    case upsert_tags_by_name([name]) do
+      {:ok, [tag | _]} -> {:ok, tag}
+      {:ok, []} -> {:error, Tag.changeset(%Tag{}, %{name: ""})}
+    end
+  end
+
+  @spec update_tag(String.t(), map()) :: {:ok, %Tag{}} | {:error, :not_found | %Ecto.Changeset{}}
+  def update_tag(id, attrs) when is_binary(id) and is_map(attrs) do
+    case Repo.get(Tag, id) do
+      nil ->
+        {:error, :not_found}
+
+      %Tag{} = tag ->
+        tag
+        |> Tag.changeset(attrs)
+        |> Repo.update()
+    end
+  end
+
+  @spec delete_tag(String.t()) :: {:ok, %Tag{}} | {:error, :not_found | %Ecto.Changeset{}}
+  def delete_tag(id) when is_binary(id) do
+    case Repo.get(Tag, id) do
+      nil ->
+        {:error, :not_found}
+
+      %Tag{} = tag ->
+        Repo.delete(tag)
+    end
+  end
+
   @spec upsert_tags_by_name(list(String.t())) :: {:ok, list(%Tag{})} | {:error, any()}
   def upsert_tags_by_name(names) when is_list(names) do
     upsert_tags_by_name(Repo, names)

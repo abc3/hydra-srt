@@ -228,6 +228,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
         const values = {
           ...route,
+          node: route?.node || 'self',
           sources,
           destinations: Array.isArray(route?.destinations) && route.destinations.length > 0
             ? route.destinations
@@ -391,44 +392,38 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         tags: Array.isArray(values.tags) ? values.tags : [],
       };
 
-      const sources = (values.sources || []).map((source, index) => normalizeSourcePayload(source, index));
-      // Destination fields are only mounted for new routes (Form.List is behind `isNew`), so on edit
-      // `values.destinations` is empty even though the route has destinations — do not validate that here.
       const destinations = values.destinations || [];
-
-      if (sources.length === 0) {
-        loadingMessage();
-        messageApi.error('At least one source is required');
-        return;
-      }
-
-      if (isNew && destinations.length === 0) {
-        loadingMessage();
-        messageApi.error('At least one destination is required');
-        return;
-      }
+      const sources = values.sources || [];
 
       let routeId = id;
-      let existingSources = routeData?.sources || [];
 
       if (isNew) {
+        if (sources.length === 0) {
+          loadingMessage();
+          messageApi.error('At least one source is required');
+          return;
+        }
+
+        if (destinations.length === 0) {
+          loadingMessage();
+          messageApi.error('At least one destination is required');
+          return;
+        }
+
         const created = await routesApi.create(routePayload);
         routeId = created?.data?.id;
         if (!routeId) {
           throw new Error('Route id missing after create');
         }
+
+        const keptIds = await saveSources(routeId, sources, []);
+        await createDestinations(routeId, destinations);
+
+        if (routeData?.active_source_id && !keptIds.includes(routeData.active_source_id) && keptIds[0]) {
+          await routesApi.switchSource(routeId, keptIds[0]);
+        }
       } else {
         await routesApi.update(routeId, routePayload);
-      }
-
-      const keptIds = await saveSources(routeId, values.sources || [], existingSources);
-
-      if (isNew) {
-        await createDestinations(routeId, destinations);
-      }
-
-      if (!isNew && routeData?.active_source_id && !keptIds.includes(routeData.active_source_id) && keptIds[0]) {
-        await routesApi.switchSource(routeId, keptIds[0]);
       }
 
       loadingMessage();
@@ -658,7 +653,8 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                   </Form.Item>
                 </Card>
 
-                <Form.List name="sources">
+                {isNew && (
+                  <Form.List name="sources">
                   {(fields, { add, remove, move }) => (
                     <Space direction="vertical" size="middle" style={{ width: '100%', maxWidth: '700px' }}>
                       {fields.map((field, index) => (
@@ -859,7 +855,8 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                       </Button>
                     </Space>
                   )}
-                </Form.List>
+                  </Form.List>
+                )}
 
                 {isNew && (
                   <Form.List name="destinations">

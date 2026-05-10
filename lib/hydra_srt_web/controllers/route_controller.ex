@@ -19,7 +19,27 @@ defmodule HydraSrtWeb.RouteController do
   end
 
   def list_tags(conn, _params) do
-    data(conn, Db.list_all_tags())
+    data(conn, Enum.map(Db.list_tags(), &serialize_tag/1))
+  end
+
+  def create_tag(conn, %{"tag" => tag_params}) do
+    with {:ok, tag} <- Db.create_tag(tag_params) do
+      conn
+      |> put_status(:created)
+      |> data(serialize_tag(tag))
+    end
+  end
+
+  def update_tag(conn, %{"id" => id, "tag" => tag_params}) do
+    with {:ok, tag} <- Db.update_tag(id, tag_params) do
+      data(conn, serialize_tag(tag))
+    end
+  end
+
+  def delete_tag(conn, %{"id" => id}) do
+    with {:ok, _tag} <- Db.delete_tag(id) do
+      send_resp(conn, :no_content, "")
+    end
   end
 
   def create(conn, %{"route" => route_params}) do
@@ -158,6 +178,15 @@ defmodule HydraSrtWeb.RouteController do
   end
 
   defp data(conn, data), do: json(conn, %{data: data})
+
+  defp serialize_tag(tag) do
+    %{
+      id: tag.id,
+      name: tag.name,
+      inserted_at: tag.inserted_at,
+      updated_at: tag.updated_at
+    }
+  end
 
   defp client_probe_error(reason) do
     reason

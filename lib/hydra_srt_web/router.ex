@@ -37,6 +37,9 @@ defmodule HydraSrtWeb.Router do
     pipe_through [:api, :auth]
     post "/routes/test-source", RouteController, :test_source
     get "/tags", RouteController, :list_tags
+    post "/tags", RouteController, :create_tag
+    put "/tags/:id", RouteController, :update_tag
+    delete "/tags/:id", RouteController, :delete_tag
     resources "/routes", RouteController, except: [:new, :edit]
     get "/routes/:route_id/analytics", RouteController, :analytics
     get "/routes/:route_id/events", RouteController, :events

@@ -391,10 +391,37 @@ export const backupApi = {
 
 // Tags API
 export const tagsApi = {
-  // Get all unique tags used across all routes
+  // Get all unique tag names used across routes (compat for existing selectors)
   getAll: async () => {
     const response = await authFetch('/api/tags');
+    const payload = await response.json();
+    const list = Array.isArray(payload?.data) ? payload.data : [];
+    return { data: list.map((tag) => tag?.name).filter(Boolean) };
+  },
+
+  list: async () => {
+    const response = await authFetch('/api/tags');
     return response.json();
+  },
+
+  create: async (tagData) => {
+    return requestJson('/api/tags', {
+      method: 'POST',
+      body: JSON.stringify({ tag: tagData }),
+    }, 'Failed to create tag');
+  },
+
+  update: async (id, tagData) => {
+    return requestJson(`/api/tags/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ tag: tagData }),
+    }, 'Failed to update tag');
+  },
+
+  delete: async (id) => {
+    return requestOptionalJson(`/api/tags/${id}`, {
+      method: 'DELETE',
+    }, 'Failed to delete tag');
   },
 };
 
