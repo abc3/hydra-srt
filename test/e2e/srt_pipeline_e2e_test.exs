@@ -26,11 +26,9 @@ defmodule HydraSrt.E2E.SrtPipelineE2ETest do
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_srt_basic_ok",
         "schema" => "SRT",
-        "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => source_port,
-          "mode" => "listener"
-        }
+        "localaddress" => "127.0.0.1",
+        "localport" => source_port,
+        "mode" => "listener"
       })
 
     on_exit(fn ->
@@ -41,11 +39,9 @@ defmodule HydraSrt.E2E.SrtPipelineE2ETest do
     :ok =
       E2EHelpers.api_create_destination!(base_url, token, route_id, %{
         "schema" => "SRT",
-        "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => sink_port,
-          "mode" => "caller"
-        }
+        "localaddress" => "127.0.0.1",
+        "localport" => sink_port,
+        "mode" => "caller"
       })
 
     rx =

@@ -37,13 +37,11 @@ defmodule HydraSrt.E2E.SrtPipelineEncryptedE2ETest do
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_srt_enc_ok",
         "schema" => "SRT",
-        "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => source_port,
-          "mode" => "listener",
-          "passphrase" => passphrase,
-          "pbkeylen" => pbkeylen
-        }
+        "localaddress" => "127.0.0.1",
+        "localport" => source_port,
+        "mode" => "listener",
+        "passphrase" => passphrase,
+        "pbkeylen" => pbkeylen
       })
 
     on_exit(fn ->
@@ -54,13 +52,11 @@ defmodule HydraSrt.E2E.SrtPipelineEncryptedE2ETest do
     :ok =
       E2EHelpers.api_create_destination!(base_url, token, route_id, %{
         "schema" => "SRT",
-        "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => sink_port,
-          "mode" => "caller",
-          "passphrase" => passphrase,
-          "pbkeylen" => pbkeylen
-        }
+        "localaddress" => "127.0.0.1",
+        "localport" => sink_port,
+        "mode" => "caller",
+        "passphrase" => passphrase,
+        "pbkeylen" => pbkeylen
       })
 
     sink_file = E2EHelpers.tmp_file!("e2e_srt_enc_ok_sink", "ts")
@@ -162,13 +158,11 @@ defmodule HydraSrt.E2E.SrtPipelineEncryptedE2ETest do
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_srt_enc_wrong_pass",
         "schema" => "SRT",
-        "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => source_port,
-          "mode" => "listener",
-          "passphrase" => passphrase,
-          "pbkeylen" => pbkeylen
-        }
+        "localaddress" => "127.0.0.1",
+        "localport" => source_port,
+        "mode" => "listener",
+        "passphrase" => passphrase,
+        "pbkeylen" => pbkeylen
       })
 
     on_exit(fn ->
@@ -179,13 +173,11 @@ defmodule HydraSrt.E2E.SrtPipelineEncryptedE2ETest do
     :ok =
       E2EHelpers.api_create_destination!(base_url, token, route_id, %{
         "schema" => "SRT",
-        "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => sink_port,
-          "mode" => "caller",
-          "passphrase" => passphrase,
-          "pbkeylen" => pbkeylen
-        }
+        "localaddress" => "127.0.0.1",
+        "localport" => sink_port,
+        "mode" => "caller",
+        "passphrase" => passphrase,
+        "pbkeylen" => pbkeylen
       })
 
     sink_file = E2EHelpers.tmp_file!("e2e_srt_enc_wrong_sink", "ts")
