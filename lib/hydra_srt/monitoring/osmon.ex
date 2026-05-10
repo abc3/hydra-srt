@@ -8,6 +8,7 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
 
   alias HydraSrt.Monitoring.NetIf
   alias HydraSrt.Monitoring.NetIfMetrics
+  alias HydraSrt.Monitoring.OsMon, as: MonitoringOsMon
   alias HydraSrt.Monitoring.OsMonTelemetry
 
   @prefix [:hydra_srt, :prom_ex]
@@ -151,10 +152,10 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
 
   def execute_metrics do
     stats = %{
-      ram: ram_usage(),
-      cpu: cpu_util(),
-      cpu_la: cpu_la(),
-      swap: swap_usage(),
+      ram: MonitoringOsMon.ram_usage(),
+      cpu: MonitoringOsMon.cpu_util(),
+      cpu_la: MonitoringOsMon.cpu_la(),
+      swap: MonitoringOsMon.swap_usage(),
       memory: memory(),
       network: network_snapshot()
     }
@@ -185,12 +186,6 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
     :persistent_term.get(@cache_key, nil)
   end
 
-  @spec ram_usage() :: float()
-  def ram_usage do
-    mem = :memsup.get_system_memory_data()
-    100 - mem[:free_memory] / mem[:total_memory] * 100
-  end
-
   @spec memory() :: map()
   def memory do
     data = :memsup.get_system_memory_data()
@@ -203,33 +198,6 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
       total: data[:total_memory],
       system_total: data[:system_total_memory]
     }
-  end
-
-  @spec cpu_la() :: %{avg1: float(), avg5: float(), avg15: float()}
-  def cpu_la do
-    %{
-      avg1: :cpu_sup.avg1() / 256,
-      avg5: :cpu_sup.avg5() / 256,
-      avg15: :cpu_sup.avg15() / 256
-    }
-  end
-
-  @spec cpu_util() :: float() | {:error, term()}
-  def cpu_util do
-    :cpu_sup.util()
-  end
-
-  @spec swap_usage() :: float() | nil
-  def swap_usage do
-    mem = :memsup.get_system_memory_data()
-
-    with total_swap when is_integer(total_swap) and total_swap > 0 <-
-           Keyword.get(mem, :total_swap),
-         free_swap when is_integer(free_swap) <- Keyword.get(mem, :free_swap) do
-      100 - free_swap / total_swap * 100
-    else
-      _ -> nil
-    end
   end
 
   defp network_snapshot do

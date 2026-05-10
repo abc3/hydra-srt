@@ -24,6 +24,31 @@ defmodule HydraSrt.MonitoringTest do
     assert ram_usage >= 0 and ram_usage <= 100
   end
 
+  test "OsMon ram_usage_from_memory_data prefers available_memory when present" do
+    usage =
+      OsMon.ram_usage_from_memory_data(
+        total_memory: 1000,
+        available_memory: 300,
+        free_memory: 10,
+        cached_memory: 10,
+        buffered_memory: 10
+      )
+
+    assert usage == 70.0
+  end
+
+  test "OsMon ram_usage_from_memory_data falls back to free cached buffered" do
+    usage =
+      OsMon.ram_usage_from_memory_data(
+        total_memory: 1000,
+        free_memory: 200,
+        cached_memory: 100,
+        buffered_memory: 100
+      )
+
+    assert usage == 60.0
+  end
+
   test "OsMon cpu_la returns valid load averages" do
     cpu_la = OsMon.cpu_la()
     assert is_map(cpu_la)
@@ -51,6 +76,29 @@ defmodule HydraSrt.MonitoringTest do
     if is_float(swap_usage) do
       assert swap_usage >= 0 and swap_usage <= 100
     end
+  end
+
+  test "OsMon parse_darwin_swap_usage parses unit values" do
+    output = "vm.swapusage: total = 6.00G  used = 4.96G  free = 1.04G  (encrypted)"
+    usage = OsMon.parse_darwin_swap_usage(output)
+    assert usage > 82.6 and usage < 82.7
+  end
+
+  test "OsMon parse_darwin_swap_usage parses values without unit as bytes" do
+    output = "vm.swapusage: total = 1000  used = 250  free = 750"
+    usage = OsMon.parse_darwin_swap_usage(output)
+    assert usage == 25.0
+  end
+
+  test "OsMon parse_linux_swap_usage parses meminfo" do
+    meminfo = """
+    MemTotal:       16384000 kB
+    SwapTotal:       6291456 kB
+    SwapFree:        1048576 kB
+    """
+
+    usage = OsMon.parse_linux_swap_usage(meminfo)
+    assert usage == 83.33333333333334
   end
 
   test "PromEx OsMon execute_metrics populates persistent_term cache" do
