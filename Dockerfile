@@ -49,7 +49,7 @@ RUN mix local.hex --force && \
     mix local.rebar --force
 
 # Install mix dependencies
-COPY mix.exs mix.lock ./
+COPY mix.exs mix.lock VERSION ./
 RUN mix deps.get --only $MIX_ENV
 RUN mkdir config
 
