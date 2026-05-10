@@ -1,0 +1,142 @@
+name: Release Docker Image
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  verify_ci:
+    name: Verify CI Passed For Release Commit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ensure CI workflow succeeded on release commit
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = context.payload.release.tag_name;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const ref = await github.rest.git.getRef({
+              owner,
+              repo,
+              ref: `tags/${tag}`
+            });
+
+            let commitSha = ref.data.object.sha;
+            if (ref.data.object.type === "tag") {
+              const annotated = await github.rest.git.getTag({
+                owner,
+                repo,
+                tag_sha: ref.data.object.sha
+              });
+              commitSha = annotated.data.object.sha;
+            }
+
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: "ci.yml",
+              head_sha: commitSha,
+              status: "completed",
+              per_page: 50
+            });
+
+            const success = runs.data.workflow_runs.some((run) => run.conclusion === "success");
+
+            if (!success) {
+              core.setFailed(`No successful CI run found for commit ${commitSha} (tag ${tag}).`);
+              return;
+            }
+
+            core.info(`CI check passed for commit ${commitSha} (tag ${tag}).`);
+
+  smoke_build:
+    name: Docker Smoke Build
+    runs-on: ubuntu-latest
+    needs: verify_ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+
+      - name: Validate VERSION matches release tag
+        run: |
+          RAW_TAG="${{ github.event.release.tag_name }}"
+          TAG_VERSION="${RAW_TAG#v}"
+          FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [ "${FILE_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "VERSION mismatch: VERSION file='${FILE_VERSION}', release tag='${RAW_TAG}' (expected '${TAG_VERSION}')"
+            exit 1
+          fi
+          echo "VERSION check passed: ${FILE_VERSION}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (smoke-check)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  dockerhub_publish:
+    name: Build and Push to Docker Hub
+    runs-on: ubuntu-latest
+    needs: smoke_build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+
+      - name: Validate VERSION matches release tag
+        run: |
+          RAW_TAG="${{ github.event.release.tag_name }}"
+          TAG_VERSION="${RAW_TAG#v}"
+          FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [ "${FILE_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "VERSION mismatch: VERSION file='${FILE_VERSION}', release tag='${RAW_TAG}' (expected '${TAG_VERSION}')"
+            exit 1
+          fi
+          echo "VERSION check passed: ${FILE_VERSION}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: streamband/hydra-srt
+          tags: |
+            type=raw,value=${{ github.event.release.tag_name }}
+            type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

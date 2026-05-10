@@ -4,7 +4,7 @@ defmodule HydraSrt.MixProject do
   def project do
     [
       app: :hydra_srt,
-      version: "0.1.0",
+      version: version(),
       compilers: [:rs_native] ++ Mix.compilers(),
       elixir: "~> 1.14",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -28,6 +28,7 @@ defmodule HydraSrt.MixProject do
 
   defp extra_applications(:dev), do: [:wx, :observer]
   defp extra_applications(_), do: []
+  defp version, do: File.read!("./VERSION") |> String.trim()
 
   # Specifies which paths to compile per environment.
   defp elixirc_paths(:test), do: ["lib", "test/support"]
