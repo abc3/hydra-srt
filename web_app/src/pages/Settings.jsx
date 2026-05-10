@@ -1,19 +1,21 @@
 import { useEffect, useState, useRef } from 'react';
-import { Typography, Button, Card, Space, message, Tabs, Modal } from 'antd';
+import { Typography, Button, Card, Space, message, Tabs, Modal, Descriptions } from 'antd';
 import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import { backupApi } from '../utils/api';
 import { ROUTES } from '../utils/constants';
+import { useInit } from '../context/InitContext';
 
 const { Title } = Typography;
 
 const Settings = () => {
-  const [activeTab, setActiveTab] = useState('backup');
+  const [activeTab, setActiveTab] = useState('about');
   const [isDownloading, setIsDownloading] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [isDownloadingRoutes, setIsDownloadingRoutes] = useState(false);
   const fileInputRef = useRef(null);
   const [modal, modalContextHolder] = Modal.useModal();
   const [messageApi, contextHolder] = message.useMessage();
+  const initData = useInit();
 
   // Set breadcrumb items for the Settings page
   useEffect(() => {
@@ -245,6 +247,44 @@ const Settings = () => {
   };
 
   const items = [
+    {
+      key: 'about',
+      label: 'About',
+      children: (
+        <Card title="Application Info">
+          <Descriptions
+            column={1}
+            bordered
+            items={[
+              {
+                key: 'app',
+                label: 'App version',
+                labelStyle: { width: 260, minWidth: 260 },
+                children: initData.version
+              },
+              {
+                key: 'system',
+                label: 'System version',
+                labelStyle: { width: 260, minWidth: 260 },
+                children: initData.system_version
+              },
+              {
+                key: 'elixir',
+                label: 'Elixir version',
+                labelStyle: { width: 260, minWidth: 260 },
+                children: `${initData.elixir_version} ${initData.erlang_version}`
+              },
+              {
+                key: 'rust',
+                label: 'Rust version',
+                labelStyle: { width: 260, minWidth: 260 },
+                children: initData.rust_version
+              },
+            ]}
+          />
+        </Card>
+      ),
+    },
     {
       key: 'backup',
       label: 'Backup',

@@ -4,6 +4,11 @@
 import { authFetch } from './auth';
 import { API_BASE_URL } from './constants';
 
+const publicFetch = async (url, options = {}) => {
+  const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
+  return fetch(fullUrl, options);
+};
+
 const parseJsonResponse = async (response) => {
   const contentType = response.headers.get('content-type');
 
@@ -43,6 +48,16 @@ const requestOptionalJson = async (url, options = {}, fallbackMessage = 'Request
   await throwApiErrorIfNeeded(response, fallbackMessage);
   const payload = await parseJsonResponse(response);
   return payload ?? { success: true };
+};
+
+const requestPublicJson = async (url, options = {}, fallbackMessage = 'Request failed') => {
+  const response = await publicFetch(url, options);
+  await throwApiErrorIfNeeded(response, fallbackMessage);
+  return response.json();
+};
+
+export const initApi = {
+  get: async () => requestPublicJson('/api/init', {}, 'Failed to load app init payload'),
 };
 
 // System Pipelines API

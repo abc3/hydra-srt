@@ -30,6 +30,7 @@ defmodule HydraSrtWeb.Router do
     pipe_through :api
 
     post "/login", AuthController, :login
+    get "/init", InitController, :show
   end
 
   scope "/api", HydraSrtWeb do

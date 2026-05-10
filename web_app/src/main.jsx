@@ -18,6 +18,7 @@ import Login from './pages/Login';
 import { isAuthenticated } from './utils/auth';
 import { ROUTES } from './utils/constants';
 import { connectRealtime, disconnectRealtime } from './utils/realtime';
+import { InitProvider } from './context/InitContext';
 import './index.css';
 
 const config = {
@@ -219,8 +220,10 @@ const App = () => {
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <ConfigProvider theme={config}>
-      <App />
-    </ConfigProvider>
+    <InitProvider>
+      <ConfigProvider theme={config}>
+        <App />
+      </ConfigProvider>
+    </InitProvider>
   </StrictMode>,
 );
