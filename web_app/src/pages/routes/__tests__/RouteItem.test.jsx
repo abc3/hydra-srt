@@ -309,4 +309,70 @@ describe('RouteItem', () => {
     expect(screen.getByText('reconnecting')).toBeInTheDocument();
   });
 
+  it('shows route enabled tag under route title', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Enabled: Yes')).toBeInTheDocument();
+  });
+
+  it('shows enabled state for source and destination rows in endpoints table', async () => {
+    routesApi.getById.mockResolvedValue({
+      data: {
+        id: 'r1',
+        name: 'Route 1',
+        status: 'started',
+        schema_status: 'processing',
+        updated_at: new Date().toISOString(),
+        enabled: true,
+        schema: 'SRT',
+        schema_options: { localaddress: '127.0.0.1', localport: 1234, mode: 'listener' },
+        sources: [
+          { id: 's1', position: 0, enabled: true, name: 'primary' },
+          { id: 's2', position: 1, enabled: false, name: 'backup' },
+        ],
+        active_source_id: 's1',
+        node: 'node@host',
+        destinations: [
+          {
+            id: 'd1',
+            name: 'Dest 1',
+            enabled: true,
+            status: 'processing',
+            schema: 'UDP',
+            schema_options: { host: '127.0.0.1', port: 9999 },
+            updated_at: new Date().toISOString(),
+          },
+          {
+            id: 'd2',
+            name: 'Dest 2',
+            enabled: false,
+            status: 'processing',
+            schema: 'SRT',
+            schema_options: { localaddress: '127.0.0.1', localport: 8888, mode: 'caller' },
+            updated_at: new Date().toISOString(),
+          },
+        ],
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Endpoints');
+    expect(screen.getByText('backup').closest('tr')).toHaveTextContent('No');
+    expect(screen.getByText('Dest 1').closest('tr')).toHaveTextContent('Yes');
+    expect(screen.getByText('Dest 2').closest('tr')).toHaveTextContent('No');
+  });
+
 });

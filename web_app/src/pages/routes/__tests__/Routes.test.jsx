@@ -178,6 +178,44 @@ describe('Routes', () => {
     expect(await screen.findByRole('menuitem', { name: /start/i })).toBeInTheDocument();
   });
 
+  it('shows enabled state in routes table', async () => {
+    routesApi.getAll.mockResolvedValue({
+      data: [
+        routeFixture({
+          id: 'enabled-route',
+          name: 'Enabled route',
+          enabled: true,
+          status: 'stopped',
+          schema_status: 'stopped',
+        }),
+        routeFixture({
+          id: 'disabled-route',
+          name: 'Disabled route',
+          enabled: false,
+          status: 'stopped',
+          schema_status: 'stopped',
+        }),
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <Routes />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Enabled route');
+    await screen.findByText('Disabled route');
+
+    const enabledRow = screen.getByText('Enabled route').closest('tr');
+    const disabledRow = screen.getByText('Disabled route').closest('tr');
+
+    expect(enabledRow).not.toBeNull();
+    expect(disabledRow).not.toBeNull();
+    expect(enabledRow).toHaveTextContent('Yes');
+    expect(disabledRow).toHaveTextContent('No');
+  });
+
   it('subscribes to route status events and updates the list status', async () => {
     render(
       <MemoryRouter>

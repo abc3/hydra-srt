@@ -596,6 +596,22 @@ const Routes = () => {
       },
     },
     {
+      title: 'Enabled',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      width: 120,
+      render: (enabled) => (
+        <Tag color={enabled ? 'success' : 'error'}>
+          {enabled ? 'Yes' : 'No'}
+        </Tag>
+      ),
+      filters: [
+        { text: 'Enabled', value: true },
+        { text: 'Disabled', value: false },
+      ],
+      onFilter: (value, record) => record.enabled === value,
+    },
+    {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',

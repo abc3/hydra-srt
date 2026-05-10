@@ -792,18 +792,16 @@ const RouteItem = () => {
       dataIndex: 'enabled',
       key: 'enabled',
       width: 120,
-      render: (enabled, record) =>
-        record.rowType === 'destination' ? (
-          <Tag color={enabled ? 'success' : 'error'}>
-            {enabled ? 'Yes' : 'No'}
-          </Tag>
-        ) : null,
+      render: (enabled) => (
+        <Tag color={enabled ? 'success' : 'error'}>
+          {enabled ? 'Yes' : 'No'}
+        </Tag>
+      ),
       filters: [
         { text: 'Enabled', value: true },
         { text: 'Disabled', value: false },
       ],
-      onFilter: (value, record) =>
-        record.rowType === 'source' || record.enabled === value,
+      onFilter: (value, record) => record.enabled === value,
     },
     {
       title: 'Status',
@@ -1134,6 +1132,9 @@ const RouteItem = () => {
             </Space>
 
             <Space size="small" wrap>
+              <Tag color={routeData?.enabled ? 'success' : 'error'}>
+                Enabled: {routeData?.enabled ? 'Yes' : 'No'}
+              </Tag>
               {renderRuntimeStatusBadge(runtimeStatus)}
               {routeData?.status && routeData?.schema_status && routeData.status !== routeData.schema_status && (
                 <Tag color={statusDetails.color}>
