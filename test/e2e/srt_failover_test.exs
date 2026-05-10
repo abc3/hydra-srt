@@ -47,11 +47,9 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
         "enabled" => true,
         "name" => "primary-e2e",
         "schema" => "SRT",
-        "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => primary_source_port,
-          "mode" => "listener"
-        }
+        "localaddress" => "127.0.0.1",
+        "localport" => primary_source_port,
+        "mode" => "listener"
       })
 
     backup_source_id =
@@ -60,11 +58,9 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
         "enabled" => true,
         "name" => "backup-e2e",
         "schema" => "SRT",
-        "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => backup_source_port,
-          "mode" => "listener"
-        }
+        "localaddress" => "127.0.0.1",
+        "localport" => backup_source_port,
+        "mode" => "listener"
       })
 
     # Migration contract check in runtime payload: route now carries sources + active_source_id.
@@ -76,10 +72,8 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
       E2EHelpers.api_create_destination!(base_url, token, route_id, %{
         "schema" => "UDP",
         "name" => "udp_dest_failover_e2e",
-        "schema_options" => %{
-          "host" => "127.0.0.1",
-          "port" => udp_dest_port
-        }
+        "host" => "127.0.0.1",
+        "port" => udp_dest_port
       })
 
     # Same order as cascading test: SRT caller before route so connection can retry
@@ -165,11 +159,9 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
         "enabled" => true,
         "name" => "primary-cascade",
         "schema" => "SRT",
-        "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => p0,
-          "mode" => "listener"
-        }
+        "localaddress" => "127.0.0.1",
+        "localport" => p0,
+        "mode" => "listener"
       })
 
     s1 =
@@ -178,11 +170,9 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
         "enabled" => true,
         "name" => "backup-1-cascade",
         "schema" => "SRT",
-        "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => p1,
-          "mode" => "listener"
-        }
+        "localaddress" => "127.0.0.1",
+        "localport" => p1,
+        "mode" => "listener"
       })
 
     s2 =
@@ -191,18 +181,17 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
         "enabled" => true,
         "name" => "backup-2-cascade",
         "schema" => "SRT",
-        "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => p2,
-          "mode" => "listener"
-        }
+        "localaddress" => "127.0.0.1",
+        "localport" => p2,
+        "mode" => "listener"
       })
 
     :ok =
       E2EHelpers.api_create_destination!(base_url, token, route_id, %{
         "schema" => "UDP",
         "name" => "udp_dest_failover_cascade_e2e",
-        "schema_options" => %{"host" => "127.0.0.1", "port" => udp_dest_port}
+        "host" => "127.0.0.1",
+        "port" => udp_dest_port
       })
 
     tx_primary =

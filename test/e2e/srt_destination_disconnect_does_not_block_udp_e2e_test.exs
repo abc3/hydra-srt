@@ -32,11 +32,9 @@ defmodule HydraSrt.E2E.SrtDestinationDisconnectDoesNotBlockUdpE2ETest do
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_srt_disconnect_does_not_block_udp",
         "schema" => "SRT",
-        "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => source_port,
-          "mode" => "listener"
-        }
+        "localaddress" => "127.0.0.1",
+        "localport" => source_port,
+        "mode" => "listener"
       })
 
     on_exit(fn ->
@@ -48,21 +46,17 @@ defmodule HydraSrt.E2E.SrtDestinationDisconnectDoesNotBlockUdpE2ETest do
       E2EHelpers.api_create_destination!(base_url, token, route_id, %{
         "schema" => "UDP",
         "name" => "udp_dest_stays_alive_e2e",
-        "schema_options" => %{
-          "host" => "127.0.0.1",
-          "port" => udp_dest_port
-        }
+        "host" => "127.0.0.1",
+        "port" => udp_dest_port
       })
 
     :ok =
       E2EHelpers.api_create_destination!(base_url, token, route_id, %{
         "schema" => "SRT",
         "name" => "srt_dest_disconnect_e2e",
-        "schema_options" => %{
-          "localaddress" => "127.0.0.1",
-          "localport" => srt_dest_port,
-          "mode" => "caller"
-        }
+        "localaddress" => "127.0.0.1",
+        "localport" => srt_dest_port,
+        "mode" => "caller"
       })
 
     srt_rx =

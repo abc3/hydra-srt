@@ -37,11 +37,9 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_srt_source_selected_interface",
         "schema" => "SRT",
-        "schema_options" => %{
-          "interface_sys_name" => interface["sys_name"],
-          "localport" => source_port,
-          "mode" => "listener"
-        }
+        "interface_sys_name" => interface["sys_name"],
+        "localport" => source_port,
+        "mode" => "listener"
       })
 
     on_exit(fn ->
@@ -53,11 +51,9 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
       E2EHelpers.api_create_destination!(base_url, token, route_id, %{
         "schema" => "SRT",
         "name" => "srt_dest_from_selected_source_interface_e2e",
-        "schema_options" => %{
-          "address" => interface["bind_ip"],
-          "port" => srt_dest_port,
-          "mode" => "caller"
-        }
+        "address" => interface["bind_ip"],
+        "port" => srt_dest_port,
+        "mode" => "caller"
       })
 
     srt_rx =
@@ -119,10 +115,8 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_udp_source_selected_interface",
         "schema" => "UDP",
-        "schema_options" => %{
-          "interface_sys_name" => interface["sys_name"],
-          "port" => source_port
-        }
+        "interface_sys_name" => interface["sys_name"],
+        "port" => source_port
       })
 
     on_exit(fn ->
@@ -134,12 +128,10 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
       E2EHelpers.api_create_destination!(base_url, token, route_id, %{
         "schema" => "SRT",
         "name" => "srt_dest_selected_interface_e2e",
-        "schema_options" => %{
-          "interface_sys_name" => interface["sys_name"],
-          "address" => interface["bind_ip"],
-          "port" => srt_dest_port,
-          "mode" => "caller"
-        }
+        "interface_sys_name" => interface["sys_name"],
+        "address" => interface["bind_ip"],
+        "port" => srt_dest_port,
+        "mode" => "caller"
       })
 
     srt_rx =
@@ -193,11 +185,9 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_srt_destination_selected_interface",
         "schema" => "SRT",
-        "schema_options" => %{
-          "localaddress" => interface["bind_ip"],
-          "localport" => source_port,
-          "mode" => "listener"
-        }
+        "localaddress" => interface["bind_ip"],
+        "localport" => source_port,
+        "mode" => "listener"
       })
 
     on_exit(fn ->
@@ -209,12 +199,10 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
       E2EHelpers.api_create_destination!(base_url, token, route_id, %{
         "schema" => "SRT",
         "name" => "srt_dest_caller_selected_interface_e2e",
-        "schema_options" => %{
-          "interface_sys_name" => interface["sys_name"],
-          "address" => interface["bind_ip"],
-          "port" => srt_dest_port,
-          "mode" => "caller"
-        }
+        "interface_sys_name" => interface["sys_name"],
+        "address" => interface["bind_ip"],
+        "port" => srt_dest_port,
+        "mode" => "caller"
       })
 
     srt_rx =
@@ -292,10 +280,8 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
         E2EHelpers.api_create_route!(base_url, token, %{
           "name" => "e2e_udp_multicast_destination_selected_interface",
           "schema" => "UDP",
-          "schema_options" => %{
-            "interface_sys_name" => interface["sys_name"],
-            "port" => source_port
-          }
+          "interface_sys_name" => interface["sys_name"],
+          "port" => source_port
         })
 
       on_exit(fn ->
@@ -307,11 +293,9 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
         E2EHelpers.api_create_destination!(base_url, token, route_id, %{
           "schema" => "UDP",
           "name" => "udp_multicast_dest_selected_interface_e2e",
-          "schema_options" => %{
-            "host" => multicast_group,
-            "port" => multicast_port,
-            "interface_sys_name" => interface["sys_name"]
-          }
+          "host" => multicast_group,
+          "port" => multicast_port,
+          "interface_sys_name" => interface["sys_name"]
         })
 
       :ok = E2EHelpers.api_start_route!(base_url, token, route_id)
@@ -361,11 +345,9 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
         E2EHelpers.api_create_route!(base_url, token, %{
           "name" => "e2e_udp_multicast_source_selected_interface",
           "schema" => "UDP",
-          "schema_options" => %{
-            "address" => multicast_group,
-            "port" => source_port,
-            "interface_sys_name" => interface["sys_name"]
-          }
+          "address" => multicast_group,
+          "port" => source_port,
+          "interface_sys_name" => interface["sys_name"]
         })
 
       on_exit(fn ->
@@ -377,10 +359,8 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
         E2EHelpers.api_create_destination!(base_url, token, route_id, %{
           "schema" => "UDP",
           "name" => "udp_dest_from_multicast_source_e2e",
-          "schema_options" => %{
-            "host" => "127.0.0.1",
-            "port" => udp_dest_port
-          }
+          "host" => "127.0.0.1",
+          "port" => udp_dest_port
         })
 
       :ok = E2EHelpers.api_start_route!(base_url, token, route_id)
