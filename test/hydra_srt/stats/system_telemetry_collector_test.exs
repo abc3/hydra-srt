@@ -7,42 +7,53 @@ defmodule HydraSrt.Stats.SystemTelemetryCollectorTest do
   alias HydraSrt.Stats.Duckdb
   alias HydraSrt.Stats.SystemTelemetryCollector
 
-  test "rows_from_telemetry maps cpu mem swap la metrics" do
-    metrics = MapSet.new([:cpu, :mem, :swap, :la])
-
+  test "rows_from_telemetry maps cpu mem swap la and net metrics" do
     cpu_rows =
       SystemTelemetryCollector.rows_from_telemetry(
         [:prom_ex, :plugin, :osmon, :cpu_util],
-        %{cpu: 42.5},
-        metrics
+        %{cpu: 42.5}
       )
 
     ram_rows =
       SystemTelemetryCollector.rows_from_telemetry(
         [:prom_ex, :plugin, :osmon, :ram_usage],
-        %{ram: 70.1},
-        metrics
+        %{ram: 70.1}
       )
 
     swap_rows =
       SystemTelemetryCollector.rows_from_telemetry(
         [:prom_ex, :plugin, :osmon, :swap_usage],
-        %{swap: 12.0},
-        metrics
+        %{swap: 12.0}
       )
 
     la_rows =
       SystemTelemetryCollector.rows_from_telemetry(
         [:prom_ex, :plugin, :osmon, :cpu_avg1],
-        %{avg1: 0.5, avg5: 0.8, avg15: 1.0},
-        metrics
+        %{avg1: 0.5, avg5: 0.8, avg15: 1.0}
       )
 
     memory_rows =
       SystemTelemetryCollector.rows_from_telemetry(
         [:prom_ex, :plugin, :osmon, :memory],
-        %{available: 1, buffered: 2, cached: 3, free: 4, total: 5, system_total: 6},
-        metrics
+        %{available: 1, buffered: 2, cached: 3, free: 4, total: 5, system_total: 6}
+      )
+
+    net_rows =
+      SystemTelemetryCollector.rows_from_telemetry(
+        [:prom_ex, :plugin, :osmon, :network_interface],
+        %{
+          interface: "eth0",
+          rx_bytes: 1000,
+          tx_bytes: 2000,
+          rx_packets: 10,
+          tx_packets: 20,
+          rx_errors: 1,
+          tx_errors: 2,
+          rx_dropped: 3,
+          tx_dropped: 4,
+          rx_bytes_per_sec: 100.0,
+          tx_bytes_per_sec: 200.0
+        }
       )
 
     assert Enum.map(cpu_rows, & &1.metric_key) == ["cpu_util"]
@@ -57,6 +68,22 @@ defmodule HydraSrt.Stats.SystemTelemetryCollectorTest do
              "memory_free_bytes",
              "memory_system_total_bytes",
              "memory_total_bytes"
+           ]
+
+    assert Enum.all?(net_rows, &(&1.entity_type == "net_if"))
+    assert Enum.all?(net_rows, &(&1.entity_id == "eth0"))
+
+    assert Enum.map(net_rows, & &1.metric_key) |> Enum.sort() == [
+             "net_rx_bytes_per_sec",
+             "net_rx_bytes_total",
+             "net_rx_dropped_total",
+             "net_rx_errors_total",
+             "net_rx_packets_total",
+             "net_tx_bytes_per_sec",
+             "net_tx_bytes_total",
+             "net_tx_dropped_total",
+             "net_tx_errors_total",
+             "net_tx_packets_total"
            ]
   end
 

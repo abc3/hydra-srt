@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Table, Card, Space, Typography, Tag, Progress } from 'antd';
-import { HomeOutlined } from '@ant-design/icons';
+import { Table, Card, Space, Typography, Progress, theme } from 'antd';
+import { ArrowDownOutlined, ArrowUpOutlined, HomeOutlined } from '@ant-design/icons';
 import { subscribeToNodes } from '../../utils/realtime';
 import { ROUTES } from '../../utils/constants';
 
 const { Title } = Typography;
 
 const SystemNodes = () => {
+  const { token } = theme.useToken();
   const [nodes, setNodes] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -35,32 +36,6 @@ const SystemNodes = () => {
     });
   }, []);
 
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'up':
-        return 'success';
-      case 'self':
-        return 'processing';
-      case 'down':
-        return 'error';
-      default:
-        return 'default';
-    }
-  };
-
-  const getStatusText = (status) => {
-    switch (status) {
-      case 'up':
-        return 'Up';
-      case 'self':
-        return 'Self';
-      case 'down':
-        return 'Down';
-      default:
-        return 'Unknown';
-    }
-  };
-
   const getProgressColor = (value) => {
     if (value === null || value === undefined) return '#ccc';
     if (value > 80) return '#ff4d4f';
@@ -68,12 +43,37 @@ const SystemNodes = () => {
     return '#52c41a';
   };
 
+  const formatThroughput = (bytesPerSec) => {
+    if (bytesPerSec === null || bytesPerSec === undefined || Number.isNaN(bytesPerSec)) {
+      return 'N/A';
+    }
+
+    const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+    let value = Math.max(0, Number(bytesPerSec));
+    let unitIndex = 0;
+
+    while (value >= 1024 && unitIndex < units.length - 1) {
+      value /= 1024;
+      unitIndex += 1;
+    }
+
+    const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+    return `${value.toFixed(precision)} ${units[unitIndex]}`;
+  };
+
+  const formatHostOnly = (value) => {
+    if (!value) return 'N/A';
+    const text = String(value);
+    const [, host] = text.split('@');
+    return host || text;
+  };
+
   const columns = [
     {
       title: 'Host',
       dataIndex: 'host',
       key: 'host',
-      render: (text) => <strong>{text}</strong>,
+      render: (text) => <strong>{formatHostOnly(text)}</strong>,
     },
     {
       title: 'CPU',
@@ -150,20 +150,23 @@ const SystemNodes = () => {
       key: 'la',
     },
     {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      render: (status) => (
-        <Tag color={getStatusColor(status)}>
-          {getStatusText(status)}
-        </Tag>
+      title: 'Network In / Out',
+      key: 'network',
+      render: (_, record) => (
+        <Space size={12}>
+          <span style={{ color: token.colorSuccess, whiteSpace: 'nowrap' }}>
+            <ArrowDownOutlined /> {formatThroughput(record.network_in_bytes_per_sec)}
+          </span>
+          <span style={{ color: token.colorPrimary, whiteSpace: 'nowrap' }}>
+            <ArrowUpOutlined /> {formatThroughput(record.network_out_bytes_per_sec)}
+          </span>
+        </Space>
       ),
-      filters: [
-        { text: 'Self', value: 'self' },
-        { text: 'Up', value: 'up' },
-        { text: 'Down', value: 'down' },
-      ],
-      onFilter: (value, record) => record.status === value,
+      sorter: (a, b) => {
+        const aTotal = (a.network_in_bytes_per_sec || 0) + (a.network_out_bytes_per_sec || 0);
+        const bTotal = (b.network_in_bytes_per_sec || 0) + (b.network_out_bytes_per_sec || 0);
+        return aTotal - bTotal;
+      },
     },
   ];
 

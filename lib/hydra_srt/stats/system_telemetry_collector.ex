@@ -3,6 +3,7 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
   use GenServer
   require Logger
 
+  alias HydraSrt.Monitoring.NetIfMetrics
   alias HydraSrt.Monitoring.OsMonTelemetry
   alias HydraSrt.Stats.Duckdb
 
@@ -11,6 +12,7 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
   @event_swap_usage OsMonTelemetry.swap_usage_event()
   @event_cpu_la OsMonTelemetry.cpu_la_event()
   @event_memory OsMonTelemetry.memory_event()
+  @event_network_interface OsMonTelemetry.network_interface_event()
 
   @default_flush_interval_ms 5_000
   @default_max_batch_size 1_000
@@ -38,8 +40,6 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
       flush_interval_ms = Keyword.get(opts, :flush_interval_ms, @default_flush_interval_ms)
       max_batch_size = Keyword.get(opts, :max_batch_size, @default_max_batch_size)
       max_buffer_size = Keyword.get(opts, :max_buffer_size, @default_max_buffer_size)
-      metrics = Keyword.get(opts, :metrics, [:cpu, :mem, :swap, :la])
-      metrics_set = MapSet.new(metrics)
       handler_prefix = Keyword.get(opts, :handler_prefix, "stats-osmon")
 
       handler_ids = attach_handlers(handler_prefix, self())
@@ -53,7 +53,6 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
          flush_interval_ms: flush_interval_ms,
          max_batch_size: max_batch_size,
          max_buffer_size: max_buffer_size,
-         metrics_set: metrics_set,
          handler_ids: handler_ids
        }}
     else
@@ -69,11 +68,12 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
   end
 
   @impl true
-  def handle_info({:telemetry_osmon, event_name, measurements}, state) do
+  def handle_info({:telemetry_osmon, event_name, measurements, metadata}, state) do
     now = DateTime.utc_now()
+    merged_measurements = Map.merge(measurements, normalize_metadata(metadata))
 
     rows =
-      rows_from_telemetry(event_name, measurements, state.metrics_set)
+      rows_from_telemetry(event_name, merged_measurements)
       |> Enum.map(&put_default_row_fields(&1, now))
 
     next_rows = rows ++ state.rows
@@ -113,11 +113,11 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
 
   def terminate(_reason, _state), do: :ok
 
-  def telemetry_handler(event_name, measurements, _metadata, config) do
+  def telemetry_handler(event_name, measurements, metadata, config) do
     target = config[:target]
 
     if is_pid(target) and Process.alive?(target) do
-      send(target, {:telemetry_osmon, event_name, measurements})
+      send(target, {:telemetry_osmon, event_name, measurements, metadata})
     end
   end
 
@@ -127,7 +127,8 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
       {"#{prefix}-ram", OsMonTelemetry.ram_usage_event()},
       {"#{prefix}-cpu", OsMonTelemetry.cpu_util_event()},
       {"#{prefix}-la", OsMonTelemetry.cpu_la_event()},
-      {"#{prefix}-swap", OsMonTelemetry.swap_usage_event()}
+      {"#{prefix}-swap", OsMonTelemetry.swap_usage_event()},
+      {"#{prefix}-netif", OsMonTelemetry.network_interface_event()}
     ]
     |> Enum.map(fn {handler_id, event_name} ->
       maybe_attach(handler_id, event_name, target_pid)
@@ -166,57 +167,36 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
   end
 
   @doc false
-  def rows_from_telemetry(
-        event_name,
-        measurements,
-        metrics_set \\ MapSet.new([:cpu, :mem, :swap, :la])
-      )
+  def rows_from_telemetry(event_name, measurements)
 
-  def rows_from_telemetry(_event_name, measurements, metrics_set)
-      when not is_map(measurements) or not is_struct(metrics_set, MapSet) do
+  def rows_from_telemetry(_event_name, measurements) when not is_map(measurements) do
     []
   end
 
-  def rows_from_telemetry(event_name, measurements, metrics_set) do
+  def rows_from_telemetry(event_name, measurements) do
     cond do
       event_name == @event_cpu_util ->
-        if MapSet.member?(metrics_set, :cpu) do
-          number_row("cpu_util", Map.get(measurements, :cpu))
-        else
-          []
-        end
+        number_row("cpu_util", Map.get(measurements, :cpu))
 
       event_name == @event_ram_usage ->
-        if MapSet.member?(metrics_set, :mem) do
-          number_row("ram_usage", Map.get(measurements, :ram))
-        else
-          []
-        end
+        number_row("ram_usage", Map.get(measurements, :ram))
 
       event_name == @event_swap_usage ->
-        if MapSet.member?(metrics_set, :swap) do
-          number_row("swap_usage", Map.get(measurements, :swap))
-        else
-          []
-        end
+        number_row("swap_usage", Map.get(measurements, :swap))
 
       event_name == @event_cpu_la ->
-        if MapSet.member?(metrics_set, :la) do
-          number_row("cpu_la_avg1", Map.get(measurements, :avg1)) ++
-            number_row("cpu_la_avg5", Map.get(measurements, :avg5)) ++
-            number_row("cpu_la_avg15", Map.get(measurements, :avg15))
-        else
-          []
-        end
+        number_row("cpu_la_avg1", Map.get(measurements, :avg1)) ++
+          number_row("cpu_la_avg5", Map.get(measurements, :avg5)) ++
+          number_row("cpu_la_avg15", Map.get(measurements, :avg15))
 
       event_name == @event_memory ->
-        if MapSet.member?(metrics_set, :mem) do
-          Enum.flat_map(@memory_metric_keys, fn {measurement_key, metric_key} ->
-            number_row(metric_key, Map.get(measurements, measurement_key))
-          end)
-        else
-          []
-        end
+        Enum.flat_map(@memory_metric_keys, fn {measurement_key, metric_key} ->
+          number_row(metric_key, Map.get(measurements, measurement_key))
+        end)
+
+      event_name == @event_network_interface ->
+        interface = Map.get(measurements, :interface)
+        network_rows(measurements, interface)
 
       true ->
         []
@@ -233,6 +213,32 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
       }
     ]
   end
+
+  defp network_rows(measurements, interface) when is_map(measurements) and is_binary(interface) do
+    [
+      metric_rows(measurements, NetIfMetrics.total_metric_keys()),
+      metric_rows(measurements, net_rate_measurement_keys())
+    ]
+    |> List.flatten()
+    |> Enum.map(&Map.put(&1, :entity_type, "net_if"))
+    |> Enum.map(&Map.put(&1, :entity_id, interface))
+  end
+
+  defp network_rows(_measurements, _interface), do: []
+
+  defp metric_rows(measurements, metric_map) when is_map(measurements) and is_map(metric_map) do
+    Enum.flat_map(metric_map, fn {measurement_key, metric_key} ->
+      number_row(metric_key, Map.get(measurements, measurement_key))
+    end)
+  end
+
+  defp net_rate_measurement_keys do
+    NetIfMetrics.rate_metric_keys()
+    |> Enum.into(%{}, fn {key, metric_key} -> {:"#{key}_per_sec", metric_key} end)
+  end
+
+  defp normalize_metadata(metadata) when is_map(metadata), do: metadata
+  defp normalize_metadata(_metadata), do: %{}
 
   defp flush_rows([], 0), do: {[], 0, :ok}
 

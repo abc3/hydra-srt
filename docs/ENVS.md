@@ -40,6 +40,8 @@ All environment variables recognised by Hydra SRT, grouped by purpose.
 |---|---|---|---|
 | `METRICS_SECRET` | No | — | Bearer token required to access the `/metrics` endpoint. If unset, the endpoint is unauthenticated. |
 | `PROM_POLL_RATE` | No | `5000` | Interval in milliseconds between Prometheus metric polls. |
+| `SYSTEM_METRICS_HISTORY_ENABLED` | No | `true` | Enables background persistence of system telemetry samples to DuckDB. |
+| `SYSTEM_METRICS_HISTORY_INTERVAL_MS` | No | `5000` | Flush interval in milliseconds for writing buffered system telemetry rows to DuckDB. |
 | `HYDRA_DEFAULT_BIND_IP` | No | `127.0.0.1` | Default IP address used when binding SRT streams. |
 
 ---

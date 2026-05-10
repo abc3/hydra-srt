@@ -50,8 +50,7 @@ unless config_env() == :test do
     metrics_secret: Env.get_binary("METRICS_SECRET", nil),
     system_metrics_history: [
       enabled: system_metrics_history_enabled,
-      flush_interval_ms: system_metrics_history_interval_ms,
-      metrics: [:cpu, :mem, :swap, :la]
+      flush_interval_ms: system_metrics_history_interval_ms
     ]
 end
 

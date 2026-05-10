@@ -6,10 +6,14 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
   use PromEx.Plugin
   require Logger
 
+  alias HydraSrt.Monitoring.NetIf
+  alias HydraSrt.Monitoring.NetIfMetrics
   alias HydraSrt.Monitoring.OsMonTelemetry
 
   @prefix [:hydra_srt, :prom_ex]
   @cache_key {__MODULE__, :last_stats}
+  @net_prev_key {__MODULE__, :net_prev_snapshot}
+  @net_prev_ts_key {__MODULE__, :net_prev_ts_ms}
 
   @impl true
   def polling_metrics(opts) do
@@ -104,6 +108,42 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
           event_name: OsMonTelemetry.swap_usage_event(),
           description: "The total percentage usage of swap memory.",
           measurement: :swap
+        ),
+        last_value(
+          @prefix ++ [:osmon, :net, :rx_bytes_total],
+          event_name: OsMonTelemetry.network_interface_event(),
+          description: "Total bytes received on the interface since boot.",
+          unit: :bytes,
+          measurement: :rx_bytes,
+          tags: [:interface],
+          tag_values: &net_tag_values/1
+        ),
+        last_value(
+          @prefix ++ [:osmon, :net, :tx_bytes_total],
+          event_name: OsMonTelemetry.network_interface_event(),
+          description: "Total bytes transmitted on the interface since boot.",
+          unit: :bytes,
+          measurement: :tx_bytes,
+          tags: [:interface],
+          tag_values: &net_tag_values/1
+        ),
+        last_value(
+          @prefix ++ [:osmon, :net, :rx_bytes_per_sec],
+          event_name: OsMonTelemetry.network_interface_event(),
+          description: "Bytes received per second on the interface.",
+          unit: :bytes_per_second,
+          measurement: :rx_bytes_per_sec,
+          tags: [:interface],
+          tag_values: &net_tag_values/1
+        ),
+        last_value(
+          @prefix ++ [:osmon, :net, :tx_bytes_per_sec],
+          event_name: OsMonTelemetry.network_interface_event(),
+          description: "Bytes transmitted per second on the interface.",
+          unit: :bytes_per_second,
+          measurement: :tx_bytes_per_sec,
+          tags: [:interface],
+          tag_values: &net_tag_values/1
         )
       ]
     )
@@ -115,7 +155,8 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
       cpu: cpu_util(),
       cpu_la: cpu_la(),
       swap: swap_usage(),
-      memory: memory()
+      memory: memory(),
+      network: network_snapshot()
     }
 
     :persistent_term.put(@cache_key, stats)
@@ -125,10 +166,18 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
     execute_metrics(OsMonTelemetry.cpu_util_event(), %{cpu: stats.cpu})
     execute_metrics(OsMonTelemetry.cpu_la_event(), stats.cpu_la)
     execute_metrics(OsMonTelemetry.swap_usage_event(), %{swap: stats.swap})
+
+    Enum.each(stats.network, fn {iface, measurements} ->
+      execute_metrics(OsMonTelemetry.network_interface_event(), measurements, %{interface: iface})
+    end)
   end
 
   def execute_metrics(event, metrics) do
-    :telemetry.execute(event, metrics, %{})
+    execute_metrics(event, metrics, %{})
+  end
+
+  def execute_metrics(event, metrics, metadata) do
+    :telemetry.execute(event, metrics, metadata)
   end
 
   @spec get_stats() :: map() | nil
@@ -181,5 +230,42 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
     else
       _ -> nil
     end
+  end
+
+  defp network_snapshot do
+    now_ms = System.monotonic_time(:millisecond)
+    current = NetIf.snapshot()
+    previous = :persistent_term.get(@net_prev_key, %{})
+    previous_ts = :persistent_term.get(@net_prev_ts_key, now_ms)
+    delta_ms = max(now_ms - previous_ts, 0)
+    rates = NetIf.rates(previous, current, delta_ms)
+
+    :persistent_term.put(@net_prev_key, current)
+    :persistent_term.put(@net_prev_ts_key, now_ms)
+
+    current
+    |> Enum.reject(fn {iface, _} -> loopback_iface?(iface) end)
+    |> Enum.into(%{}, fn {iface, counters} ->
+      rate_values = Map.get(rates, iface, %{})
+      merged = merge_network_rates(counters, rate_values)
+      {iface, merged}
+    end)
+  end
+
+  defp merge_network_rates(counters, rate_values) do
+    Enum.reduce(NetIfMetrics.counter_keys(), counters, fn key, acc ->
+      value = Map.get(rate_values, key)
+      Map.put(acc, :"#{key}_per_sec", value)
+    end)
+  end
+
+  defp loopback_iface?(iface) when is_binary(iface) do
+    iface == "lo" or iface == "lo0" or String.starts_with?(iface, "lo")
+  end
+
+  defp loopback_iface?(_), do: false
+
+  defp net_tag_values(metadata) when is_map(metadata) do
+    %{interface: to_string(Map.get(metadata, :interface, "unknown"))}
   end
 end
