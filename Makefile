@@ -10,6 +10,7 @@ dev:
 	API_AUTH_USERNAME=admin \
 	API_AUTH_PASSWORD=password123 \
 	ANALYTICS_DATABASE_PATH=./hydra_srt_analytics.duckdb \
+	DEMO_DATA=true \
 	ERL_AFLAGS="-kernel shell_history enabled +zdbbl 2097151" \
 	iex --name hydra@127.0.0.1 --cookie cookie -S mix phx.server --no-halt
 
@@ -41,7 +42,7 @@ dev_play:
 	ffplay -hide_banner "udp://127.0.0.1:1234"
 
 dev_play1:
-	srt-live-transmit "srt://127.0.0.1:4203?mode=caller" udp://:4204 -v -statspf default -stats 1000
+	srt-live-transmit "srt://127.0.0.1:4201?mode=caller" udp://:4204 -v -statspf default -stats 1000
 
 dev_udp2:
 	ffmpeg -hide_banner -loglevel error \

@@ -5,6 +5,9 @@ defmodule HydraSrt.Application do
 
   @impl true
   def start(_type, _args) do
+    demo_enabled? = Application.get_env(:hydra_srt, :demo_data, false)
+    HydraSrt.Demo.ensure_requirements!(demo_enabled?)
+
     :ok =
       :gen_event.swap_sup_handler(
         :erl_signal_server,
@@ -49,7 +52,13 @@ defmodule HydraSrt.Application do
     opts = [strategy: :one_for_one, name: HydraSrt.Supervisor]
     {:ok, pid} = Supervisor.start_link(children, opts)
     :ok = HydraSrt.Auth.startup_cleanup()
+    :ok = HydraSrt.Demo.bootstrap(demo_enabled?)
     :ok = recover_routes_after_startup()
+
+    if demo_enabled? do
+      {:ok, _child} = Supervisor.start_child(pid, HydraSrt.DemoFfmpegServer)
+    end
+
     {:ok, pid}
   end
 

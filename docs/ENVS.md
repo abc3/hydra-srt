@@ -12,6 +12,7 @@ All environment variables recognised by Hydra SRT, grouped by purpose.
 | `PHX_HOST` | No | `localhost` (dev) / `example.com` (prod) | Public hostname used when building URLs. |
 | `PORT` | No | `4000` | HTTP listen port. |
 | `SECRET_KEY_BASE` | **prod only** | hardcoded in dev/test | Secret used to sign/encrypt cookies and tokens. Generate with `mix phx.gen.secret`. |
+| `DEMO_DATA` | No | `false` | Enables demo bootstrap: starts a local ffmpeg test stream and auto-creates a `demo_route` with one SRT source and SRT+UDP destinations. Requires `ffmpeg` in `PATH`; app fails to start if missing. |
 
 ---
 

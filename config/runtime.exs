@@ -19,6 +19,8 @@ if System.get_env("PHX_SERVER") do
   config :hydra_srt, HydraSrtWeb.Endpoint, server: true
 end
 
+config :hydra_srt, demo_data: Env.get_boolean("DEMO_DATA", false)
+
 secret_key_base =
   cond do
     config_env() == :dev ->

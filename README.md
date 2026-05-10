@@ -160,6 +160,33 @@ To run HydraSRT locally, start the Elixir app and Phoenix will also launch the V
 make dev
 ```
 
+### Demo Mode
+
+HydraSRT can bootstrap a local demo route and start a generated test stream when `DEMO_DATA=true`.
+
+```bash
+DEMO_DATA=true make dev
+```
+
+When demo mode is enabled:
+
+- `ffmpeg` must be available in `PATH` (startup fails if missing)
+- a `demo_route` is created automatically (idempotent)
+- source: `srt://127.0.0.1:4200?mode=caller`
+- destinations:
+  - `srt://127.0.0.1:4201?mode=listener`
+  - `udp://127.0.0.1:4202` (for local playback)
+
+You can verify playback with `ffplay`:
+
+```bash
+# SRT destination
+ffplay -fflags nobuffer -flags low_delay -i "srt://127.0.0.1:4201?mode=caller"
+
+# UDP destination
+ffplay -fflags nobuffer -flags low_delay -i "udp://@:4202"
+```
+
 ## Building for Production
 
 > **Production Note**: HydraSRT can be built for production, but the project is still evolving. Plan upgrades carefully and validate in staging before rollout.
@@ -276,6 +303,31 @@ Configure HydraSRT using the following environment variables:
 To run HydraSRT using Docker and Docker Compose, follow these steps:
 
 > `duckdb` CLI is installed in the Docker image during build.
+
+Prebuilt Docker image is available on Docker Hub:
+
+- [streamband/hydra-srt](https://hub.docker.com/r/streamband/hydra-srt)
+
+Quick start with the published image:
+
+```bash
+docker run --rm -p 4000:4000 \
+  -p 4100-4500:4100-4500/udp \
+  -v "$(pwd)/data/db:/app/db" \
+  -e PHX_SERVER=true \
+  -e DATABASE_PATH=/app/db/hydra_srt.db \
+  -e ANALYTICS_DATABASE_PATH=/app/db/hydra_srt_analytics.duckdb \
+  -e API_AUTH_USERNAME=admin \
+  -e API_AUTH_PASSWORD=password123 \
+  streamband/hydra-srt:latest
+```
+
+Required env vars for this container mode (see `docs/ENVS.md`):
+
+- `API_AUTH_USERNAME`
+- `API_AUTH_PASSWORD`
+- `DATABASE_PATH`
+- `ANALYTICS_DATABASE_PATH`
 
 1. **Build the Docker image**:
 
