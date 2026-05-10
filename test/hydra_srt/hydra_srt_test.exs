@@ -102,6 +102,24 @@ defmodule HydraSrtTest do
     assert {false, "processing"} in statuses_by_enabled
   end
 
+  test "mark_route_failed/1 sets schema status to failed and timestamps stop time" do
+    route =
+      route_fixture(%{
+        status: "starting",
+        schema_status: "starting",
+        stopped_at: nil
+      })
+
+    before = DateTime.utc_now() |> DateTime.truncate(:second)
+    assert {:ok, updated} = HydraSrt.mark_route_failed(route.id)
+    after_ts = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    assert updated["status"] == "failed"
+    assert updated["schema_status"] == "failed"
+    assert DateTime.compare(updated["stopped_at"], before) in [:eq, :gt]
+    assert DateTime.compare(updated["stopped_at"], after_ts) in [:eq, :lt]
+  end
+
   test "startup recovery logs stale statuses and stops all routes and destinations" do
     route =
       route_fixture(%{

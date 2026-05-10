@@ -6,6 +6,7 @@ defmodule HydraSrt do
   @status_started "started"
   @status_starting "starting"
   @status_stopped "stopped"
+  @status_failed "failed"
 
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
@@ -123,6 +124,21 @@ defmodule HydraSrt do
     end
   end
 
+  @spec mark_route_failed(String.t()) :: {:ok, map()} | {:error, term()}
+  def mark_route_failed(id) do
+    with {:ok, route} <-
+           Db.transition_route_runtime_status(
+             id,
+             route_runtime_status_attrs(@status_failed)
+             |> Map.put("schema_status", @status_failed),
+             @status_failed,
+             @status_failed
+           ) do
+      :ok = broadcast_route_items_status_for_id(id)
+      {:ok, route}
+    end
+  end
+
   @spec mark_route_terminated(String.t()) :: {:ok, map()} | {:error, term()}
   def mark_route_terminated(id) do
     set_route_status(id, @status_stopped)
@@ -175,7 +191,7 @@ defmodule HydraSrt do
           "stopped_at" => nil
         }
 
-      @status_stopped ->
+      status when status in [@status_stopped, @status_failed] ->
         %{
           "status" => status,
           "stopped_at" => now

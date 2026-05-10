@@ -725,7 +725,7 @@ defmodule HydraSrt.RouteHandler do
   end
 
   defp mark_route_terminated(route_id, {:startup_failed, _reason}) do
-    HydraSrt.mark_route_stopped(route_id)
+    HydraSrt.mark_route_failed(route_id)
   end
 
   defp mark_route_terminated(route_id, {:shutdown, _reason}) do
