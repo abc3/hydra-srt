@@ -16,6 +16,15 @@
 ## Set number of processes
 +P 1000000
 
+## Limit process heap for all procs to 1000 MB. The number here is the number of words
++hmax <%= div(1_000_000_000, :erlang.system_info(:wordsize)) %>
+
 -kernel inet_dist_listen_min 20000
 -kernel inet_dist_listen_max 21000
-+zdbbl 2097151
+## Set distribution buffer busy limit in KB (1024-byte units); default 1024 (~1 MiB); max 2097151 (~2 GiB)
++zdbbl 50000
+
+## Disable Busy Wait
++sbwt none
++sbwtdio none
++sbwtdcpu none
