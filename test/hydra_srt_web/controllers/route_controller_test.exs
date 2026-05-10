@@ -140,7 +140,15 @@ defmodule HydraSrtWeb.RouteControllerTest do
       post(conn, ~p"/api/routes", route: route2_attrs)
 
       conn = get(conn, ~p"/api/tags")
-      assert Enum.sort(json_response(conn, 200)["data"]) == ["live", "news", "sport"]
+
+      tag_names =
+        conn
+        |> json_response(200)
+        |> Map.fetch!("data")
+        |> Enum.map(&Map.fetch!(&1, "name"))
+        |> Enum.sort()
+
+      assert tag_names == ["live", "news", "sport"]
     end
 
     test "create route with tags returns tags in response", %{conn: conn} do

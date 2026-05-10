@@ -653,7 +653,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                   </Form.Item>
                 </Card>
 
-                {isNew && (
+                {
                   <Form.List name="sources">
                   {(fields, { add, remove, move }) => (
                     <Space direction="vertical" size="middle" style={{ width: '100%', maxWidth: '700px' }}>
@@ -856,9 +856,9 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                     </Space>
                   )}
                   </Form.List>
-                )}
+                }
 
-                {isNew && (
+                {
                   <Form.List name="destinations">
                     {(fields, { add, remove }) => (
                       <Space direction="vertical" size="middle" style={{ width: '100%', maxWidth: '700px' }}>
@@ -1106,7 +1106,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                       </Space>
                     )}
                   </Form.List>
-                )}
+                }
 
                 <Row justify="end" style={{ marginTop: 24 }}>
                   <Space>
