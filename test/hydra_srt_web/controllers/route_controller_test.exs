@@ -162,8 +162,7 @@ defmodule HydraSrtWeb.RouteControllerTest do
       conn =
         post(conn, ~p"/api/routes/test-source",
           route: %{
-            "schema" => "UDP",
-            "schema_options" => %{}
+            "schema" => "UDP"
           }
         )
 
@@ -175,10 +174,8 @@ defmodule HydraSrtWeb.RouteControllerTest do
         post(conn, ~p"/api/routes/test-source",
           route: %{
             "schema" => "SRT",
-            "schema_options" => %{
-              "localaddress" => "127.0.0.1",
-              "mode" => "listener"
-            }
+            "localaddress" => "127.0.0.1",
+            "mode" => "listener"
           }
         )
 

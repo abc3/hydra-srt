@@ -5,52 +5,16 @@ import {
     Switch, Select, Button,
     Row, Col, message, Typography
 } from 'antd';
-import { InfoCircleOutlined, SaveOutlined, ArrowLeftOutlined, HomeOutlined, LoadingOutlined } from '@ant-design/icons';
+import { SaveOutlined, ArrowLeftOutlined, HomeOutlined, LoadingOutlined } from '@ant-design/icons';
 import PropTypes from 'prop-types';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { destinationsApi, interfacesApi, routesApi } from '../../utils/api';
-import React from 'react';
 import { ROUTES } from '../../utils/constants';
+import { applyBackendEndpointErrors } from './endpointFormErrors';
+import { flattenEndpointPayload, normalizeEndpointForForm } from './endpointOptions';
 
 const { Title } = Typography;
-
-const normalizeSrtOptionsForForm = (destination) => {
-    if (!destination || destination.schema !== 'SRT') {
-        return destination;
-    }
-
-    const schemaOptions = destination.schema_options || {};
-    const mode = schemaOptions.mode;
-
-    if (mode !== 'caller') {
-        return destination;
-    }
-
-    const normalizedOptions = { ...schemaOptions };
-
-    if (
-        (normalizedOptions.address === undefined || normalizedOptions.address === null || normalizedOptions.address === '') &&
-        typeof normalizedOptions.localaddress === 'string' &&
-        normalizedOptions.localaddress !== ''
-    ) {
-        normalizedOptions.address = normalizedOptions.localaddress;
-    }
-
-    if (
-        (normalizedOptions.port === undefined || normalizedOptions.port === null || normalizedOptions.port === '') &&
-        normalizedOptions.localport !== undefined &&
-        normalizedOptions.localport !== null &&
-        normalizedOptions.localport !== ''
-    ) {
-        normalizedOptions.port = normalizedOptions.localport;
-    }
-
-    return {
-        ...destination,
-        schema_options: normalizedOptions,
-    };
-};
 
 const RouteDestEdit = ({ initialValues, onChange }) => {
     const [form] = Form.useForm();
@@ -113,7 +77,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
 
             destinationsApi.getById(routeId, destId)
                 .then(result => {
-                    const normalizedDestination = normalizeSrtOptionsForForm(result.data);
+                    const normalizedDestination = normalizeEndpointForForm(result.data);
                     setDestData(normalizedDestination);
                     form.setFieldsValue(normalizedDestination);
                     setLoading(false);
@@ -195,10 +159,6 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
         };
     }, [messageApi]);
 
-    const availableNodes = [
-        { label: 'self', value: 'self' }
-      ];
-
     const handleValuesChange = (changedValues, allValues) => {
         if (onChange) {
             onChange(allValues);
@@ -212,15 +172,15 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
 
                 // Determine if we're creating or updating
                 const savePromise = destId === 'new'
-                    ? destinationsApi.create(routeId, values)
-                    : destinationsApi.update(routeId, destId, values);
+                    ? destinationsApi.create(routeId, flattenEndpointPayload(values))
+                    : destinationsApi.update(routeId, destId, flattenEndpointPayload(values));
 
                 savePromise
                     .then(data => {
                         loadingMessage();
                         messageApi.success('Destination saved successfully');
                         if (data) {
-                            form.setFieldsValue(data.data);
+                            form.setFieldsValue(normalizeEndpointForForm(data.data));
                             // If this is a new destination, navigate to the route detail page
                             if (destId === 'new' && data.data.id) {
                                 navigate(`/routes/${routeId}`);
@@ -229,6 +189,10 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                     })
                     .catch(error => {
                         loadingMessage();
+                        if (applyBackendEndpointErrors(form, error?.errors)) {
+                            messageApi.error('Please fix endpoint bind conflicts');
+                            return;
+                        }
                         messageApi.error(`Failed to save destination: ${error.message}`);
                         console.error('Error:', error);
                     });
@@ -325,7 +289,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                 <>
                                                     <Form.Item
                                                         label="Mode"
-                                                        name={['schema_options', 'mode']}
+                                                        name="mode"
                                                         required
                                                         extra="Caller: Actively initiates the connection. Listener: Waits for incoming connections. Rendezvous: Both endpoints connect to each other simultaneously."
                                                         rules={[{ required: true, message: 'Please select an SRT mode' }]}
@@ -339,7 +303,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
 
                                                     <Form.Item
                                                         label="Interface"
-                                                        name={['schema_options', 'interface_sys_name']}
+                                                        name="interface_sys_name"
                                                         extra="Select a local interface to bind SRT socket to."
                                                     >
                                                         <Select
@@ -351,9 +315,9 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         />
                                                     </Form.Item>
 
-                                                    <Form.Item noStyle dependencies={[['schema_options', 'mode']]}>
+                                                    <Form.Item noStyle dependencies={[['mode']]}>
                                                         {({ getFieldValue: getNestedFieldValue }) => {
-                                                            const mode = getNestedFieldValue(['schema_options', 'mode']);
+                                                            const mode = getNestedFieldValue(['mode']);
                                                             const isCaller = mode === 'caller';
                                                             const isRendezvous = mode === 'rendezvous';
 
@@ -362,7 +326,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                     {(isCaller || isRendezvous) && (
                                                                         <Form.Item
                                                                             label="Remote Address"
-                                                                            name={['schema_options', 'address']}
+                                                                            name="address"
                                                                             extra={isRendezvous ? 'Remote host/IP of the rendezvous peer.' : 'Remote host/IP for caller mode.'}
                                                                         >
                                                                             <Input placeholder="Enter remote address" />
@@ -372,7 +336,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                     {(!isCaller || isRendezvous) && (
                                                                         <Form.Item
                                                                             label="Bind Address"
-                                                                            name={['schema_options', 'localaddress']}
+                                                                            name="localaddress"
                                                                             extra={isRendezvous ? 'Local address to bind before connecting to the rendezvous peer.' : 'Local address to bind.'}
                                                                         >
                                                                             <Input placeholder="Enter bind address" />
@@ -383,9 +347,9 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                         }}
                                                     </Form.Item>
 
-                                                    <Form.Item noStyle dependencies={[['schema_options', 'mode']]}>
+                                                    <Form.Item noStyle dependencies={[['mode']]}>
                                                         {({ getFieldValue: getNestedFieldValue }) => {
-                                                            const mode = getNestedFieldValue(['schema_options', 'mode']);
+                                                            const mode = getNestedFieldValue(['mode']);
                                                             const isCaller = mode === 'caller';
                                                             const isRendezvous = mode === 'rendezvous';
 
@@ -394,7 +358,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                     {(isCaller || isRendezvous) && (
                                                                         <Form.Item
                                                                             label="Remote Port"
-                                                                            name={['schema_options', 'port']}
+                                                                            name="port"
                                                                             required
                                                                             extra="Remote port for caller/rendezvous mode."
                                                                             rules={[
@@ -420,7 +384,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                                     {(!isCaller || isRendezvous) && (
                                                                         <Form.Item
                                                                             label="Bind Port"
-                                                                            name={['schema_options', 'localport']}
+                                                                            name="localport"
                                                                             required
                                                                             extra="Local port to bind."
                                                                             rules={[
@@ -449,7 +413,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
 
                                                     <Form.Item
                                                         label="Latency, ms"
-                                                        name={['schema_options', 'latency']}
+                                                        name="latency"
                                                         extra="The maximum accepted transmission latency in milliseconds"
                                                     >
                                                         <InputNumber
@@ -462,20 +426,20 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
 
                                                     <Form.Item
                                                         label="Authentication"
-                                                        name={['schema_options', 'authentication']}
+                                                        name="authentication"
                                                         valuePropName="checked"
                                                         extra="Enable SRT authentication"
                                                     >
                                                         <Switch />
                                                     </Form.Item>
 
-                                                    <Form.Item noStyle dependencies={[['schema_options', 'authentication']]}>
+                                                    <Form.Item noStyle dependencies={['authentication']}>
                                                         {({ getFieldValue }) =>
-                                                            getFieldValue(['schema_options', 'authentication']) && (
+                                                            getFieldValue('authentication') && (
                                                                 <>
                                                                     <Form.Item
                                                                         label="Passphrase"
-                                                                        name={['schema_options', 'passphrase']}
+                                                                        name="passphrase"
                                                                         required
                                                                         extra="Encryption passphrase for SRT authentication"
                                                                         rules={[{ required: true, message: 'Please enter an SRT passphrase' }]}
@@ -485,7 +449,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
 
                                                                     <Form.Item
                                                                         label="Key Length"
-                                                                        name={['schema_options', 'pbkeylen']}
+                                                                        name="pbkeylen"
                                                                         required
                                                                         extra="Encryption key length for SRT authentication"
                                                                         rules={[{ required: true, message: 'Please select an SRT key length' }]}
@@ -517,7 +481,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                 <>
                                                     <Form.Item
                                                         label="Interface"
-                                                        name={['schema_options', 'interface_sys_name']}
+                                                        name="interface_sys_name"
                                                         extra="Select a local interface for UDP bind/multicast settings."
                                                     >
                                                         <Select
@@ -532,7 +496,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
                                                     <Form.Item
                                                         label="Address"
                                                         required
-                                                        name={['schema_options', 'host']}
+                                                        name="host"
                                                         extra="The host/IP/Multicast group to send the packets to"
                                                         rules={[{ required: true, message: 'Please enter a UDP destination address' }]}
                                                     >
@@ -541,7 +505,7 @@ const RouteDestEdit = ({ initialValues, onChange }) => {
 
                                                     <Form.Item
                                                         label="Port"
-                                                        name={['schema_options', 'port']}
+                                                        name="port"
                                                         required
                                                         extra="The port to send the packets to"
                                                         rules={[

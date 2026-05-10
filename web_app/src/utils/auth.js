@@ -3,35 +3,64 @@
  */
 import { API_BASE_URL, AUTH_TOKEN_KEY, AUTH_USER_KEY } from './constants';
 
+const getStorage = () => {
+  const storage = globalThis?.localStorage;
+
+  if (
+    storage &&
+    typeof storage.getItem === 'function' &&
+    typeof storage.setItem === 'function' &&
+    typeof storage.removeItem === 'function'
+  ) {
+    return storage;
+  }
+
+  return null;
+};
+
 // Get the authentication token from localStorage
 export const getToken = () => {
-  return localStorage.getItem(AUTH_TOKEN_KEY);
+  const storage = getStorage();
+  return storage ? storage.getItem(AUTH_TOKEN_KEY) : null;
 };
 
 // Set the authentication token in localStorage
 export const setToken = (token) => {
-  localStorage.setItem(AUTH_TOKEN_KEY, token);
+  const storage = getStorage();
+  if (storage) {
+    storage.setItem(AUTH_TOKEN_KEY, token);
+  }
 };
 
 // Remove the authentication token from localStorage
 export const removeToken = () => {
-  localStorage.removeItem(AUTH_TOKEN_KEY);
+  const storage = getStorage();
+  if (storage) {
+    storage.removeItem(AUTH_TOKEN_KEY);
+  }
 };
 
 // Get the user from localStorage
 export const getUser = () => {
-  const userStr = localStorage.getItem(AUTH_USER_KEY);
+  const storage = getStorage();
+  const userStr = storage ? storage.getItem(AUTH_USER_KEY) : null;
   return userStr ? JSON.parse(userStr) : null;
 };
 
 // Set the user in localStorage
 export const setUser = (user) => {
-  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+  const storage = getStorage();
+  if (storage) {
+    storage.setItem(AUTH_USER_KEY, JSON.stringify(user));
+  }
 };
 
 // Remove the user from localStorage
 export const removeUser = () => {
-  localStorage.removeItem(AUTH_USER_KEY);
+  const storage = getStorage();
+  if (storage) {
+    storage.removeItem(AUTH_USER_KEY);
+  }
 };
 
 // Check if the user is authenticated

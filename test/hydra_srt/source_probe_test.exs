@@ -6,11 +6,9 @@ defmodule HydraSrt.SourceProbeTest do
   test "build_probe_uri/1 builds SRT probe URI from route config" do
     route = %{
       "schema" => "SRT",
-      "schema_options" => %{
-        "localaddress" => "127.0.0.1",
-        "localport" => 4201,
-        "mode" => "listener"
-      }
+      "localaddress" => "127.0.0.1",
+      "localport" => 4201,
+      "mode" => "listener"
     }
 
     assert {:ok, uri} = SourceProbe.build_probe_uri(route)
@@ -20,13 +18,11 @@ defmodule HydraSrt.SourceProbeTest do
   test "build_probe_uri/1 uses remote address and port in SRT caller mode" do
     route = %{
       "schema" => "SRT",
-      "schema_options" => %{
-        "mode" => "caller",
-        "address" => "203.0.113.8",
-        "port" => 5001,
-        "localaddress" => "10.0.0.12",
-        "localport" => 4201
-      }
+      "mode" => "caller",
+      "address" => "203.0.113.8",
+      "port" => 5001,
+      "localaddress" => "10.0.0.12",
+      "localport" => 4201
     }
 
     assert {:ok, uri} = SourceProbe.build_probe_uri(route)
@@ -36,9 +32,7 @@ defmodule HydraSrt.SourceProbeTest do
   test "build_probe_uri/1 builds UDP probe URI with default bind address" do
     route = %{
       "schema" => "UDP",
-      "schema_options" => %{
-        "port" => 5000
-      }
+      "port" => 5000
     }
 
     assert {:ok, uri} = SourceProbe.build_probe_uri(route)
@@ -48,7 +42,7 @@ defmodule HydraSrt.SourceProbeTest do
   test "build_probe_uri/1 returns an error when UDP port is missing" do
     route = %{
       "schema" => "UDP",
-      "schema_options" => %{}
+      "mode" => nil
     }
 
     assert {:error, "UDP source is missing a valid port"} = SourceProbe.build_probe_uri(route)
@@ -57,10 +51,8 @@ defmodule HydraSrt.SourceProbeTest do
   test "build_probe_uri/1 returns an error when SRT port is missing" do
     route = %{
       "schema" => "SRT",
-      "schema_options" => %{
-        "localaddress" => "127.0.0.1",
-        "mode" => "listener"
-      }
+      "localaddress" => "127.0.0.1",
+      "mode" => "listener"
     }
 
     assert {:error, "SRT source is missing a valid port"} = SourceProbe.build_probe_uri(route)
@@ -69,11 +61,9 @@ defmodule HydraSrt.SourceProbeTest do
   test "build_probe_uri/1 returns an error when SRT port is invalid" do
     route = %{
       "schema" => "SRT",
-      "schema_options" => %{
-        "localaddress" => "127.0.0.1",
-        "localport" => 0,
-        "mode" => "listener"
-      }
+      "localaddress" => "127.0.0.1",
+      "localport" => 0,
+      "mode" => "listener"
     }
 
     assert {:error, "SRT source has an invalid port"} = SourceProbe.build_probe_uri(route)

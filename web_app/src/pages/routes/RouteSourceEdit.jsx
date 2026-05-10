@@ -28,6 +28,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { destinationsApi, interfacesApi, routesApi, sourcesApi, tagsApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
+import { applyBackendEndpointErrors } from './endpointFormErrors';
+import { flattenEndpointPayload, getEndpointOption, normalizeEndpointForForm } from './endpointOptions';
 
 const { Title } = Typography;
 
@@ -35,22 +37,18 @@ const DEFAULT_SOURCE = {
   enabled: true,
   name: 'Primary',
   schema: 'SRT',
-  schema_options: {
-    mode: 'listener',
-    'auto-reconnect': true,
-    'keep-listening': false,
-  },
+  mode: 'listener',
+  auto_reconnect: true,
+  keep_listening: false,
 };
 
 const DEFAULT_DESTINATION = {
   enabled: true,
   name: 'Destination 1',
   schema: 'UDP',
-  schema_options: {
-    mode: 'caller',
-    'auto-reconnect': true,
-    host: '127.0.0.1',
-  },
+  mode: 'caller',
+  auto_reconnect: true,
+  host: '127.0.0.1',
 };
 
 const getInitialFormValues = (initialValues) => ({
@@ -67,6 +65,20 @@ const getInitialFormValues = (initialValues) => ({
   destinations: [DEFAULT_DESTINATION],
   ...initialValues,
 });
+
+const normalizeRouteForForm = (route) => {
+  if (!route) {
+    return route;
+  }
+
+  return {
+    ...route,
+    sources: Array.isArray(route.sources) ? route.sources.map((source) => normalizeEndpointForForm(source)) : route.sources,
+    destinations: Array.isArray(route.destinations)
+      ? route.destinations.map((destination) => normalizeEndpointForForm(destination))
+      : route.destinations,
+  };
+};
 
 const RouteSourceEdit = ({ initialValues, onChange }) => {
   const [form] = Form.useForm();
@@ -209,7 +221,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
     routesApi
       .getById(id)
       .then((result) => {
-        const route = result.data;
+        const route = normalizeRouteForForm(result.data);
         const sources = Array.isArray(route?.sources) && route.sources.length > 0
           ? [...route.sources].sort((a, b) => (a.position || 0) - (b.position || 0))
           : [DEFAULT_SOURCE];
@@ -247,37 +259,37 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
     for (let index = 0; index < sources.length; index += 1) {
       const source = sources[index] || {};
-      const currentMode = source?.schema_options?.mode;
+      const currentMode = source?.mode;
       const previousMode = previousModes[index];
 
       if (!currentMode || currentMode === previousMode) {
         continue;
       }
 
-      const options = { ...(source.schema_options || {}) };
+      const nextSource = { ...source };
 
       // Keep values when switching between caller/listener style fields.
-      if ((currentMode === 'caller' || currentMode === 'rendezvous') && isEmpty(options.address) && !isEmpty(options.localaddress)) {
-        options.address = options.localaddress;
+      if ((currentMode === 'caller' || currentMode === 'rendezvous') && isEmpty(nextSource.address) && !isEmpty(nextSource.localaddress)) {
+        nextSource.address = nextSource.localaddress;
         hasModeSyncChanges = true;
       }
 
-      if ((currentMode === 'caller' || currentMode === 'rendezvous') && isEmpty(options.port) && !isEmpty(options.localport)) {
-        options.port = options.localport;
+      if ((currentMode === 'caller' || currentMode === 'rendezvous') && isEmpty(nextSource.port) && !isEmpty(nextSource.localport)) {
+        nextSource.port = nextSource.localport;
         hasModeSyncChanges = true;
       }
 
-      if ((currentMode === 'listener' || currentMode === 'rendezvous') && isEmpty(options.localaddress) && !isEmpty(options.address)) {
-        options.localaddress = options.address;
+      if ((currentMode === 'listener' || currentMode === 'rendezvous') && isEmpty(nextSource.localaddress) && !isEmpty(nextSource.address)) {
+        nextSource.localaddress = nextSource.address;
         hasModeSyncChanges = true;
       }
 
-      if ((currentMode === 'listener' || currentMode === 'rendezvous') && isEmpty(options.localport) && !isEmpty(options.port)) {
-        options.localport = options.port;
+      if ((currentMode === 'listener' || currentMode === 'rendezvous') && isEmpty(nextSource.localport) && !isEmpty(nextSource.port)) {
+        nextSource.localport = nextSource.port;
         hasModeSyncChanges = true;
       }
 
-      patchedSources[index] = { ...source, schema_options: options };
+      patchedSources[index] = nextSource;
     }
 
     const nextSources = hasModeSyncChanges ? patchedSources : sources;
@@ -285,7 +297,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
       form.setFieldsValue({ sources: nextSources });
     }
 
-    previousSourceModesRef.current = nextSources.map((source) => source?.schema_options?.mode);
+    previousSourceModesRef.current = nextSources.map((source) => source?.mode);
 
     if (onChange) {
       onChange({ ...allValues, sources: nextSources });
@@ -293,18 +305,18 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
   };
 
   const normalizeSourcePayload = (source, position) => ({
+    ...flattenEndpointPayload(source),
     enabled: source?.enabled !== false,
     name: source?.name,
     schema: source?.schema,
-    schema_options: source?.schema_options || {},
     position,
   });
 
   const normalizeDestinationPayload = (destination) => ({
+    ...flattenEndpointPayload(destination),
     enabled: destination?.enabled !== false,
     name: destination?.name,
     schema: destination?.schema,
-    schema_options: destination?.schema_options || {},
   });
 
   const saveSources = async (routeId, sources, existingSources = []) => {
@@ -315,14 +327,22 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
       const source = sources[index];
       const payload = normalizeSourcePayload(source, index);
 
-      if (source?.id && existingById.has(source.id)) {
-        await sourcesApi.update(routeId, source.id, payload);
-        keptIds.push(source.id);
-      } else {
-        const created = await sourcesApi.create(routeId, payload);
-        if (created?.data?.id) {
-          keptIds.push(created.data.id);
+      try {
+        if (source?.id && existingById.has(source.id)) {
+          await sourcesApi.update(routeId, source.id, payload);
+          keptIds.push(source.id);
+        } else {
+          const created = await sourcesApi.create(routeId, payload);
+          if (created?.data?.id) {
+            keptIds.push(created.data.id);
+          }
         }
+      } catch (error) {
+        if (applyBackendEndpointErrors(form, error?.errors, ['sources', index])) {
+          error.userFacingMessage = 'Please fix source bind conflicts';
+          throw error;
+        }
+        throw error;
       }
     }
 
@@ -345,7 +365,15 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
     for (let index = 0; index < destinations.length; index += 1) {
       const destination = destinations[index];
       const payload = normalizeDestinationPayload(destination);
-      await destinationsApi.create(routeId, payload);
+      try {
+        await destinationsApi.create(routeId, payload);
+      } catch (error) {
+        if (applyBackendEndpointErrors(form, error?.errors, ['destinations', index])) {
+          error.userFacingMessage = 'Please fix destination bind conflicts';
+          throw error;
+        }
+        throw error;
+      }
     }
   };
 
@@ -409,12 +437,12 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
       if (isNew) {
         navigate(`/routes/${routeId}`);
       } else {
-        const refreshed = await routesApi.getById(routeId);
-        setRouteData(refreshed.data);
+        const refreshed = normalizeRouteForForm((await routesApi.getById(routeId)).data);
+        setRouteData(refreshed);
         form.setFieldsValue({
-          ...refreshed.data,
-          sources: refreshed.data?.sources || values.sources,
-          destinations: refreshed.data?.destinations || routeData?.destinations,
+          ...refreshed,
+          sources: refreshed?.sources || values.sources,
+          destinations: refreshed?.destinations || routeData?.destinations,
         });
       }
     } catch (error) {
@@ -422,6 +450,11 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         const firstError = error.errorFields.find((field) => Array.isArray(field?.errors) && field.errors.length > 0);
         const firstErrorMessage = firstError?.errors?.[0] || 'Please check the form for errors';
         messageApi.error(`Validation error: ${firstErrorMessage}`);
+        return;
+      }
+
+      if (error?.userFacingMessage) {
+        messageApi.error(error.userFacingMessage);
         return;
       }
 
@@ -443,32 +476,32 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
       }
 
       const schema = source?.schema;
-      const mode = source?.schema_options?.mode;
-      const authEnabled = !!source?.schema_options?.authentication;
+      const mode = getEndpointOption(source, 'mode');
+      const authEnabled = !!getEndpointOption(source, 'authentication');
       const needsRemote = mode === 'caller' || mode === 'rendezvous';
       const needsBind = mode === 'listener' || mode === 'rendezvous';
       const pathsToValidate = [
         ['sources', sourceIndex, 'schema'],
-        ['sources', sourceIndex, 'schema_options', 'mode'],
+        ['sources', sourceIndex, 'mode'],
       ];
 
       if (schema === 'SRT') {
         if (needsRemote) {
-          pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'address']);
-          pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'port']);
+          pathsToValidate.push(['sources', sourceIndex, 'address']);
+          pathsToValidate.push(['sources', sourceIndex, 'port']);
         }
         if (needsBind) {
-          pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'localaddress']);
-          pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'localport']);
+          pathsToValidate.push(['sources', sourceIndex, 'localaddress']);
+          pathsToValidate.push(['sources', sourceIndex, 'localport']);
         }
         if (authEnabled) {
-          pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'passphrase']);
-          pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'pbkeylen']);
+          pathsToValidate.push(['sources', sourceIndex, 'passphrase']);
+          pathsToValidate.push(['sources', sourceIndex, 'pbkeylen']);
         }
       }
 
       if (schema === 'UDP') {
-        pathsToValidate.push(['sources', sourceIndex, 'schema_options', 'port']);
+        pathsToValidate.push(['sources', sourceIndex, 'port']);
       }
 
       await form.validateFields(pathsToValidate);
@@ -479,13 +512,13 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
       const result = isNew
         ? await routesApi.testSource({
             schema: source.schema,
-            schema_options: source.schema_options || {},
+            ...flattenEndpointPayload(source),
           })
         : source.id
           ? await sourcesApi.test(id, source.id)
           : await routesApi.testSource({
               schema: source.schema,
-              schema_options: source.schema_options || {},
+              ...flattenEndpointPayload(source),
             });
 
       loadingMessage();
@@ -668,10 +701,10 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                             </Radio.Group>
                           </Form.Item>
 
-                          <Form.Item noStyle dependencies={[['sources', field.name, 'schema'], ['sources', field.name, 'schema_options', 'mode']]}>
+                          <Form.Item noStyle dependencies={[['sources', field.name, 'schema'], ['sources', field.name, 'mode']]}>
                             {({ getFieldValue }) => {
                               const schema = getFieldValue(['sources', field.name, 'schema']);
-                              const mode = getFieldValue(['sources', field.name, 'schema_options', 'mode']);
+                              const mode = getFieldValue(['sources', field.name, 'mode']);
 
                               if (schema === 'SRT') {
                                 const isCaller = mode === 'caller';
@@ -681,7 +714,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
                                 return (
                                   <>
-                                    <Form.Item label="Mode" name={[field.name, 'schema_options', 'mode']} rules={[{ required: true, message: 'Please select an SRT mode' }]}>
+                                    <Form.Item label="Mode" name={[field.name, 'mode']} rules={[{ required: true, message: 'Please select an SRT mode' }]}>
                                       <Radio.Group buttonStyle="solid">
                                         <Radio.Button value="caller">Caller</Radio.Button>
                                         <Radio.Button value="listener">Listener</Radio.Button>
@@ -689,14 +722,14 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                       </Radio.Group>
                                     </Form.Item>
 
-                                    <Form.Item label="Interface" name={[field.name, 'schema_options', 'interface_sys_name']}>
+                                    <Form.Item label="Interface" name={[field.name, 'interface_sys_name']}>
                                       <Select allowClear loading={interfacesLoading} options={interfaceOptions} placeholder="Select interface" />
                                     </Form.Item>
 
                                     <Form.Item
                                       key={`source-${field.key}-remote-address`}
                                       label="Remote Address"
-                                      name={[field.name, 'schema_options', 'address']}
+                                      name={[field.name, 'address']}
                                       hidden={!showRemote}
                                       preserve
                                       rules={showRemote ? [{ required: true, message: 'Please enter a remote address' }] : []}
@@ -706,7 +739,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                     <Form.Item
                                       key={`source-${field.key}-remote-port`}
                                       label="Remote Port"
-                                      name={[field.name, 'schema_options', 'port']}
+                                      name={[field.name, 'port']}
                                       hidden={!showRemote}
                                       preserve
                                       rules={showRemote
@@ -722,7 +755,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                     <Form.Item
                                       key={`source-${field.key}-bind-address`}
                                       label="Bind Address"
-                                      name={[field.name, 'schema_options', 'localaddress']}
+                                      name={[field.name, 'localaddress']}
                                       hidden={!showBind}
                                       preserve
                                       rules={showBind ? [{ required: true, message: 'Please enter a bind address' }] : []}
@@ -732,7 +765,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                     <Form.Item
                                       key={`source-${field.key}-bind-port`}
                                       label="Bind Port"
-                                      name={[field.name, 'schema_options', 'localport']}
+                                      name={[field.name, 'localport']}
                                       hidden={!showBind}
                                       preserve
                                       rules={showBind
@@ -747,20 +780,20 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
                                     <Form.Item
                                       label="Authentication"
-                                      name={[field.name, 'schema_options', 'authentication']}
+                                      name={[field.name, 'authentication']}
                                       valuePropName="checked"
                                       extra="Enable SRT authentication"
                                     >
                                       <Switch />
                                     </Form.Item>
 
-                                    <Form.Item noStyle dependencies={[['sources', field.name, 'schema_options', 'authentication']]}>
+                                    <Form.Item noStyle dependencies={[['sources', field.name, 'authentication']]}>
                                       {({ getFieldValue: getNestedFieldValue }) =>
-                                        getNestedFieldValue(['sources', field.name, 'schema_options', 'authentication']) && (
+                                        getNestedFieldValue(['sources', field.name, 'authentication']) && (
                                           <>
                                             <Form.Item
                                               label="Passphrase"
-                                              name={[field.name, 'schema_options', 'passphrase']}
+                                              name={[field.name, 'passphrase']}
                                               rules={[{ required: true, message: 'Please enter an SRT passphrase' }]}
                                               extra="Encryption passphrase for SRT authentication"
                                             >
@@ -769,7 +802,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
                                             <Form.Item
                                               label="Key Length"
-                                              name={[field.name, 'schema_options', 'pbkeylen']}
+                                              name={[field.name, 'pbkeylen']}
                                               rules={[{ required: true, message: 'Please select an SRT key length' }]}
                                               extra="Encryption key length for SRT authentication"
                                             >
@@ -795,15 +828,15 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                               if (schema === 'UDP') {
                                 return (
                                   <>
-                                    <Form.Item label="Interface" name={[field.name, 'schema_options', 'interface_sys_name']}>
+                                    <Form.Item label="Interface" name={[field.name, 'interface_sys_name']}>
                                       <Select allowClear loading={interfacesLoading} options={interfaceOptions} placeholder="Select interface" />
                                     </Form.Item>
-                                    <Form.Item label="Address" name={[field.name, 'schema_options', 'address']}>
+                                    <Form.Item label="Address" name={[field.name, 'address']}>
                                       <Input placeholder="0.0.0.0" />
                                     </Form.Item>
                                     <Form.Item
                                       label="Port"
-                                      name={[field.name, 'schema_options', 'port']}
+                                      name={[field.name, 'port']}
                                       rules={[
                                         { required: true, message: 'Please enter a UDP port' },
                                         { type: 'number', min: 1, max: 65535, message: 'Port must be between 1 and 65535' },
@@ -873,7 +906,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                     <>
                                       <Form.Item
                                         label="Mode"
-                                        name={[field.name, 'schema_options', 'mode']}
+                                        name={[field.name, 'mode']}
                                         rules={[{ required: true, message: 'Please select an SRT mode' }]}
                                         extra="Caller: Actively initiates the connection. Listener: Waits for incoming connections. Rendezvous: Both endpoints connect to each other simultaneously."
                                       >
@@ -886,15 +919,15 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
                                       <Form.Item
                                         label="Interface"
-                                        name={[field.name, 'schema_options', 'interface_sys_name']}
+                                        name={[field.name, 'interface_sys_name']}
                                         extra="Select a local interface to bind SRT socket to."
                                       >
                                         <Select allowClear loading={interfacesLoading} options={interfaceOptions} placeholder="Select interface" />
                                       </Form.Item>
 
-                                      <Form.Item noStyle dependencies={[[field.name, 'schema_options', 'mode']]}>
+                                      <Form.Item noStyle dependencies={[[field.name, 'mode']]}>
                                         {({ getFieldValue: getNestedFieldValue }) => {
-                                          const mode = getNestedFieldValue(['destinations', field.name, 'schema_options', 'mode']);
+                                          const mode = getNestedFieldValue(['destinations', field.name, 'mode']);
                                           const isCaller = mode === 'caller';
                                           const isRendezvous = mode === 'rendezvous';
                                           const showRemote = isCaller || isRendezvous;
@@ -904,7 +937,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                             <>
                                               <Form.Item
                                                 label="Remote Address"
-                                                name={[field.name, 'schema_options', 'address']}
+                                                name={[field.name, 'address']}
                                                 hidden={!showRemote}
                                                 preserve
                                                 rules={showRemote ? [{ required: true, message: 'Please enter a remote address' }] : []}
@@ -915,7 +948,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
                                               <Form.Item
                                                 label="Bind Address"
-                                                name={[field.name, 'schema_options', 'localaddress']}
+                                                name={[field.name, 'localaddress']}
                                                 hidden={!showBind}
                                                 preserve
                                                 rules={showBind ? [{ required: true, message: 'Please enter a bind address' }] : []}
@@ -928,9 +961,9 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                         }}
                                       </Form.Item>
 
-                                      <Form.Item noStyle dependencies={[[field.name, 'schema_options', 'mode']]}>
+                                      <Form.Item noStyle dependencies={[[field.name, 'mode']]}>
                                         {({ getFieldValue: getNestedFieldValue }) => {
-                                          const mode = getNestedFieldValue(['destinations', field.name, 'schema_options', 'mode']);
+                                          const mode = getNestedFieldValue(['destinations', field.name, 'mode']);
                                           const isCaller = mode === 'caller';
                                           const isRendezvous = mode === 'rendezvous';
                                           const showRemote = isCaller || isRendezvous;
@@ -940,7 +973,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                             <>
                                               <Form.Item
                                                 label="Remote Port"
-                                                name={[field.name, 'schema_options', 'port']}
+                                                name={[field.name, 'port']}
                                                 hidden={!showRemote}
                                                 preserve
                                                 extra="Remote port for caller/rendezvous mode."
@@ -956,7 +989,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
                                               <Form.Item
                                                 label="Bind Port"
-                                                name={[field.name, 'schema_options', 'localport']}
+                                                name={[field.name, 'localport']}
                                                 hidden={!showBind}
                                                 preserve
                                                 extra="Local port to bind."
@@ -976,7 +1009,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
                                       <Form.Item
                                         label="Latency, ms"
-                                        name={[field.name, 'schema_options', 'latency']}
+                                        name={[field.name, 'latency']}
                                         extra="The maximum accepted transmission latency in milliseconds"
                                       >
                                         <InputNumber style={{ width: 150 }} min={20} max={8000} placeholder="125" />
@@ -984,7 +1017,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
                                       <Form.Item
                                         label="Authentication"
-                                        name={[field.name, 'schema_options', 'authentication']}
+                                        name={[field.name, 'authentication']}
                                         valuePropName="checked"
                                         extra="Enable SRT authentication"
                                       >
@@ -993,11 +1026,11 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
                                       <Form.Item noStyle shouldUpdate>
                                         {({ getFieldValue: getNestedFieldValue }) =>
-                                          getNestedFieldValue(['destinations', field.name, 'schema_options', 'authentication']) && (
+                                          getNestedFieldValue(['destinations', field.name, 'authentication']) && (
                                             <>
                                               <Form.Item
                                                 label="Passphrase"
-                                                name={[field.name, 'schema_options', 'passphrase']}
+                                                name={[field.name, 'passphrase']}
                                                 rules={[{ required: true, message: 'Please enter an SRT passphrase' }]}
                                                 extra="Encryption passphrase for SRT authentication"
                                               >
@@ -1006,7 +1039,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
                                               <Form.Item
                                                 label="Key Length"
-                                                name={[field.name, 'schema_options', 'pbkeylen']}
+                                                name={[field.name, 'pbkeylen']}
                                                 rules={[{ required: true, message: 'Please select an SRT key length' }]}
                                                 extra="Encryption key length for SRT authentication"
                                               >
@@ -1034,7 +1067,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                     <>
                                       <Form.Item
                                         label="Interface"
-                                        name={[field.name, 'schema_options', 'interface_sys_name']}
+                                        name={[field.name, 'interface_sys_name']}
                                         extra="Select a local interface for UDP bind/multicast settings."
                                       >
                                         <Select allowClear loading={interfacesLoading} options={interfaceOptions} placeholder="Select interface" />
@@ -1042,7 +1075,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
                                       <Form.Item
                                         label="Address"
-                                        name={[field.name, 'schema_options', 'host']}
+                                        name={[field.name, 'host']}
                                         rules={[{ required: true, message: 'Please enter a UDP destination address' }]}
                                         extra="The host/IP/Multicast group to send the packets to"
                                       >
@@ -1051,7 +1084,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
                                       <Form.Item
                                         label="Port"
-                                        name={[field.name, 'schema_options', 'port']}
+                                        name={[field.name, 'port']}
                                         rules={[
                                           { required: true, message: 'Please enter a UDP destination port' },
                                           { type: 'number', min: 1, max: 65535, message: 'Port must be between 1 and 65535' },

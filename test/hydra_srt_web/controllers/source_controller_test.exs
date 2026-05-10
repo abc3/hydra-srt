@@ -8,13 +8,15 @@ defmodule HydraSrtWeb.SourceControllerTest do
     "enabled" => true,
     "name" => "primary",
     "schema" => "UDP",
-    "schema_options" => %{"host" => "127.0.0.1", "port" => 5000}
+    "host" => "127.0.0.1",
+    "port" => 5000
   }
 
   @update_attrs %{
     "enabled" => false,
     "name" => "backup-a",
-    "schema_options" => %{"host" => "127.0.0.1", "port" => 5001}
+    "host" => "127.0.0.1",
+    "port" => 5001
   }
 
   @invalid_attrs %{

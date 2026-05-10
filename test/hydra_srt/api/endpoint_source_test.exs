@@ -14,7 +14,8 @@ defmodule HydraSrt.Api.EndpointSourceTest do
         route_id: route.id,
         position: 0,
         schema: "UDP",
-        schema_options: %{"host" => "127.0.0.1", "port" => 5000}
+        host: "127.0.0.1",
+        port: 5000
       })
 
     assert changeset.valid?
@@ -57,10 +58,103 @@ defmodule HydraSrt.Api.EndpointSourceTest do
                route_id: route.id,
                position: 0,
                schema: "SRT",
-               schema_options: %{"host" => "127.0.0.1", "port" => 5001}
+               host: "127.0.0.1",
+               port: 5001
              })
              |> Repo.insert()
 
     assert {"has already been taken", _} = changeset.errors[:route_id]
+  end
+
+  test "rejects duplicate UDP bind target across endpoints" do
+    route = route_fixture()
+
+    _ =
+      source_fixture(route, %{
+        schema: "UDP",
+        address: "127.0.0.1",
+        port: 5050
+      })
+
+    assert {:error, changeset} =
+             %Endpoint{}
+             |> Endpoint.source_changeset(%{
+               route_id: route.id,
+               position: 2,
+               schema: "UDP",
+               interface_sys_name: "",
+               address: "127.0.0.1",
+               port: 5050
+             })
+             |> Repo.insert()
+
+    {message, _meta} = changeset.errors[:bind_port]
+
+    assert message == "bind target is already in use"
+  end
+
+  test "detects duplicate bind target when existing endpoint has empty local fields but address/port set" do
+    route = route_fixture()
+
+    _ =
+      source_fixture(route, %{
+        schema: "UDP",
+        localaddress: "",
+        localport: nil,
+        address: "10.0.0.8",
+        port: 7000
+      })
+
+    assert {:error, changeset} =
+             %Endpoint{}
+             |> Endpoint.source_changeset(%{
+               route_id: route.id,
+               position: 5,
+               schema: "UDP",
+               address: "10.0.0.8",
+               port: 7000
+             })
+             |> Repo.insert()
+
+    {message, _meta} = changeset.errors[:bind_port]
+    assert message == "bind target is already in use"
+  end
+
+  test "allows updating source without self-conflict when bind target is unchanged" do
+    route = route_fixture()
+
+    source =
+      source_fixture(route, %{
+        schema: "UDP",
+        address: "127.0.0.1",
+        port: 5100
+      })
+
+    assert {:ok, updated} =
+             source
+             |> Endpoint.source_changeset(%{
+               name: "Updated source name",
+               address: "127.0.0.1",
+               port: 5100
+             })
+             |> Repo.update()
+
+    assert updated.name == "Updated source name"
+  end
+
+  test "returns validation error (not crash) on non-numeric port values in schema options" do
+    route = route_fixture()
+
+    changeset =
+      Endpoint.source_changeset(%Endpoint{}, %{
+        route_id: route.id,
+        position: 10,
+        schema: "UDP",
+        address: "127.0.0.1",
+        port: "8080-tcp"
+      })
+
+    refute changeset.valid?
+    assert {"is invalid", _} = changeset.errors[:port]
   end
 end

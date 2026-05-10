@@ -101,7 +101,6 @@ const routeFixture = (attrs) => ({
   status: attrs.status,
   schema_status: attrs.schema_status,
   schema: 'SRT',
-  schema_options: { localaddress: '127.0.0.1', localport: 4201 },
   sources: [
     {
       id: `${attrs.id}-primary`,
@@ -109,7 +108,9 @@ const routeFixture = (attrs) => ({
       enabled: true,
       name: 'primary',
       schema: 'SRT',
-      schema_options: { mode: 'listener', localaddress: '127.0.0.1', localport: 4201 },
+      mode: 'listener',
+      localaddress: '127.0.0.1',
+      localport: 4201,
     },
     {
       id: `${attrs.id}-backup`,
@@ -117,7 +118,9 @@ const routeFixture = (attrs) => ({
       enabled: true,
       name: 'backup-1',
       schema: 'SRT',
-      schema_options: { mode: 'listener', localaddress: '127.0.0.1', localport: 4202 },
+      mode: 'listener',
+      localaddress: '127.0.0.1',
+      localport: 4202,
     },
   ],
   active_source_id: `${attrs.id}-primary`,

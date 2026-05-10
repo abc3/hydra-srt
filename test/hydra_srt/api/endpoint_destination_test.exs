@@ -13,7 +13,8 @@ defmodule HydraSrt.Api.EndpointDestinationTest do
       Endpoint.destination_changeset(%Endpoint{}, %{
         route_id: route.id,
         schema: "UDP",
-        schema_options: %{"host" => "127.0.0.1", "port" => 5000}
+        host: "127.0.0.1",
+        port: 5000
       })
 
     assert changeset.valid?
@@ -33,7 +34,8 @@ defmodule HydraSrt.Api.EndpointDestinationTest do
       destination_fixture(route, %{
         position: 0,
         schema: "UDP",
-        schema_options: %{"host" => "127.0.0.1", "port" => 5000}
+        host: "127.0.0.1",
+        port: 5000
       })
 
     assert {:error, changeset} =
@@ -42,11 +44,63 @@ defmodule HydraSrt.Api.EndpointDestinationTest do
                route_id: route.id,
                position: 0,
                schema: "UDP",
-               schema_options: %{"host" => "127.0.0.1", "port" => 5001}
+               host: "127.0.0.1",
+               port: 5001
              })
              |> Repo.insert()
 
     assert {"has already been taken", _} =
              changeset.errors[:route_id] || changeset.errors[:position]
+  end
+
+  test "rejects duplicate SRT listener bind target across endpoints" do
+    route = route_fixture()
+
+    _ =
+      source_fixture(route, %{
+        schema: "SRT",
+        mode: "listener",
+        localaddress: "0.0.0.0",
+        localport: 6000
+      })
+
+    assert {:error, changeset} =
+             %Endpoint{}
+             |> Endpoint.destination_changeset(%{
+               route_id: route.id,
+               position: 9,
+               schema: "SRT",
+               mode: "listener",
+               localaddress: "0.0.0.0",
+               localport: 6000
+             })
+             |> Repo.insert()
+
+    {message, _meta} = changeset.errors[:bind_port]
+    assert message == "bind target is already in use"
+  end
+
+  test "allows updating destination without self-conflict when bind target is unchanged" do
+    route = route_fixture()
+
+    destination =
+      destination_fixture(route, %{
+        schema: "SRT",
+        mode: "listener",
+        localaddress: "0.0.0.0",
+        localport: 6200
+      })
+
+    assert {:ok, updated} =
+             destination
+             |> Endpoint.destination_changeset(%{
+               name: "Updated destination name",
+               mode: "listener",
+               localaddress: "0.0.0.0",
+               localport: 6200
+             })
+             |> Repo.update()
+
+    assert updated.name == "Updated destination name"
   end
 end

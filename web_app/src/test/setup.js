@@ -20,6 +20,17 @@ if (!globalThis.ResizeObserver) {
   };
 }
 
+// Recharts ResponsiveContainer reads element dimensions; jsdom reports 0 by default.
+Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+  configurable: true,
+  value: 1024,
+});
+
+Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+  configurable: true,
+  value: 768,
+});
+
 // antd/rc-table may call getComputedStyle with a pseudo element; jsdom doesn't implement it.
 window.getComputedStyle = () => ({
   getPropertyValue: () => '',
