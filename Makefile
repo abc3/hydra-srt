@@ -39,7 +39,7 @@ dev_udp:
 	-f mpegts "srt://127.0.0.1:4200?mode=listener"
 
 dev_play:
-	ffplay -hide_banner "udp://127.0.0.1:1234"
+	ffplay -hide_banner "udp://127.0.0.1:4202"
 
 dev_play1:
 	srt-live-transmit "srt://127.0.0.1:4201?mode=caller" udp://:4204 -v -statspf default -stats 1000
