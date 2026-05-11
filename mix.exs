@@ -118,28 +118,30 @@ defmodule HydraSrt.MixProject do
   defp rs_native_build(_args) do
     config = rs_native_build_config()
 
-    IO.puts("Building Rust native application (#{config.profile})...")
+    Mix.shell().info("Building Rust native application (#{config.profile})...")
     File.mkdir_p!(config.dest_dir)
 
-    {_output, exit_code} =
-      System.cmd("cargo", config.cargo_args,
+    exit_code =
+      Mix.shell().cmd({"cargo", config.cargo_args},
         cd: config.rs_native_dir,
         stderr_to_stdout: true,
-        into: IO.stream(:stdio, :line)
+        env: [
+          {"CARGO_TERM_COLOR", if(IO.ANSI.enabled?(), do: "always", else: "auto")}
+        ]
       )
 
     if exit_code != 0 do
-      raise "Failed to compile Rust native application"
+      Mix.raise("Failed to compile Rust native application", exit_status: exit_code)
     end
 
     unless File.exists?(config.source_path) do
-      raise "Rust native binary was not created at #{config.source_path}"
+      Mix.raise("Rust native binary was not found at #{config.source_path}")
     end
 
     File.cp!(config.source_path, config.dest_path)
     File.chmod!(config.dest_path, 0o755)
 
-    IO.puts("Rust native application copied to #{config.dest_path}")
+    Mix.shell().info("Rust native application copied to #{config.dest_path}")
 
     {:ok, []}
   end
