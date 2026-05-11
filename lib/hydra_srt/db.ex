@@ -737,9 +737,6 @@ defmodule HydraSrt.Db do
       source_ids == [] ->
         {:error, :invalid_source_order}
 
-      map_size(Map.new(Enum.with_index(source_ids))) != length(source_ids) ->
-        {:error, :invalid_source_order}
-
       existing_ids != requested_ids ->
         {:error, :invalid_source_order}
 
