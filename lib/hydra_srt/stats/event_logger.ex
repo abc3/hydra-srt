@@ -1,6 +1,7 @@
 defmodule HydraSrt.Stats.EventLogger do
   @moduledoc false
   use GenServer
+
   require Logger
 
   alias HydraSrt.Stats.Duckdb
@@ -12,6 +13,21 @@ defmodule HydraSrt.Stats.EventLogger do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
+  def install do
+    :telemetry.attach_many(
+      __MODULE__,
+      [
+        [:hydra, :source, :switch],
+        [:hydra, :pipeline, :fail],
+        [:hydra, :pipeline, :reconnect],
+        [:hydra, :source, :probe, :fail],
+        [:hydra, :source, :status_change]
+      ],
+      &__MODULE__.__telemetry_handler__/4,
+      []
+    )
+  end
+
   def log_source_switch(route_id, from_source_id, to_source_id, reason, details \\ %{}) do
     severity =
       case reason do
@@ -20,7 +36,7 @@ defmodule HydraSrt.Stats.EventLogger do
         _ -> "warning"
       end
 
-    ingest(%{
+    :telemetry.execute([:hydra, :source, :switch], %{count: 1}, %{
       route_id: route_id,
       event_type: "source_switch",
       severity: severity,
@@ -34,7 +50,7 @@ defmodule HydraSrt.Stats.EventLogger do
   end
 
   def log_pipeline_failed(route_id, source_id, reason, message) do
-    ingest(%{
+    :telemetry.execute([:hydra, :pipeline, :fail], %{count: 1}, %{
       route_id: route_id,
       event_type: "pipeline_failed",
       severity: "error",
@@ -45,7 +61,7 @@ defmodule HydraSrt.Stats.EventLogger do
   end
 
   def log_pipeline_reconnecting(route_id, source_id) do
-    ingest(%{
+    :telemetry.execute([:hydra, :pipeline, :reconnect], %{count: 1}, %{
       route_id: route_id,
       event_type: "pipeline_reconnecting",
       severity: "warning",
@@ -55,7 +71,7 @@ defmodule HydraSrt.Stats.EventLogger do
   end
 
   def log_source_probe_failed(route_id, source_id, error) do
-    ingest(%{
+    :telemetry.execute([:hydra, :source, :probe, :fail], %{count: 1}, %{
       route_id: route_id,
       event_type: "source_probe_failed",
       severity: "warning",
@@ -65,7 +81,7 @@ defmodule HydraSrt.Stats.EventLogger do
   end
 
   def log_source_status_change(route_id, source_id, old_status, new_status) do
-    ingest(%{
+    :telemetry.execute([:hydra, :source, :status_change], %{count: 1}, %{
       route_id: route_id,
       event_type: "source_status_change",
       severity: "info",
@@ -75,7 +91,7 @@ defmodule HydraSrt.Stats.EventLogger do
     })
   end
 
-  def ingest(event) when is_map(event) do
+  def __telemetry_handler__(_function, _metrics, event, _config) do
     enriched = enrich(event)
     broadcast_event(enriched)
 
@@ -86,7 +102,7 @@ defmodule HydraSrt.Stats.EventLogger do
     :ok
   end
 
-  def broadcast_event(event) when is_map(event) do
+  defp broadcast_event(event) when is_map(event) do
     route_id = Map.get(event, :route_id) || Map.get(event, "route_id")
 
     if is_binary(route_id) and route_id != "" do
@@ -100,7 +116,7 @@ defmodule HydraSrt.Stats.EventLogger do
     :ok
   end
 
-  @impl true
+  @impl GenServer
   def init(opts) when is_map(opts) do
     flush_interval_ms = opts[:flush_interval_ms] || @default_flush_interval_ms
     max_batch_size = opts[:max_batch_size] || @default_max_batch_size
@@ -109,7 +125,7 @@ defmodule HydraSrt.Stats.EventLogger do
     {:ok, %{events: [], flush_interval_ms: flush_interval_ms, max_batch_size: max_batch_size}}
   end
 
-  @impl true
+  @impl GenServer
   def handle_info({:ingest_event, event}, state) do
     events = [event | state.events]
 
@@ -129,7 +145,7 @@ defmodule HydraSrt.Stats.EventLogger do
     {:noreply, %{state | events: events_after_flush}}
   end
 
-  @impl true
+  @impl GenServer
   def handle_cast({:ingest_event, event}, state) do
     events = [event | state.events]
 
@@ -142,7 +158,7 @@ defmodule HydraSrt.Stats.EventLogger do
     end
   end
 
-  @impl true
+  @impl GenServer
   def terminate(_reason, state) do
     {_events, result} = flush_events(state.events)
     log_flush_error(result)

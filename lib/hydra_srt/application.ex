@@ -8,6 +8,8 @@ defmodule HydraSrt.Application do
     demo_enabled? = Application.get_env(:hydra_srt, :demo_data, false)
     HydraSrt.Demo.ensure_requirements!(demo_enabled?)
 
+    HydraSrt.Stats.EventLogger.install()
+
     :ok =
       :gen_event.swap_sup_handler(
         :erl_signal_server,
