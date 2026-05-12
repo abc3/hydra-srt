@@ -7,9 +7,28 @@ defmodule HydraSrtWeb.RouteController do
 
   action_fallback HydraSrtWeb.FallbackController
 
-  def index(conn, _params) do
-    with {:ok, routes} <- Db.get_all_routes(true) do
-      data(conn, routes)
+  @default_page 1
+  @default_limit 50
+  @max_limit 500
+
+  def index(conn, params) do
+    page = parse_positive_int_or_default(Map.get(params, "page", @default_page), @default_page)
+
+    limit =
+      parse_positive_int_or_default(Map.get(params, "limit", @default_limit), @default_limit)
+
+    sort_by = if Map.get(params, "sort_by") == "updated_at", do: "updated_at", else: "created_at"
+
+    with {:ok, payload} <- Db.get_routes_page(true, sort_by, page, min(limit, @max_limit)) do
+      conn
+      |> json(%{
+        data: payload.routes,
+        meta: %{
+          page: payload.page,
+          limit: payload.limit,
+          total: payload.total
+        }
+      })
     else
       error ->
         conn
@@ -197,6 +216,21 @@ defmodule HydraSrtWeb.RouteController do
       message -> String.slice(message, 0, 500)
     end
   end
+
+  defp parse_positive_int_or_default(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} when parsed > 0 ->
+        parsed
+
+      _ ->
+        default
+    end
+  end
+
+  defp parse_positive_int_or_default(value, _default) when is_integer(value) and value > 0,
+    do: value
+
+  defp parse_positive_int_or_default(_value, default), do: default
 
   defp switch_route_source(route_id, source_id) do
     case HydraSrt.get_route_handler(route_id) do

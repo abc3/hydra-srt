@@ -134,8 +134,19 @@ export const nodesApi = {
 // Routes API
 export const routesApi = {
   // Get all routes
-  getAll: async () => {
-    const response = await authFetch('/api/routes');
+  getAll: async (params = {}) => {
+    const query = new URLSearchParams();
+
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === '') {
+        return;
+      }
+
+      query.set(key, value);
+    });
+
+    const querySuffix = query.toString().length > 0 ? `?${query.toString()}` : '';
+    const response = await authFetch(`/api/routes${querySuffix}`);
     return response.json();
   },
 

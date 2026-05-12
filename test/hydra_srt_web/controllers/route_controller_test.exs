@@ -46,7 +46,31 @@ defmodule HydraSrtWeb.RouteControllerTest do
   describe "index" do
     test "lists all routes", %{conn: conn} do
       conn = get(conn, ~p"/api/routes")
-      assert json_response(conn, 200)["data"] == []
+      response = json_response(conn, 200)
+      assert response["data"] == []
+      assert response["meta"] == %{"limit" => 50, "page" => 1, "total" => 0}
+    end
+
+    test "supports server pagination", %{conn: conn} do
+      route_attrs1 = Map.put(@create_attrs, "name", "route 1")
+      route_attrs2 = Map.put(@create_attrs, "name", "route 2")
+      route_attrs3 = Map.put(@create_attrs, "name", "route 3")
+
+      post(conn, ~p"/api/routes", route: route_attrs1)
+      post(conn, ~p"/api/routes", route: route_attrs2)
+      post(conn, ~p"/api/routes", route: route_attrs3)
+
+      conn = get(conn, ~p"/api/routes?page=2&limit=2")
+      response = json_response(conn, 200)
+
+      assert length(response["data"]) == 1
+      assert response["meta"] == %{"limit" => 2, "page" => 2, "total" => 3}
+    end
+
+    test "uses defaults for invalid pagination params", %{conn: conn} do
+      conn = get(conn, ~p"/api/routes?page=0&limit=abc")
+      response = json_response(conn, 200)
+      assert response["meta"] == %{"limit" => 50, "page" => 1, "total" => 0}
     end
 
     test "rejects request without bearer token", %{conn: conn} do

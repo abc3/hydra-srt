@@ -610,6 +610,50 @@ defmodule HydraSrt.Db do
     {:ok, routes}
   end
 
+  @spec get_routes_page(boolean, binary, pos_integer(), pos_integer()) ::
+          {:ok,
+           %{
+             routes: list(map()),
+             total: non_neg_integer(),
+             page: pos_integer(),
+             limit: pos_integer()
+           }}
+          | {:error, any()}
+  def get_routes_page(with_destinations \\ false, sort_by \\ "created_at", page \\ 1, limit \\ 50)
+      when is_integer(page) and page > 0 and is_integer(limit) and limit > 0 do
+    order_field =
+      case sort_by do
+        "updated_at" -> :updated_at
+        _ -> :inserted_at
+      end
+
+    offset = (page - 1) * limit
+    total = Repo.aggregate(Route, :count, :id)
+
+    routes =
+      from(r in Route, order_by: [desc: field(r, ^order_field)], limit: ^limit, offset: ^offset)
+      |> Repo.all()
+      |> Repo.preload(:tags)
+
+    source_map = list_sources_for_routes(routes)
+
+    destination_map =
+      if with_destinations do
+        list_destinations_for_routes(routes)
+      else
+        %{}
+      end
+
+    routes =
+      Enum.map(routes, fn route ->
+        sources = Map.get(source_map, route.id, [])
+        destinations = Map.get(destination_map, route.id, [])
+        route_to_map(route, with_destinations, destinations, sources)
+      end)
+
+    {:ok, %{routes: routes, total: total, page: page, limit: limit}}
+  end
+
   def get_all_destinations(route_id) when is_binary(route_id) do
     {:ok, Enum.map(list_destinations_for_route(route_id), &destination_to_map/1)}
   end

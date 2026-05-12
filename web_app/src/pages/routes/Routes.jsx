@@ -13,7 +13,7 @@ import {
   BarChartOutlined,
   DownOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { routesApi, tagsApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
 import { subscribeToItemSource, subscribeToItemStatus, subscribeToStats } from '../../utils/realtime';
@@ -35,6 +35,8 @@ const ONE_MONTH_SECONDS = 30 * ONE_DAY_SECONDS;
 const DELETE_DISABLED_MESSAGE = 'If you want to delete it, stop the route first';
 const ROUTE_ACTION_POLL_ATTEMPTS = 5;
 const ROUTE_ACTION_POLL_DELAY_MS = 250;
+const DEFAULT_PAGE = 1;
+const DEFAULT_PAGE_SIZE = 10;
 
 const getStatusMeta = (status) => {
   switch ((status || '').toLowerCase()) {
@@ -247,11 +249,22 @@ const Routes = () => {
   const [routeStats, setRouteStats] = useState({});
   const [statsDrawerRouteId, setStatsDrawerRouteId] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [pagination, setPagination] = useState({
+    current: DEFAULT_PAGE,
+    pageSize: DEFAULT_PAGE_SIZE,
+    total: 0,
+  });
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pendingRouteActions, setPendingRouteActions] = useState({});
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialPageFromUrl = (() => {
+    const raw = searchParams.get('page');
+    const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_PAGE;
+  })();
   const routeIdsSignature = routes
     .map((route) => route?.id)
     .filter(Boolean)
@@ -278,7 +291,7 @@ const Routes = () => {
   }, []);
 
   useEffect(() => {
-    fetchRoutes();
+    fetchRoutes({ page: initialPageFromUrl, pageSize: DEFAULT_PAGE_SIZE });
     fetchAvailableTags();
   }, []);
 
@@ -417,11 +430,29 @@ const Routes = () => {
     return () => window.clearInterval(intervalId);
   }, []);
 
-  const fetchRoutes = async () => {
+  const fetchRoutes = async ({ page = DEFAULT_PAGE, pageSize = DEFAULT_PAGE_SIZE } = {}) => {
     try {
       setLoading(true);
-      const result = await routesApi.getAll();
-      setRoutes(result.data);
+      const result = await routesApi.getAll({ page, limit: pageSize });
+      const nextRoutes = Array.isArray(result?.data) ? result.data : [];
+      const nextMeta = result?.meta || {};
+      const nextPage = Number.isInteger(nextMeta.page) && nextMeta.page > 0 ? nextMeta.page : page;
+      const nextPageSize =
+        Number.isInteger(nextMeta.limit) && nextMeta.limit > 0 ? nextMeta.limit : pageSize;
+      const nextTotal = Number.isInteger(nextMeta.total) && nextMeta.total >= 0 ? nextMeta.total : 0;
+
+      setRoutes(nextRoutes);
+      setPagination({
+        current: nextPage,
+        pageSize: nextPageSize,
+        total: nextTotal,
+      });
+
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('page', String(nextPage));
+        return next;
+      }, { replace: true });
     } catch (error) {
       messageApi.error(`Failed to fetch routes: ${error.message}`);
       console.error('Error:', error);
@@ -431,8 +462,14 @@ const Routes = () => {
   };
 
   const fetchRoutesData = async () => {
-    const result = await routesApi.getAll();
-    return result.data;
+    const result = await routesApi.getAll({
+      page: pagination.current,
+      limit: pagination.pageSize,
+    });
+    return {
+      data: Array.isArray(result?.data) ? result.data : [],
+      meta: result?.meta || null,
+    };
   };
 
   const fetchAvailableTags = async () => {
@@ -450,8 +487,15 @@ const Routes = () => {
 
   const refreshRoutesUntilStable = async (routeId, action) => {
     for (let attempt = 0; attempt < ROUTE_ACTION_POLL_ATTEMPTS; attempt += 1) {
-      const nextRoutes = await fetchRoutesData();
+      const { data: nextRoutes, meta } = await fetchRoutesData();
       setRoutes(nextRoutes);
+      if (meta) {
+        setPagination((prev) => ({
+          current: Number.isInteger(meta.page) && meta.page > 0 ? meta.page : prev.current,
+          pageSize: Number.isInteger(meta.limit) && meta.limit > 0 ? meta.limit : prev.pageSize,
+          total: Number.isInteger(meta.total) && meta.total >= 0 ? meta.total : prev.total,
+        }));
+      }
 
       const nextRoute = nextRoutes.find((route) => route.id === routeId);
       if (!nextRoute || hasRouteReachedActionResult(nextRoute, action)) {
@@ -764,6 +808,8 @@ const Routes = () => {
   const statsSnapshot = statsDrawerRouteId ? routeStats[statsDrawerRouteId]?.snapshot : null;
   const statsTreeData = statsSnapshot ? [buildStatsTreeData(statsSnapshot)] : [];
   const expandedStatsKeys = collectTreeKeys(statsTreeData);
+  const hasLocalFilters = normalizedRoutesFilter.length > 0 || selectedTags.length > 0;
+  const tableTotal = hasLocalFilters ? filteredRoutes.length : pagination.total;
 
   return (
     <div>
@@ -810,8 +856,13 @@ const Routes = () => {
             rowKey="id"
             loading={loading}
             pagination={{
-              defaultPageSize: 10,
+              current: pagination.current,
+              pageSize: pagination.pageSize,
+              total: tableTotal,
               showSizeChanger: true,
+              onChange: (page, pageSize) => {
+                fetchRoutes({ page, pageSize });
+              },
               showTotal: (total) => `Total ${total} routes`,
             }}
           />
