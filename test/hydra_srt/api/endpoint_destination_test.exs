@@ -80,6 +80,34 @@ defmodule HydraSrt.Api.EndpointDestinationTest do
     assert message == "bind target is already in use"
   end
 
+  test "rejects duplicate UDP destination target across routes when interface/address/port match" do
+    route_a = route_fixture()
+    route_b = route_fixture()
+
+    _ =
+      destination_fixture(route_a, %{
+        schema: "UDP",
+        interface_sys_name: "eth0",
+        host: "127.0.0.1",
+        port: 12323
+      })
+
+    assert {:error, changeset} =
+             %Endpoint{}
+             |> Endpoint.destination_changeset(%{
+               route_id: route_b.id,
+               position: 3,
+               schema: "UDP",
+               interface_sys_name: "eth0",
+               host: "127.0.0.1",
+               port: 12323
+             })
+             |> Repo.insert()
+
+    {message, _meta} = changeset.errors[:bind_port]
+    assert message == "bind target is already in use"
+  end
+
   test "allows updating destination without self-conflict when bind target is unchanged" do
     route = route_fixture()
 

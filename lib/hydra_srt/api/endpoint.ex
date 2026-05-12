@@ -172,11 +172,7 @@ defmodule HydraSrt.Api.Endpoint do
         build_target(changeset)
 
       {"UDP", "destination"} ->
-        if present?(get_field(changeset, :localport)) do
-          build_target(changeset)
-        else
-          nil
-        end
+        build_target(changeset)
 
       _ ->
         nil

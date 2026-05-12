@@ -11,7 +11,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
 import { sourcesApi, interfacesApi, routesApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
-import { applyBackendEndpointErrors } from './endpointFormErrors';
+import { applyBackendEndpointErrors, clearEndpointBindErrors } from './endpointFormErrors';
 import { flattenEndpointPayload, normalizeEndpointForForm } from './endpointOptions';
 
 const { Title } = Typography;
@@ -160,12 +160,21 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }) => {
     }, [messageApi]);
 
     const handleValuesChange = (changedValues, allValues) => {
+        const changedKeys = Object.keys(changedValues || {});
+        const bindRelevantKeys = ['interface_sys_name', 'address', 'localaddress', 'host', 'port', 'localport'];
+
+        if (changedKeys.some((key) => bindRelevantKeys.includes(key))) {
+            clearEndpointBindErrors(form);
+        }
+
         if (onChange) {
             onChange(allValues);
         }
     };
 
     const handleSave = () => {
+        clearEndpointBindErrors(form);
+
         form.validateFields()
             .then(values => {
                 const loadingMessage = messageApi.loading('Saving source...', 0);

@@ -70,3 +70,15 @@ export const applyBackendEndpointErrors = (form, errors, basePath = []) => {
 
   return true;
 };
+
+export const clearEndpointBindErrors = (form, basePath = []) => {
+  const base = Array.isArray(basePath) ? basePath : [];
+  const bindFields = ['interface_sys_name', 'address', 'localaddress', 'host', 'port', 'localport'];
+
+  form.setFields(
+    bindFields.map((field) => ({
+      name: [...base, field],
+      errors: [],
+    }))
+  );
+};
