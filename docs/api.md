@@ -102,6 +102,23 @@ The token is obtained by logging in and should be sent in the `Authorization` he
 *   **Stop Route:** `GET /api/routes/:route_id/stop`
 *   **Restart Route:** `GET /api/routes/:route_id/restart`
 
+### Route Runtime Statuses
+
+Route runtime status is exposed in route payloads via `schema_status` (fallback: `status`).
+
+Canonical runtime statuses:
+
+*   `starting` - route start was requested and pipeline startup is in progress.
+*   `processing` - pipeline is running and processing stream data.
+*   `reconnecting` - pipeline lost source continuity and is attempting to reconnect.
+*   `failed` - pipeline reported a terminal failure for the current run.
+*   `stopped` - route is not running.
+
+Notes:
+
+*   `stopping` is a UI transitional state shown while a stop request is in flight; it is not a canonical runtime status emitted by the pipeline lifecycle.
+*   `started` may appear in legacy flows and should be treated as an active/running state for compatibility.
+
 ## Destinations Management
 
 ### List Destinations

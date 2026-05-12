@@ -1,5 +1,6 @@
 export const ACTIVE_ROUTE_STATUSES = new Set(['started', 'processing', 'starting', 'reconnecting', 'stopping']);
 export const LIVE_ROUTE_STATUSES = new Set(['started', 'processing', 'starting', 'reconnecting']);
+export const ROUTE_RUNTIME_STATUSES = ['starting', 'processing', 'reconnecting', 'failed', 'stopped'];
 
 export const formatStatusLabel = (status) =>
   status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Unknown';

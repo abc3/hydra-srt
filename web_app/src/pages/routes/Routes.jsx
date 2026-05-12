@@ -23,6 +23,7 @@ import {
   formatStatusLabel,
   getRouteRuntimeStatus,
   isRouteBusy,
+  ROUTE_RUNTIME_STATUSES,
 } from '../../utils/routes';
 import { getEndpointAddressString, renderEndpointAddress } from '../../utils/routeEndpointAddress';
 
@@ -256,6 +257,10 @@ const Routes = () => {
     .filter(Boolean)
     .sort()
     .join('|');
+  const statusFilters = ROUTE_RUNTIME_STATUSES.map((status) => ({
+    text: status,
+    value: status,
+  }));
 
   useEffect(() => {
     if (window.setBreadcrumbItems) {
@@ -615,14 +620,8 @@ const Routes = () => {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      filters: [
-        { text: 'Starting', value: 'starting' },
-        { text: 'Processing', value: 'processing' },
-        { text: 'Reconnecting', value: 'reconnecting' },
-        { text: 'Failed', value: 'failed' },
-        { text: 'Stopped', value: 'stopped' },
-      ],
-      onFilter: (value, record) => (getRouteRuntimeStatus(record) || '').toLowerCase() === value,
+      filters: statusFilters,
+      onFilter: (value, record) => (getRouteRuntimeStatus(record) || '') === value,
       render: (_, record) => renderStatusBadge(getRouteRuntimeStatus(record)),
     },
     {
