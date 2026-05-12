@@ -5,6 +5,7 @@ import {
   EditOutlined,
   DeleteOutlined,
   ExclamationCircleFilled,
+  CloseCircleFilled,
   CaretRightOutlined,
   StopOutlined,
   HomeOutlined,
@@ -256,6 +257,7 @@ const Routes = () => {
   });
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pendingRouteActions, setPendingRouteActions] = useState({});
+  const [selectedRouteIds, setSelectedRouteIds] = useState([]);
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
   const navigate = useNavigate();
@@ -512,30 +514,58 @@ const Routes = () => {
 
   const showDeleteConfirm = (record) => {
     modal.confirm({
-      title: 'Are you sure you want to delete this route?',
+      title: 'Delete route',
       icon: <ExclamationCircleFilled />,
-      content: `Route: ${record.name}`,
-      okText: 'Yes, delete',
+      content: `Are you sure you want to delete route "${record.name || record.id}"?`,
+      okText: 'Continue',
       okType: 'danger',
       cancelText: 'No, cancel',
+      maskClosable: true,
       onOk() {
-        return handleDelete(record.id);
+        modal.confirm({
+          title: 'Delete route permanently',
+          icon: <CloseCircleFilled style={{ color: '#ff4d4f' }} />,
+          content: (
+            <Space direction="vertical" size={4}>
+              <Text>{"You're about to permanently delete this route:"}</Text>
+              <Text strong>{record.name || record.id}</Text>
+              <Text type="danger">This action cannot be undone.</Text>
+            </Space>
+          ),
+          okText: 'Yes, delete',
+          okType: 'danger',
+          cancelText: 'No, cancel',
+          maskClosable: true,
+          onOk() {
+            return handleDelete(record.id);
+          },
+        });
       },
     });
   };
 
-  const handleDelete = async (id) => {
+  const handleDelete = async (id, options = {}) => {
+    const { silent = false } = options;
+
     try {
       await routesApi.delete(id);
-      messageApi.success('Route deleted successfully');
-      fetchRoutes();
+      if (!silent) {
+        messageApi.success('Route deleted successfully');
+        await fetchRoutes();
+      }
+      return true;
     } catch (error) {
-      messageApi.error(`Failed to delete route: ${error.message}`);
+      if (!silent) {
+        messageApi.error(`Failed to delete route: ${error.message}`);
+      }
       console.error('Error:', error);
+      return false;
     }
   };
 
-  const handleRouteStatus = async (id, action) => {
+  const handleRouteStatus = async (id, action, options = {}) => {
+    const { silent = false } = options;
+
     try {
       setPendingRouteActions((prev) => ({ ...prev, [id]: action }));
       setRoutes((prev) => prev.map((route) => (
@@ -550,14 +580,20 @@ const Routes = () => {
       await (action === 'start' ? routesApi.start(id) : routesApi.stop(id));
       const settled = await refreshRoutesUntilStable(id, action);
 
-      messageApi.success(`Route ${action}ed successfully`);
-      if (settled === false) {
+      if (!silent) {
+        messageApi.success(`Route ${action}ed successfully`);
+      }
+      if (settled === false && !silent) {
         messageApi.warning(`Route is still ${action === 'start' ? 'starting' : 'stopping'}. Refresh in a moment if it does not update.`);
       }
+      return true;
     } catch (error) {
       await fetchRoutes();
-      messageApi.error(`Failed to ${action} route: ${error.message}`);
+      if (!silent) {
+        messageApi.error(`Failed to ${action} route: ${error.message}`);
+      }
       console.error('Error:', error);
+      return false;
     } finally {
       setPendingRouteActions((prev) => {
         const next = { ...prev };
@@ -565,6 +601,96 @@ const Routes = () => {
         return next;
       });
     }
+  };
+
+  const runBulkRouteAction = async (action) => {
+    const ids = [...selectedRouteIds];
+    if (ids.length === 0) {
+      return;
+    }
+
+    const loading = messageApi.loading(
+      `${action === 'delete' ? 'Deleting' : `${action === 'start' ? 'Starting' : 'Stopping'}`} ${ids.length} route(s)...`,
+      0
+    );
+
+    try {
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          if (action === 'delete') {
+            const ok = await handleDelete(id, { silent: true });
+            return { id, ok };
+          }
+
+          const ok = await handleRouteStatus(id, action, { silent: true });
+          return { id, ok };
+        })
+      );
+
+      const successCount = results.filter((item) => item.ok).length;
+      const failedCount = results.length - successCount;
+
+      if (action === 'delete') {
+        await fetchRoutes();
+      }
+
+      setSelectedRouteIds([]);
+
+      if (failedCount === 0) {
+        messageApi.success(`${action === 'delete' ? 'Deleted' : `${action === 'start' ? 'Started' : 'Stopped'}`} ${successCount} route(s) successfully`);
+      } else if (successCount === 0) {
+        messageApi.error(`Failed to ${action} all selected routes`);
+      } else {
+        messageApi.warning(`${action === 'delete' ? 'Deleted' : `${action === 'start' ? 'Started' : 'Stopped'}`} ${successCount} route(s), failed ${failedCount}`);
+      }
+    } finally {
+      loading();
+    }
+  };
+
+  const showBulkActionConfirm = (action) => {
+    const count = selectedRouteIds.length;
+    if (count === 0) {
+      messageApi.info('Select at least one route');
+      return;
+    }
+
+    const verb = action === 'start' ? 'start' : action === 'stop' ? 'stop' : 'delete';
+    const title = action === 'delete' ? 'Delete selected routes' : `${verb[0].toUpperCase()}${verb.slice(1)} selected routes`;
+    const content = `Are you sure you want to ${verb} ${count} selected route(s)?`;
+
+    modal.confirm({
+      title,
+      icon: <ExclamationCircleFilled />,
+      content,
+      okText: action === 'delete' ? 'Continue' : `Yes, ${verb}`,
+      okType: action === 'delete' ? 'danger' : 'primary',
+      cancelText: 'No, cancel',
+      maskClosable: true,
+      onOk() {
+        if (action !== 'delete') {
+          return runBulkRouteAction(action);
+        }
+
+        modal.confirm({
+          title: 'Delete selected routes permanently',
+          icon: <CloseCircleFilled style={{ color: '#ff4d4f' }} />,
+          content: (
+            <Space direction="vertical" size={4}>
+              <Text>{`You're about to permanently delete ${count} selected route(s).`}</Text>
+              <Text type="danger">This action cannot be undone.</Text>
+            </Space>
+          ),
+          okText: 'Yes, delete',
+          okType: 'danger',
+          cancelText: 'No, cancel',
+          maskClosable: true,
+          onOk() {
+            return runBulkRouteAction(action);
+          },
+        });
+      },
+    });
   };
 
   const getNameColumnSearchProps = () => ({
@@ -810,6 +936,13 @@ const Routes = () => {
   const expandedStatsKeys = collectTreeKeys(statsTreeData);
   const hasLocalFilters = normalizedRoutesFilter.length > 0 || selectedTags.length > 0;
   const tableTotal = hasLocalFilters ? filteredRoutes.length : pagination.total;
+  const selectedRoutesCount = selectedRouteIds.length;
+  const rowSelection = {
+    selectedRowKeys: selectedRouteIds,
+    onChange: (selectedRowKeys) => {
+      setSelectedRouteIds(selectedRowKeys);
+    },
+  };
 
   return (
     <div>
@@ -831,6 +964,28 @@ const Routes = () => {
 
         <Card>
           <Space style={{ marginBottom: 16, width: '100%' }} wrap>
+            <Button
+              onClick={() => showBulkActionConfirm('start')}
+              disabled={selectedRoutesCount === 0}
+              icon={<CaretRightOutlined />}
+            >
+              Start selected
+            </Button>
+            <Button
+              onClick={() => showBulkActionConfirm('stop')}
+              disabled={selectedRoutesCount === 0}
+              icon={<StopOutlined />}
+            >
+              Stop selected
+            </Button>
+            <Button
+              danger
+              onClick={() => showBulkActionConfirm('delete')}
+              disabled={selectedRoutesCount === 0}
+              icon={<DeleteOutlined />}
+            >
+              Delete selected
+            </Button>
             <Input
               prefix={<SearchOutlined />}
               placeholder="Filter routes by name or address"
@@ -853,6 +1008,7 @@ const Routes = () => {
           <Table
             columns={columns}
             dataSource={filteredRoutes}
+            rowSelection={rowSelection}
             rowKey="id"
             loading={loading}
             pagination={{
