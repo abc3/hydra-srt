@@ -149,6 +149,13 @@ const Interfaces = () => {
 
     try {
       setSavingKey(record.key);
+      // Optimistic UI: show the saved alias immediately so edit feels instant
+      // and UI tests do not depend on backend round-trip timing.
+      setInterfaces((prev) => prev.map((item) => (
+        item.key === record.key ? { ...item, name: nextName } : item
+      )));
+      cancelEdit();
+
       const payload = {
         name: nextName,
         sys_name: record.sys_name,
@@ -163,11 +170,11 @@ const Interfaces = () => {
       }
 
       messageApi.success('Interface name saved');
-      cancelEdit();
-      fetchInterfaces();
+      await fetchInterfaces();
     } catch (error) {
       messageApi.error(`Failed to save interface name: ${error.message}`);
       console.error('Error:', error);
+      await fetchInterfaces();
     } finally {
       setSavingKey('');
     }
