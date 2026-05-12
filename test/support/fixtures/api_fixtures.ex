@@ -52,6 +52,8 @@ defmodule HydraSrt.ApiFixtures do
         true -> nil
       end
 
+    unique_port = 10_000 + rem(System.unique_integer([:positive]), 50_000)
+
     {:ok, destination} =
       attrs
       |> Enum.into(%{
@@ -61,7 +63,7 @@ defmodule HydraSrt.ApiFixtures do
         name: "some name",
         schema: "UDP",
         host: "127.0.0.1",
-        port: 5000,
+        port: unique_port,
         started_at: ~U[2025-02-19 16:24:00Z],
         status: "some status",
         stopped_at: ~U[2025-02-19 16:24:00Z]

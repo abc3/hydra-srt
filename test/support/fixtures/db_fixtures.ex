@@ -56,6 +56,7 @@ defmodule HydraSrt.DbFixtures do
   """
   def destination_fixture(route, attrs \\ %{}) do
     route_id = if is_map(route), do: route["id"] || route.id, else: route
+    unique_port = 10_000 + rem(System.unique_integer([:positive]), 50_000)
 
     attrs =
       attrs
@@ -65,7 +66,7 @@ defmodule HydraSrt.DbFixtures do
         "name" => "some name",
         "schema" => "UDP",
         "host" => "127.0.0.1",
-        "port" => 5000,
+        "port" => unique_port,
         "started_at" => ~U[2025-02-19 16:24:00Z],
         "status" => "some status",
         "stopped_at" => ~U[2025-02-19 16:24:00Z]
