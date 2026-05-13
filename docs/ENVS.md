@@ -11,6 +11,7 @@ All environment variables recognised by Hydra SRT, grouped by purpose.
 | `PHX_SERVER` | No | — | Set to any non-empty value to start the Phoenix HTTP server (typically used in releases). |
 | `PHX_HOST` | No | `localhost` (dev) / `example.com` (prod) | Public hostname used when building URLs. |
 | `PORT` | No | `4000` | HTTP listen port. |
+| `PHX_CHECK_ORIGIN` | No | — | Comma-separated list of allowed origins for Phoenix WebSocket origin checks. If unset, checks fall back to Phoenix defaults. Example: `http://198.51.100.10:40321,http://203.0.113.20:4000`. |
 | `SECRET_KEY_BASE` | **prod only** | hardcoded in dev/test | Secret used to sign/encrypt cookies and tokens. Generate with `mix phx.gen.secret`. |
 | `DEMO_DATA` | No | `false` | Enables demo bootstrap: starts a local ffmpeg test stream and auto-creates a `demo_route` with one SRT source and SRT+UDP destinations. Requires `ffmpeg` in `PATH`; app fails to start if missing. |
 

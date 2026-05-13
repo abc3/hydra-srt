@@ -304,6 +304,7 @@ Configure HydraSRT using the following environment variables:
 | `API_AUTH_USERNAME`    | Username for API authentication         | (required)       |
 | `API_AUTH_PASSWORD`    | Password for API authentication         | (required)       |
 | `PORT`                 | HTTP port for the API server            | 4000             |
+| `PHX_CHECK_ORIGIN`     | Comma-separated allowed origins for Phoenix WebSocket origin checks. If unset, origin checks use Phoenix defaults. Example: `http://198.51.100.10:40321,http://203.0.113.20:4000` | (optional) |
 | `RELEASE_COOKIE`       | Erlang distribution cookie              | (auto-generated) |
 | `DATABASE_PATH`        | Path to SQLite database file            | (required)       |
 | `POOL_SIZE`            | DB pool size                            | 5                |
