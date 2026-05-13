@@ -87,13 +87,15 @@ case config_env() do
 
     host = Env.get_binary("PHX_HOST", "example.com")
     port = Env.get_integer("PORT", 4000)
+    check_origin = Env.get_check_origin("PHX_CHECK_ORIGIN")
 
     config :hydra_srt, HydraSrtWeb.Endpoint,
       url: [host: host, port: port, scheme: "http"],
       http: [
         ip: {0, 0, 0, 0},
         port: port
-      ]
+      ],
+      check_origin: check_origin
 
   :dev ->
     port = Env.get_integer("PORT", 4000)
