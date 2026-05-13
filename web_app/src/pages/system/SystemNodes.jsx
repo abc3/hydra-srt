@@ -49,12 +49,12 @@ const SystemNodes = () => {
       return 'N/A';
     }
 
-    const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
-    let value = Math.max(0, Number(bytesPerSec));
+    const units = ['bps', 'Kbps', 'Mbps', 'Gbps'];
+    let value = Math.max(0, Number(bytesPerSec) * 8);
     let unitIndex = 0;
 
-    while (value >= 1024 && unitIndex < units.length - 1) {
-      value /= 1024;
+    while (value >= 1000 && unitIndex < units.length - 1) {
+      value /= 1000;
       unitIndex += 1;
     }
 

@@ -21,6 +21,11 @@ const LIVE_ANALYTICS_WINDOW = 'live';
 const CUSTOM_ANALYTICS_WINDOW = 'custom';
 const LIVE_WINDOW_MINUTES = 5;
 const LIVE_REFRESH_INTERVAL_MS = 5_000;
+const CHART_GRID_STYLE = {
+  stroke: '#4f4f4f',
+  strokeWidth: 0.6,
+  strokeDasharray: '2 4',
+};
 
 const ANALYTICS_WINDOW_OPTIONS = [
   { label: 'live', value: LIVE_ANALYTICS_WINDOW },
@@ -63,6 +68,58 @@ const formatSignedThroughput = (bytesPerSec) => {
   if (typeof bytesPerSec !== 'number' || Number.isNaN(bytesPerSec)) return '-';
   const sign = bytesPerSec < 0 ? '-' : '';
   return `${sign}${formatBitrate(Math.abs(bytesPerSec))}`;
+};
+
+const formatRoundedMetricValue = (value) => {
+  if (typeof value !== 'number' || Number.isNaN(value)) return value;
+  return Math.round(value);
+};
+
+const calcAverage = (values) => {
+  const nums = values.filter((v) => typeof v === 'number' && !Number.isNaN(v));
+  if (!nums.length) return null;
+  return nums.reduce((sum, v) => sum + v, 0) / nums.length;
+};
+
+const formatOneDecimal = (value) => {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '-';
+  return value.toFixed(1);
+};
+
+const renderChartTooltip = ({ active, payload }) => {
+  if (!active || !Array.isArray(payload) || payload.length === 0) return null;
+
+  const rawTimestamp = payload[0]?.payload?.timestamp;
+  const timeLabel = formatChartTimestamp(rawTimestamp, true) || '-';
+
+  const formatTooltipValue = (entry) => {
+    const value = entry?.value;
+    if (typeof value !== 'number' || Number.isNaN(value)) return value;
+    if (String(entry?.dataKey || '').startsWith('net_')) {
+      return formatSignedThroughput(value);
+    }
+    return formatRoundedMetricValue(value);
+  };
+
+  return (
+    <div
+      style={{
+        background: '#141414',
+        border: '1px solid #303030',
+        borderRadius: 6,
+        padding: '8px 10px',
+      }}
+    >
+      <div style={{ color: '#bfbfbf', fontSize: 12, fontWeight: 700, marginBottom: 10 }}>
+        {timeLabel}
+      </div>
+      {payload.map((entry) => (
+        <div key={entry?.dataKey} style={{ color: entry?.color || '#d9d9d9', fontSize: 12 }}>
+          {entry?.name}: {formatTooltipValue(entry)}
+        </div>
+      ))}
+    </div>
+  );
 };
 
 const alignTsToBucket = (tsMs, bucketMs) => Math.floor(tsMs / bucketMs) * bucketMs;
@@ -438,6 +495,19 @@ const SystemNodeMetrics = () => {
     return { maxIn, maxOut };
   }, [networkChartData, renderedNetworkSeries]);
 
+  const averageMetrics = useMemo(() => {
+    const cpu = calcAverage(chartData.map((p) => p.cpu));
+    const ram = calcAverage(chartData.map((p) => p.ram));
+    const swap = calcAverage(chartData.map((p) => p.swap));
+    const la1 = calcAverage(chartData.map((p) => p.la_avg1));
+    const la5 = calcAverage(chartData.map((p) => p.la_avg5));
+    const la15 = calcAverage(chartData.map((p) => p.la_avg15));
+    const netIn = calcAverage(networkChartData.map((p) => p.net_total_in));
+    const netOut = calcAverage(networkChartData.map((p) => p.net_total_out));
+
+    return { cpu, ram, swap, la1, la5, la15, netIn, netOut };
+  }, [chartData, networkChartData]);
+
   return (
     <Space
       direction="vertical"
@@ -505,14 +575,17 @@ const SystemNodeMetrics = () => {
 
           <Row gutter={[16, 16]}>
             <Col xs={24} lg={12}>
-              <Card size="small" title="CPU usage">
+              <Card
+                size="small"
+                title={`CPU usage${averageMetrics.cpu != null ? `: ${Math.round(averageMetrics.cpu)}%` : ''}`}
+              >
                 <div style={{ width: '100%', height: 260 }}>
                   <ResponsiveContainer>
                     <LineChart data={chartData} margin={{ top: 8, right: 20, left: 8, bottom: 8 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
+                      <CartesianGrid {...CHART_GRID_STYLE} />
                       <XAxis dataKey="xLabel" />
                       <YAxis width={56} domain={[0, 100]} />
-                      <RechartsTooltip />
+                      <RechartsTooltip content={renderChartTooltip} />
                       <Line type="monotone" dataKey="cpu" name="CPU %" stroke="#1677ff" dot={false} isAnimationActive={false} connectNulls />
                     </LineChart>
                   </ResponsiveContainer>
@@ -521,14 +594,21 @@ const SystemNodeMetrics = () => {
             </Col>
 
             <Col xs={24} lg={12}>
-              <Card size="small" title="LA">
+              <Card
+                size="small"
+                title={`LA${
+                  averageMetrics.la1 != null && averageMetrics.la5 != null && averageMetrics.la15 != null
+                    ? `: ${formatOneDecimal(averageMetrics.la1)}/${formatOneDecimal(averageMetrics.la5)}/${formatOneDecimal(averageMetrics.la15)}`
+                    : ''
+                }`}
+              >
                 <div style={{ width: '100%', height: 260 }}>
                   <ResponsiveContainer>
                     <LineChart data={chartData} margin={{ top: 8, right: 20, left: 8, bottom: 8 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
+                      <CartesianGrid {...CHART_GRID_STYLE} />
                       <XAxis dataKey="xLabel" />
                       <YAxis width={56} />
-                      <RechartsTooltip />
+                      <RechartsTooltip content={renderChartTooltip} />
                       <Line type="monotone" dataKey="la_avg1" name="avg1" stroke="#52c41a" dot={false} isAnimationActive={false} connectNulls />
                       <Line type="monotone" dataKey="la_avg5" name="avg5" stroke="#faad14" dot={false} isAnimationActive={false} connectNulls />
                       <Line type="monotone" dataKey="la_avg15" name="avg15" stroke="#f5222d" dot={false} isAnimationActive={false} connectNulls />
@@ -539,14 +619,21 @@ const SystemNodeMetrics = () => {
             </Col>
 
             <Col xs={24} lg={12}>
-              <Card size="small" title="Memory">
+              <Card
+                size="small"
+                title={`Memory${
+                  averageMetrics.ram != null && averageMetrics.swap != null
+                    ? `: RAM ${Math.round(averageMetrics.ram)}%, SWAP ${Math.round(averageMetrics.swap)}%`
+                    : ''
+                }`}
+              >
                 <div style={{ width: '100%', height: 260 }}>
                   <ResponsiveContainer>
                     <LineChart data={chartData} margin={{ top: 8, right: 20, left: 8, bottom: 8 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
+                      <CartesianGrid {...CHART_GRID_STYLE} />
                       <XAxis dataKey="xLabel" />
                       <YAxis width={56} domain={[0, 100]} />
-                      <RechartsTooltip />
+                      <RechartsTooltip content={renderChartTooltip} />
                       <Line type="monotone" dataKey="ram" name="RAM %" stroke="#722ed1" dot={false} isAnimationActive={false} connectNulls />
                       <Line type="monotone" dataKey="swap" name="SWAP %" stroke="#13c2c2" dot={false} isAnimationActive={false} connectNulls />
                     </LineChart>
@@ -556,7 +643,14 @@ const SystemNodeMetrics = () => {
             </Col>
 
             <Col xs={24} lg={12}>
-              <Card size="small" title="Network">
+              <Card
+                size="small"
+                title={`Network${
+                  averageMetrics.netIn != null && averageMetrics.netOut != null
+                    ? `: in ${formatBitrate(averageMetrics.netIn)}, out ${formatBitrate(Math.abs(averageMetrics.netOut))}`
+                    : ''
+                }`}
+              >
                 <Space size={12} style={{ marginBottom: 8 }}>
                   <Select
                     size="small"
@@ -575,14 +669,14 @@ const SystemNodeMetrics = () => {
               <div style={{ width: '100%', height: 260 }}>
                   <ResponsiveContainer>
                     <LineChart data={networkChartData} margin={{ top: 8, right: 20, left: 8, bottom: 8 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
+                      <CartesianGrid {...CHART_GRID_STYLE} />
                       <XAxis dataKey="xLabel" />
                       <YAxis
                         width={80}
                         domain={networkDomain}
                         tickFormatter={(value) => formatSignedThroughput(value)}
                       />
-                      <RechartsTooltip formatter={(value) => formatSignedThroughput(value)} />
+                      <RechartsTooltip content={renderChartTooltip} />
                       {renderedNetworkSeries.map((key, index) => (
                         <Line
                           key={key}

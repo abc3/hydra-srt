@@ -77,6 +77,11 @@ const LIVE_WINDOW_MINUTES = 5;
 const LIVE_SNAPSHOT_THROTTLE_MS = 300;
 const MAX_LIVE_POINTS = 300;
 const ANALYTICS_COLORS = ['#1677ff', '#52c41a', '#faad14', '#722ed1', '#13c2c2', '#f5222d', '#2f54eb'];
+const CHART_GRID_STYLE = {
+  stroke: '#4f4f4f',
+  strokeWidth: 0.6,
+  strokeDasharray: '2 4',
+};
 
 const ANALYTICS_WINDOW_OPTIONS = [
   { label: 'live', value: LIVE_ANALYTICS_WINDOW },
@@ -152,6 +157,35 @@ const formatBitrate = (bytesPerSecond) => {
 
   const digits = value >= 100 || unitIndex === 0 ? 0 : value >= 10 ? 1 : 2;
   return `${value.toFixed(digits)} ${units[unitIndex]}`;
+};
+
+const renderBandwidthTooltip = ({ active, payload }) => {
+  if (!active || !Array.isArray(payload) || payload.length === 0) {
+    return null;
+  }
+
+  const rawTimestamp = payload[0]?.payload?.timestamp;
+  const timeLabel = formatChartTimestamp(rawTimestamp, true) || '-';
+
+  return (
+    <div
+      style={{
+        background: '#141414',
+        border: '1px solid #303030',
+        borderRadius: 6,
+        padding: '8px 10px',
+      }}
+    >
+      <div style={{ color: '#bfbfbf', fontSize: 12, fontWeight: 700, marginBottom: 10 }}>
+        {timeLabel}
+      </div>
+      {payload.map((entry) => (
+        <div key={entry?.dataKey} style={{ color: entry?.color || '#d9d9d9', fontSize: 12 }}>
+          {entry?.name}: {formatBitrate(entry?.value)}
+        </div>
+      ))}
+    </div>
+  );
 };
 
 const toNumberOrNull = (value) => {
@@ -1243,13 +1277,10 @@ const RouteItem = () => {
           <div style={{ width: '100%', height: 320 }}>
             <ResponsiveContainer>
               <LineChart data={chartData} margin={{ top: 8, right: 20, left: 28, bottom: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" />
+                <CartesianGrid {...CHART_GRID_STYLE} />
                 <XAxis dataKey="xLabel" />
                 <YAxis width={88} tickMargin={8} tickFormatter={(value) => formatBitrate(value)} />
-                <RechartsTooltip
-                  labelFormatter={(_label, payload) => payload?.[0]?.payload?.timestamp || ''}
-                  formatter={(value) => formatBitrate(value)}
-                />
+                <RechartsTooltip content={renderBandwidthTooltip} />
                 <Legend />
                 <Line
                   type="monotone"
