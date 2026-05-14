@@ -347,6 +347,97 @@ defmodule HydraSrt.Db do
     update_route_schema_status(route_id, status)
   end
 
+  @spec update_route_status_with_previous(String.t(), map()) ::
+          {:ok, %{route: map(), previous_status: String.t() | nil}} | {:error, any()}
+  def update_route_status_with_previous(route_id, route_attrs)
+      when is_binary(route_id) and is_map(route_attrs) do
+    case Repo.transaction(fn ->
+           route =
+             case Repo.get(Route, route_id, lock: "FOR UPDATE") do
+               nil -> Repo.rollback(:not_found)
+               %Route{} = current -> current
+             end
+
+           previous_status = route.schema_status || route.status
+
+           updated_route =
+             route
+             |> Route.changeset(route_attrs)
+             |> Repo.update(stale_error_field: :lock_version)
+             |> case do
+               {:ok, updated} -> updated
+               {:error, %Ecto.Changeset{} = changeset} -> Repo.rollback(changeset)
+             end
+
+           %{route: get_route_map(updated_route.id), previous_status: previous_status}
+         end) do
+      {:ok, payload} ->
+        {:ok, payload}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  @spec update_route_runtime_status_with_previous(String.t(), String.t() | nil) ::
+          {:ok, %{route: map(), previous_status: String.t() | nil}} | {:error, any()}
+  def update_route_runtime_status_with_previous(route_id, status) when is_binary(route_id) do
+    case Repo.transaction(fn ->
+           route =
+             case Repo.get(Route, route_id, lock: "FOR UPDATE") do
+               nil -> Repo.rollback(:not_found)
+               %Route{} = current -> current
+             end
+
+           previous_status = route.schema_status || route.status
+           now = DateTime.utc_now(:microsecond)
+
+           from(d in Endpoint,
+             where:
+               d.route_id == ^route_id and d.enabled == true and
+                 d.type == ^Endpoint.destination_type()
+           )
+           |> Repo.update_all(set: [status: status, updated_at: now])
+
+           from(s in Endpoint,
+             where: s.route_id == ^route_id and s.type == ^Endpoint.source_type()
+           )
+           |> Repo.update_all(set: [status: @status_stopped, updated_at: now])
+
+           if is_binary(route.active_source_id) do
+             from(s in Endpoint,
+               where:
+                 s.route_id == ^route_id and s.type == ^Endpoint.source_type() and
+                   s.id == ^route.active_source_id
+             )
+             |> Repo.update_all(set: [status: status, updated_at: now])
+           end
+
+           updated_route =
+             route
+             |> Route.changeset(%{"schema_status" => status})
+             |> Repo.update(stale_error_field: :lock_version)
+             |> case do
+               {:ok, updated} -> updated
+               {:error, %Ecto.Changeset{} = changeset} -> Repo.rollback(changeset)
+             end
+
+           %{route: get_route_map(updated_route.id), previous_status: previous_status}
+         end) do
+      {:ok, payload} ->
+        {:ok, payload}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset}
+    end
+  end
+
   @spec transition_route_runtime_status(
           String.t(),
           map(),
@@ -401,6 +492,72 @@ defmodule HydraSrt.Db do
           {:error, %Ecto.Changeset{} = changeset} ->
             {:error, changeset}
         end
+    end
+  end
+
+  @spec transition_route_runtime_status_with_previous(
+          String.t(),
+          map(),
+          String.t() | nil,
+          String.t() | nil
+        ) :: {:ok, %{route: map(), previous_status: String.t() | nil}} | {:error, any()}
+  def transition_route_runtime_status_with_previous(
+        route_id,
+        route_attrs,
+        destinations_status,
+        sources_status
+      )
+      when is_binary(route_id) and is_map(route_attrs) do
+    case Repo.transaction(fn ->
+           route =
+             case Repo.get(Route, route_id, lock: "FOR UPDATE") do
+               nil -> Repo.rollback(:not_found)
+               %Route{} = current -> current
+             end
+
+           previous_status = route.schema_status || route.status
+           now = DateTime.utc_now(:microsecond)
+
+           updated_route =
+             route
+             |> Route.changeset(route_attrs)
+             |> Repo.update(stale_error_field: :lock_version)
+             |> case do
+               {:ok, updated} -> updated
+               {:error, %Ecto.Changeset{} = changeset} -> Repo.rollback(changeset)
+             end
+
+           from(d in Endpoint,
+             where:
+               d.route_id == ^route_id and d.enabled == true and
+                 d.type == ^Endpoint.destination_type()
+           )
+           |> Repo.update_all(set: [status: destinations_status, updated_at: now])
+
+           from(s in Endpoint,
+             where: s.route_id == ^route_id and s.type == ^Endpoint.source_type()
+           )
+           |> Repo.update_all(set: [status: @status_stopped, updated_at: now])
+
+           if is_binary(updated_route.active_source_id) do
+             from(s in Endpoint,
+               where:
+                 s.route_id == ^route_id and s.type == ^Endpoint.source_type() and
+                   s.id == ^updated_route.active_source_id
+             )
+             |> Repo.update_all(set: [status: sources_status, updated_at: now])
+           end
+
+           %{route: get_route_map(updated_route.id), previous_status: previous_status}
+         end) do
+      {:ok, payload} ->
+        {:ok, payload}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset}
     end
   end
 

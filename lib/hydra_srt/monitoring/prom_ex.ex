@@ -4,6 +4,7 @@ defmodule HydraSrt.PromEx do
   use PromEx, otp_app: :hydra_srt
 
   alias HydraSrt.PromEx.Plugins.OsMon
+  alias HydraSrt.PromEx.Plugins.RouteStatus
   alias PromEx.Plugins
 
   @impl true
@@ -15,6 +16,7 @@ defmodule HydraSrt.PromEx do
       Plugins.Beam,
       {Plugins.Phoenix, router: HydraSrtWeb.Router, endpoint: HydraSrtWeb.Endpoint},
       {Plugins.Ecto, repos: [HydraSrt.Repo]},
+      RouteStatus,
       {OsMon, poll_rate: poll_rate}
     ]
   end

@@ -76,7 +76,7 @@ defmodule HydraSrtWeb.RouteController do
   end
 
   def update(conn, %{"id" => id, "route" => route_params}) do
-    with {:ok, route} <- Db.update_route(id, route_params) do
+    with {:ok, route} <- Db.update_route(id, drop_runtime_status_fields(route_params)) do
       data(conn, route)
     end
   end
@@ -153,10 +153,27 @@ defmodule HydraSrtWeb.RouteController do
         |> put_status(:bad_request)
         |> json(%{error: message})
 
-      {:error, reason} ->
+      {:error, _reason} ->
         conn
         |> put_status(:internal_server_error)
-        |> json(%{error: "Failed to fetch analytics: #{inspect(reason)}"})
+        |> json(%{error: "Failed to fetch analytics"})
+    end
+  end
+
+  def statuses_analytics(conn, params) do
+    with {:ok, query_params} <- Analytics.build_query_params(params),
+         {:ok, payload} <- Analytics.fetch_routes_status_timeseries(query_params) do
+      data(conn, payload)
+    else
+      {:error, {:bad_request, message}} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: message})
+
+      {:error, _reason} ->
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: "Failed to fetch route status analytics"})
     end
   end
 
@@ -169,10 +186,10 @@ defmodule HydraSrtWeb.RouteController do
         |> put_status(:bad_request)
         |> json(%{error: message})
 
-      {:error, reason} ->
+      {:error, _reason} ->
         conn
         |> put_status(:internal_server_error)
-        |> json(%{error: "Failed to fetch events: #{inspect(reason)}"})
+        |> json(%{error: "Failed to fetch events"})
     end
   end
 
@@ -251,5 +268,11 @@ defmodule HydraSrtWeb.RouteController do
   defp route_stopped?(route) when is_map(route) do
     status = Map.get(route, "status")
     status in [nil, "", "stopped", "failed"]
+  end
+
+  defp drop_runtime_status_fields(route_params) when is_map(route_params) do
+    route_params
+    |> Map.drop(["status", "schema_status"])
+    |> Map.drop([:status, :schema_status])
   end
 end

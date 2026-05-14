@@ -111,10 +111,14 @@ defmodule HydraSrtWeb.RouteControllerTest do
     setup [:create_route]
 
     test "renders route when data is valid", %{conn: conn, route: %{id: id}} do
+      before = (get(conn, ~p"/api/routes/#{id}") |> json_response(200))["data"]
+
       conn = put(conn, ~p"/api/routes/#{id}", route: @update_attrs)
       assert %{"id" => ^id} = json_response(conn, 200)["data"]
 
       conn = get(conn, ~p"/api/routes/#{id}")
+
+      updated = json_response(conn, 200)["data"]
 
       assert %{
                "id" => ^id,
@@ -122,12 +126,13 @@ defmodule HydraSrtWeb.RouteControllerTest do
                "destinations" => [],
                "enabled" => false,
                "name" => "some updated name",
-               "schema_status" => "failed",
                "source" => %{},
                "started_at" => "2025-02-19T14:51:00Z",
-               "status" => "some updated status",
                "stopped_at" => "2025-02-19T14:51:00Z"
-             } = json_response(conn, 200)["data"]
+             } = updated
+
+      assert updated["schema_status"] == before["schema_status"]
+      assert updated["status"] == before["status"]
     end
 
     test "renders errors when data is invalid", %{conn: conn, route: %{id: id}} do
@@ -239,6 +244,20 @@ defmodule HydraSrtWeb.RouteControllerTest do
       assert Enum.all?(points, fn point ->
                is_binary(point["timestamp"]) and is_map(point["destinations"])
              end)
+    end
+  end
+
+  describe "statuses analytics" do
+    test "returns route status analytics payload", %{conn: conn} do
+      conn = get(conn, "/api/routes/statuses/analytics?window=last_hour")
+      response = json_response(conn, 200)
+
+      assert %{"data" => %{"meta" => meta, "points" => points}} = response
+      assert meta["window"] == "last_hour"
+      assert is_integer(meta["bucket_ms"])
+      assert is_binary(meta["from"])
+      assert is_binary(meta["to"])
+      assert is_list(points)
     end
   end
 

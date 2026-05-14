@@ -15,6 +15,7 @@ import {
 vi.mock('../../../utils/api', () => ({
   routesApi: {
     getAll: vi.fn(),
+    getStatusesAnalytics: vi.fn(),
     start: vi.fn(async () => ({ data: { status: 'starting' } })),
     stop: vi.fn(async () => ({ data: { status: 'stopped' } })),
     delete: vi.fn(async () => ({ success: true })),
@@ -149,6 +150,17 @@ describe('Routes', () => {
           schema_status: 'stopped',
         }),
       ],
+    });
+    routesApi.getStatusesAnalytics.mockResolvedValue({
+      data: {
+        points: [],
+        meta: {
+          from: new Date(Date.now() - 5 * 60_000).toISOString(),
+          to: new Date().toISOString(),
+          window: 'custom',
+          bucket_ms: 30_000,
+        },
+      },
     });
   });
 
@@ -320,5 +332,40 @@ describe('Routes', () => {
     );
 
     expect(await screen.findByText('1m')).toBeInTheDocument();
+  });
+
+  it('fetches status analytics for selected window', async () => {
+    render(
+      <MemoryRouter>
+        <Routes />
+      </MemoryRouter>,
+    );
+
+    await screen.findAllByText('Starting route');
+    expect(routesApi.getStatusesAnalytics).toHaveBeenCalled();
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: /route status time window/i }));
+    fireEvent.click(await screen.findByText('last hour'));
+
+    expect(routesApi.getStatusesAnalytics).toHaveBeenLastCalledWith(
+      expect.objectContaining({ window: 'last_hour' }),
+    );
+  });
+
+  it('disables refresh in live and enables it in non-live windows', async () => {
+    render(
+      <MemoryRouter>
+        <Routes />
+      </MemoryRouter>,
+    );
+
+    await screen.findAllByText('Starting route');
+    const refreshButton = screen.getByRole('button', { name: /refresh/i });
+    expect(refreshButton).toBeDisabled();
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: /route status time window/i }));
+    fireEvent.click(await screen.findByText('last hour'));
+
+    expect(refreshButton).not.toBeDisabled();
   });
 });
