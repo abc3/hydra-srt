@@ -1,5 +1,6 @@
 defmodule HydraSrt.Stats.Analytics do
   @moduledoc false
+  alias HydraSrt.Db
 
   @window_to_seconds %{
     "last_30_min" => 30 * 60,
@@ -211,6 +212,37 @@ defmodule HydraSrt.Stats.Analytics do
         {:error, reason} ->
           {:error, reason}
       end
+    end
+  end
+
+  @spec fetch_routes_status_timeseries(query_params(), GenServer.server()) ::
+          {:ok, map()} | {:error, term()}
+  def fetch_routes_status_timeseries(query_params, conn \\ HydraSrt.AnalyticsConn)
+      when is_map(query_params) do
+    with {:ok, routes} <- Db.get_all_routes(false),
+         {:ok, seed_rows} <- fetch_route_status_seed_rows(query_params, conn),
+         {:ok, event_rows} <- fetch_route_status_event_rows(query_params, conn) do
+      route_statuses = initial_route_statuses(routes, seed_rows)
+
+      points =
+        build_route_status_points(
+          route_statuses,
+          event_rows,
+          query_params.from,
+          query_params.to,
+          query_params.bucket_ms
+        )
+
+      {:ok,
+       %{
+         points: points,
+         meta: %{
+           from: DateTime.to_iso8601(query_params.from),
+           to: DateTime.to_iso8601(query_params.to),
+           window: query_params.window,
+           bucket_ms: query_params.bucket_ms
+         }
+       }}
     end
   end
 
@@ -586,6 +618,233 @@ defmodule HydraSrt.Stats.Analytics do
   end
 
   defp parse_int_param(_value, default), do: default
+
+  defp fetch_route_status_seed_rows(query_params, conn) do
+    sql = """
+    WITH ranked AS (
+      SELECT
+        route_id,
+        ts,
+        details_json,
+        ROW_NUMBER() OVER (PARTITION BY route_id ORDER BY ts DESC) AS rn
+      FROM events
+      WHERE event_type = 'route_status_change'
+        AND ts < CAST(? AS TIMESTAMP)
+    )
+    SELECT route_id, ts, details_json
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY route_id ASC
+    """
+
+    params = [DateTime.to_iso8601(query_params.from)]
+
+    case Adbc.Connection.query(conn, sql, params) do
+      {:ok, result} ->
+        {:ok,
+         route_status_rows_from_columns(
+           Adbc.Result.to_map(result),
+           &extract_new_status_from_details/1
+         )}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fetch_route_status_event_rows(query_params, conn) do
+    sql = """
+    SELECT route_id, ts, details_json
+    FROM events
+    WHERE event_type = 'route_status_change'
+      AND ts >= CAST(? AS TIMESTAMP)
+      AND ts <= CAST(? AS TIMESTAMP)
+    ORDER BY ts ASC, route_id ASC
+    """
+
+    params = [
+      DateTime.to_iso8601(query_params.from),
+      DateTime.to_iso8601(query_params.to)
+    ]
+
+    case Adbc.Connection.query(conn, sql, params) do
+      {:ok, result} ->
+        {:ok,
+         route_status_rows_from_columns(
+           Adbc.Result.to_map(result),
+           &extract_new_status_from_details/1
+         )}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp route_status_rows_from_columns(columns, status_parser)
+       when is_map(columns) and is_function(status_parser, 1) do
+    length =
+      columns
+      |> Map.values()
+      |> List.first([])
+      |> Kernel.length()
+
+    if length == 0 do
+      []
+    else
+      Enum.map(0..(length - 1), fn index ->
+        %{
+          "route_id" => value_at(columns, "route_id", index),
+          "ts_ms" => value_at(columns, "ts", index) |> timestamp_to_ms(),
+          "status" => value_at(columns, "details_json", index) |> status_parser.()
+        }
+      end)
+      |> Enum.reject(fn row ->
+        is_nil(row["route_id"]) or is_nil(row["ts_ms"]) or is_nil(row["status"])
+      end)
+    end
+  end
+
+  defp initial_route_statuses(routes, seed_rows) when is_list(routes) and is_list(seed_rows) do
+    base =
+      Enum.reduce(routes, %{}, fn route, acc ->
+        route_id = route["id"]
+        status = normalize_route_status(route["schema_status"] || route["status"] || "stopped")
+        Map.put(acc, route_id, status)
+      end)
+
+    Enum.reduce(seed_rows, base, fn row, acc ->
+      Map.put(acc, row["route_id"], normalize_route_status(row["status"]))
+    end)
+  end
+
+  defp build_route_status_points(route_statuses, event_rows, from_dt, to_dt, bucket_ms)
+       when is_map(route_statuses) and is_list(event_rows) and is_integer(bucket_ms) and
+              bucket_ms > 0 do
+    from_ms = DateTime.to_unix(from_dt, :millisecond)
+    to_ms = DateTime.to_unix(to_dt, :millisecond)
+    start_ms = ceil_ts_to_bucket(from_ms, bucket_ms)
+    end_ms = ceil_ts_to_bucket(to_ms, bucket_ms)
+    sorted_events = Enum.sort_by(event_rows, & &1["ts_ms"])
+
+    if start_ms > end_ms do
+      []
+    else
+      {points_reversed, _statuses, _events_left} =
+        Enum.reduce(
+          start_ms..end_ms//bucket_ms,
+          {[], route_statuses, sorted_events},
+          fn bucket_ts_ms, {points, statuses, events_left} ->
+            apply_until_ms = min(bucket_ts_ms, to_ms)
+
+            {updated_statuses, remaining_events} =
+              apply_events_until_bucket(statuses, events_left, apply_until_ms)
+
+            point =
+              updated_statuses
+              |> status_counts()
+              |> Map.put(:timestamp, ms_to_iso8601(apply_until_ms))
+
+            {[point | points], updated_statuses, remaining_events}
+          end
+        )
+
+      Enum.reverse(points_reversed)
+    end
+  end
+
+  defp apply_events_until_bucket(statuses, events, bucket_ts_ms) do
+    do_apply_events_until_bucket(statuses, events, bucket_ts_ms)
+  end
+
+  defp do_apply_events_until_bucket(statuses, [], _bucket_ts_ms), do: {statuses, []}
+
+  defp do_apply_events_until_bucket(statuses, [event | rest], bucket_ts_ms) do
+    if event["ts_ms"] <= bucket_ts_ms do
+      next_statuses =
+        Map.put(statuses, event["route_id"], normalize_route_status(event["status"]))
+
+      do_apply_events_until_bucket(next_statuses, rest, bucket_ts_ms)
+    else
+      {statuses, [event | rest]}
+    end
+  end
+
+  defp status_counts(statuses) when is_map(statuses) do
+    Enum.reduce(
+      statuses,
+      %{
+        processing: 0,
+        starting: 0,
+        reconnecting: 0,
+        restarting: 0,
+        failed: 0,
+        stopped: 0,
+        other: 0
+      },
+      fn
+        {_route_id, "processing"}, acc -> Map.update!(acc, :processing, &(&1 + 1))
+        {_route_id, "starting"}, acc -> Map.update!(acc, :starting, &(&1 + 1))
+        {_route_id, "reconnecting"}, acc -> Map.update!(acc, :reconnecting, &(&1 + 1))
+        {_route_id, "restarting"}, acc -> Map.update!(acc, :restarting, &(&1 + 1))
+        {_route_id, "failed"}, acc -> Map.update!(acc, :failed, &(&1 + 1))
+        {_route_id, "stopped"}, acc -> Map.update!(acc, :stopped, &(&1 + 1))
+        {_route_id, _status}, acc -> Map.update!(acc, :other, &(&1 + 1))
+      end
+    )
+  end
+
+  defp extract_new_status_from_details(details_json) when is_binary(details_json) do
+    case Jason.decode(details_json) do
+      {:ok, %{"new_status" => status}} when is_binary(status) -> status
+      _ -> nil
+    end
+  end
+
+  defp extract_new_status_from_details(_value), do: nil
+
+  defp timestamp_to_ms(%DateTime{} = value), do: DateTime.to_unix(value, :millisecond)
+
+  defp timestamp_to_ms(%NaiveDateTime{} = value) do
+    value
+    |> DateTime.from_naive!("Etc/UTC")
+    |> DateTime.to_unix(:millisecond)
+  end
+
+  defp timestamp_to_ms(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, dt, _offset} -> DateTime.to_unix(dt, :millisecond)
+      _ -> nil
+    end
+  end
+
+  defp timestamp_to_ms(_value), do: nil
+
+  defp align_ts_to_bucket(ts_ms, bucket_ms)
+       when is_integer(ts_ms) and is_integer(bucket_ms) and bucket_ms > 0 do
+    div(ts_ms, bucket_ms) * bucket_ms
+  end
+
+  defp ceil_ts_to_bucket(ts_ms, bucket_ms)
+       when is_integer(ts_ms) and is_integer(bucket_ms) and bucket_ms > 0 do
+    aligned = align_ts_to_bucket(ts_ms, bucket_ms)
+    if aligned == ts_ms, do: aligned, else: aligned + bucket_ms
+  end
+
+  defp ms_to_iso8601(ts_ms) when is_integer(ts_ms) do
+    ts_ms
+    |> DateTime.from_unix!(:millisecond)
+    |> DateTime.to_iso8601()
+  end
+
+  defp normalize_route_status(status) when is_binary(status) do
+    case String.downcase(status) do
+      "started" -> "processing"
+      "stopping" -> "stopped"
+      value -> value
+    end
+  end
+
+  defp normalize_route_status(_status), do: "other"
 
   defp fetch_route_events_total(route_id, range, type_filter, conn) do
     sql = """

@@ -75,6 +75,16 @@ defmodule HydraSrt.Stats.EventLogger do
     })
   end
 
+  def log_route_status_change(route_id, old_status, new_status) do
+    ingest(%{
+      route_id: route_id,
+      event_type: "route_status_change",
+      severity: "info",
+      message: "Route status changed",
+      details_json: Jason.encode!(%{"old_status" => old_status, "new_status" => new_status})
+    })
+  end
+
   def ingest(event) when is_map(event) do
     enriched = enrich(event)
     broadcast_event(enriched)

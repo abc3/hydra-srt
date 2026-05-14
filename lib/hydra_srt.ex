@@ -2,11 +2,13 @@ defmodule HydraSrt do
   @moduledoc false
   require Logger
   alias HydraSrt.Db
+  alias HydraSrt.Stats.EventLogger
 
   @status_started "started"
   @status_starting "starting"
   @status_stopped "stopped"
   @status_failed "failed"
+  @route_status_transition_event [:hydra, :route, :status, :transition]
 
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
@@ -75,7 +77,9 @@ defmodule HydraSrt do
 
   @spec set_route_status(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def set_route_status(id, status) do
-    with {:ok, route} <- Db.update_route(id, route_runtime_status_attrs(status)) do
+    with {:ok, %{route: route, previous_status: previous_status}} <-
+           Db.update_route_status_with_previous(id, route_runtime_status_attrs(status)) do
+      :ok = emit_route_status_transition(id, previous_status, route_runtime_status(route))
       :ok = broadcast_route_items_status_for_id(id)
       {:ok, route}
     end
@@ -88,7 +92,9 @@ defmodule HydraSrt do
 
   @spec set_route_runtime_status(String.t(), String.t() | nil) :: {:ok, map()} | {:error, term()}
   def set_route_runtime_status(id, status) do
-    with {:ok, route} <- Db.update_route_runtime_status(id, status) do
+    with {:ok, %{route: route, previous_status: previous_status}} <-
+           Db.update_route_runtime_status_with_previous(id, status) do
+      :ok = emit_route_status_transition(id, previous_status, route_runtime_status(route))
       :ok = broadcast_route_items_status_for_id(id)
       {:ok, route}
     end
@@ -96,14 +102,15 @@ defmodule HydraSrt do
 
   @spec mark_route_started(String.t()) :: {:ok, map()} | {:error, term()}
   def mark_route_started(id) do
-    with {:ok, route} <-
-           Db.transition_route_runtime_status(
+    with {:ok, %{route: route, previous_status: previous_status}} <-
+           Db.transition_route_runtime_status_with_previous(
              id,
              route_runtime_status_attrs(@status_starting)
              |> Map.put("schema_status", @status_starting),
              @status_starting,
              @status_starting
            ) do
+      :ok = emit_route_status_transition(id, previous_status, route_runtime_status(route))
       :ok = broadcast_route_items_status_for_id(id)
       {:ok, route}
     end
@@ -111,14 +118,15 @@ defmodule HydraSrt do
 
   @spec mark_route_stopped(String.t()) :: {:ok, map()} | {:error, term()}
   def mark_route_stopped(id) do
-    with {:ok, route} <-
-           Db.transition_route_runtime_status(
+    with {:ok, %{route: route, previous_status: previous_status}} <-
+           Db.transition_route_runtime_status_with_previous(
              id,
              route_runtime_status_attrs(@status_stopped)
              |> Map.put("schema_status", @status_stopped),
              @status_stopped,
              @status_stopped
            ) do
+      :ok = emit_route_status_transition(id, previous_status, route_runtime_status(route))
       :ok = broadcast_route_items_status_for_id(id)
       {:ok, route}
     end
@@ -126,14 +134,15 @@ defmodule HydraSrt do
 
   @spec mark_route_failed(String.t()) :: {:ok, map()} | {:error, term()}
   def mark_route_failed(id) do
-    with {:ok, route} <-
-           Db.transition_route_runtime_status(
+    with {:ok, %{route: route, previous_status: previous_status}} <-
+           Db.transition_route_runtime_status_with_previous(
              id,
              route_runtime_status_attrs(@status_failed)
              |> Map.put("schema_status", @status_failed),
              @status_failed,
              @status_failed
            ) do
+      :ok = emit_route_status_transition(id, previous_status, route_runtime_status(route))
       :ok = broadcast_route_items_status_for_id(id)
       {:ok, route}
     end
@@ -200,6 +209,24 @@ defmodule HydraSrt do
       _ ->
         %{"status" => status}
     end
+  end
+
+  defp route_runtime_status(route) when is_map(route) do
+    route["schema_status"] || route["status"]
+  end
+
+  defp emit_route_status_transition(route_id, previous_status, next_status) do
+    if previous_status != next_status do
+      :telemetry.execute(
+        @route_status_transition_event,
+        %{count: 1},
+        %{route_id: route_id, from: previous_status, to: next_status}
+      )
+
+      EventLogger.log_route_status_change(route_id, previous_status, next_status)
+    end
+
+    :ok
   end
 
   defp broadcast_route_items_status_for_id(route_id) when is_binary(route_id) do
