@@ -270,7 +270,7 @@ defmodule HydraSrt.RouteHandlerTest do
 
   test "should_trigger_failover? zero_bitrate respects switch threshold and cooldown" do
     data = %{
-      route: %{"backup_config" => %{"mode" => "passive", "switch_after_ms" => 3000}},
+      route: %{"backup_mode" => "passive", "backup_switch_after_ms" => 3000},
       zero_bitrate_ticks: 2,
       cooldown_until: nil,
       now_ms: 1000
@@ -288,7 +288,7 @@ defmodule HydraSrt.RouteHandlerTest do
 
   test "should_trigger_failover? reconnecting uses debounce threshold" do
     data = %{
-      route: %{"backup_config" => %{"mode" => "passive", "switch_after_ms" => 3000}},
+      route: %{"backup_mode" => "passive", "backup_switch_after_ms" => 3000},
       reconnecting_elapsed_ms: 2500,
       now_ms: 1000
     }
@@ -302,10 +302,10 @@ defmodule HydraSrt.RouteHandlerTest do
   end
 
   test "should_trigger_failover? failed is immediate but disabled mode blocks auto" do
-    data = %{route: %{"backup_config" => %{"mode" => "passive"}}}
+    data = %{route: %{"backup_mode" => "passive"}}
     assert RouteHandler.should_trigger_failover?(data, :failed)
 
-    data_disabled = %{route: %{"backup_config" => %{"mode" => "disabled"}}}
+    data_disabled = %{route: %{"backup_mode" => "disabled"}}
     refute RouteHandler.should_trigger_failover?(data_disabled, :failed)
   end
 

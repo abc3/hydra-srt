@@ -12,7 +12,11 @@ defmodule HydraSrt.DbFixtures do
       attrs
       |> Enum.into(%{
         "alias" => "some alias",
-        "backup_config" => %{"mode" => "passive"},
+        "backup_mode" => "passive",
+        "backup_switch_after_ms" => 3000,
+        "backup_cooldown_ms" => 10000,
+        "backup_primary_stable_ms" => 15000,
+        "backup_probe_interval_ms" => 5000,
         "destinations" => [],
         "enabled" => true,
         "name" => "some name",

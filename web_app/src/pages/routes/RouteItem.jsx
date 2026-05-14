@@ -103,6 +103,8 @@ const getRuntimeStatusMeta = (status) => {
     case 'stopping':
     case 'reconnecting':
       return { badgeStatus: 'processing', label: status };
+    case 'restarting':
+      return { badgeStatus: 'warning', label: status };
     case 'failed':
       return { badgeStatus: 'error', label: status };
     case 'stopped':
@@ -844,6 +846,7 @@ const RouteItem = () => {
       render: (_, record) => renderRuntimeStatusBadge(resolveEndpointStatus(record)),
       filters: [
         { text: 'Starting', value: 'starting' },
+        { text: 'Restarting', value: 'restarting' },
         { text: 'Processing', value: 'processing' },
         { text: 'Reconnecting', value: 'reconnecting' },
         { text: 'Failed', value: 'failed' },

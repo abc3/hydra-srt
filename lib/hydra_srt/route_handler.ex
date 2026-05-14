@@ -4,6 +4,7 @@ defmodule HydraSrt.RouteHandler do
   require Logger
   @behaviour :gen_statem
   @normal_port_exit_reasons [:normal, :epipe]
+  @retry_restart_interval_ms 5_000
 
   alias HydraSrt.Db
   alias HydraSrt.Helpers
@@ -42,7 +43,9 @@ defmodule HydraSrt.RouteHandler do
       cooldown_until: nil,
       primary_stable_since_ms: nil,
       last_primary_probe_ms: nil,
-      primary_probe_inflight?: false
+      primary_probe_inflight?: false,
+      retry_scheduled?: false,
+      recovering?: false
     }
 
     {:ok, :start, data, {:next_event, :internal, :start}}
@@ -64,7 +67,13 @@ defmodule HydraSrt.RouteHandler do
 
       {:error, reason} ->
         Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
-        {:stop, :normal, %{data | shutdown_reason: {:startup_failed, reason}}}
+
+        next_data =
+          data
+          |> mark_restarting_runtime()
+          |> schedule_retry_restart()
+
+        {:keep_state, next_data}
     end
   end
 
@@ -98,7 +107,13 @@ defmodule HydraSrt.RouteHandler do
     if status == 0 do
       {:stop, :normal, %{data | shutdown_reason: {:port_exit, 0}}}
     else
-      {:stop, {:port_exit, status}, data}
+      next_data =
+        data
+        |> mark_restarting_runtime()
+        |> Map.put(:port, nil)
+        |> schedule_retry_restart()
+
+      {:keep_state, next_data}
     end
   end
 
@@ -116,7 +131,13 @@ defmodule HydraSrt.RouteHandler do
     if reason in @normal_port_exit_reasons do
       {:stop, :normal, %{data | shutdown_reason: {:port_exit, reason}}}
     else
-      {:stop, {:port_exit, reason}, data}
+      next_data =
+        data
+        |> mark_restarting_runtime()
+        |> Map.put(:port, nil)
+        |> schedule_retry_restart()
+
+      {:keep_state, next_data}
     end
   end
 
@@ -124,10 +145,20 @@ defmodule HydraSrt.RouteHandler do
     {:keep_state, data}
   end
 
+  def handle_event(:info, :retry_start, _state, data) do
+    next_data =
+      data
+      |> Map.put(:retry_scheduled?, false)
+      |> retry_pipeline_start()
+
+    {:keep_state, next_data}
+  end
+
   def handle_event(:cast, {:switch_source, source_id, reason}, _state, data)
       when is_binary(source_id) and is_binary(reason) do
     case failover_to_source(data, source_id, reason) do
       {:ok, next_data} -> {:keep_state, next_data}
+      {:error, _reason, next_data} -> {:keep_state, next_data}
       {:error, _reason} -> {:keep_state, data}
     end
   end
@@ -136,6 +167,7 @@ defmodule HydraSrt.RouteHandler do
       when is_binary(source_id) and is_binary(reason) do
     case failover_to_source(data, source_id, reason) do
       {:ok, next_data} -> {:keep_state, next_data, [{:reply, from, :ok}]}
+      {:error, reason, next_data} -> {:keep_state, next_data, [{:reply, from, {:error, reason}}]}
       {:error, reason} -> {:keep_state, data, [{:reply, from, {:error, reason}}]}
     end
   end
@@ -147,10 +179,10 @@ defmodule HydraSrt.RouteHandler do
         data
       )
       when is_binary(probed_source_id) do
-    mode = get_in(data, [:route, "backup_config", "mode"]) || "passive"
+    mode = backup_mode(data.route)
     sources = get_in(data, [:route, "sources"]) || []
     primary = Enum.find(sources, &(&1["position"] == 0))
-    primary_stable_ms = get_in(data, [:route, "backup_config", "primary_stable_ms"]) || 15_000
+    primary_stable_ms = backup_primary_stable_ms(data.route)
 
     cond do
       mode != "active" or is_nil(primary) ->
@@ -396,13 +428,13 @@ defmodule HydraSrt.RouteHandler do
                 "Pipeline reported failed status"
               )
 
-              maybe_failover(data, :failed)
+              schedule_retry_restart(data)
 
             _ ->
               data
           end
 
-        case normalize_runtime_status(status, reason) do
+        case normalize_runtime_status(status, reason, data) do
           {:update, normalized_status} ->
             HydraSrt.set_route_runtime_status(data.id, normalized_status)
             data
@@ -441,19 +473,24 @@ defmodule HydraSrt.RouteHandler do
       |> Map.update!(:zero_bitrate_ticks, &(&1 + 1))
       |> maybe_failover(:zero_bitrate)
     else
-      %{data | zero_bitrate_ticks: 0}
+      if data.recovering? do
+        HydraSrt.set_route_runtime_status(data.id, "processing")
+        %{data | zero_bitrate_ticks: 0, recovering?: false}
+      else
+        %{data | zero_bitrate_ticks: 0}
+      end
     end
   end
 
   defp maybe_probe_primary_recovery(data) do
-    mode = get_in(data, [:route, "backup_config", "mode"]) || "passive"
+    mode = backup_mode(data.route)
 
     with true <- mode == "active",
          false <- in_cooldown?(data.cooldown_until, now_ms()),
          sources when is_list(sources) <- get_in(data, [:route, "sources"]),
          %{} = primary <- Enum.find(sources, &(&1["position"] == 0)),
          true <- is_binary(primary["id"]) and data.active_source_id != primary["id"] do
-      probe_interval_ms = get_in(data, [:route, "backup_config", "probe_interval_ms"]) || 5000
+      probe_interval_ms = backup_probe_interval_ms(data.route)
       now = now_ms()
 
       should_probe? =
@@ -508,6 +545,7 @@ defmodule HydraSrt.RouteHandler do
         next_source ->
           case failover_to_source(data, next_source["id"], Atom.to_string(reason)) do
             {:ok, next_data} -> next_data
+            {:error, _reason, next_data} -> next_data
             {:error, _} -> data
           end
       end
@@ -517,11 +555,11 @@ defmodule HydraSrt.RouteHandler do
   end
 
   defp next_source_for_failover(data) do
-    mode = get_in(data, [:route, "backup_config", "mode"]) || "passive"
+    mode = backup_mode(data.route)
     sources = get_in(data, [:route, "sources"]) || []
 
     case next_enabled_source(sources, data.active_source_id, mode) do
-      %{"id" => id} = source when is_binary(id) and id != data.active_source_id -> source
+      %{"id" => id} = source when is_binary(id) -> source
       _ -> nil
     end
   end
@@ -533,37 +571,55 @@ defmodule HydraSrt.RouteHandler do
          {:ok, source_record} <- source_record_from_route(route, source_id),
          true <- source_record["enabled"] == true or {:error, :disabled_source} do
       persist_reason = switch_reason_for_persist(route, source_id, reason, data)
+      next_data = maybe_mark_restarting_before_switch(data, reason)
 
-      with :ok <- close_existing_port(data.port),
-           {:ok, port} <- open_and_initialize_native_pipeline(route, route_id, source_id) do
-        case Db.set_route_active_source(route_id, source_id, persist_reason) do
-          {:ok, _route} ->
-            cooldown_ms = get_in(route, ["backup_config", "cooldown_ms"]) || 10_000
+      with :ok <- close_existing_port(next_data.port) do
+        case open_and_initialize_native_pipeline(route, route_id, source_id) do
+          {:ok, port} ->
+            case Db.set_route_active_source(route_id, source_id, persist_reason) do
+              {:ok, _route} ->
+                cooldown_ms = backup_cooldown_ms(route)
 
-            last_manual_source_id =
-              if reason == "manual" do
-                source_id
-              else
-                data[:last_manual_source_id]
-              end
+                last_manual_source_id =
+                  if reason == "manual" do
+                    source_id
+                  else
+                    data[:last_manual_source_id]
+                  end
 
-            {:ok,
-             %{
-               data
-               | route: route,
-                 port: port,
-                 active_source_id: source_id,
-                 last_manual_source_id: last_manual_source_id,
-                 zero_bitrate_ticks: 0,
-                 reconnecting_since_ms: nil,
-                 cooldown_until: now_ms() + cooldown_ms,
-                 primary_stable_since_ms: nil,
-                 primary_probe_inflight?: false
-             }}
+                {:ok,
+                 %{
+                   next_data
+                   | route: route,
+                     port: port,
+                     active_source_id: source_id,
+                     last_manual_source_id: last_manual_source_id,
+                     zero_bitrate_ticks: 0,
+                     reconnecting_since_ms: nil,
+                     cooldown_until: now_ms() + cooldown_ms,
+                     primary_stable_since_ms: nil,
+                     primary_probe_inflight?: false,
+                     recovering?: true
+                 }}
+
+              {:error, reason} ->
+                close_existing_port(port)
+
+                failed_data =
+                  next_data
+                  |> Map.put(:port, nil)
+                  |> schedule_retry_restart()
+
+                {:error, reason, failed_data}
+            end
 
           {:error, reason} ->
-            close_existing_port(port)
-            {:error, reason}
+            failed_data =
+              next_data
+              |> Map.put(:port, nil)
+              |> schedule_retry_restart()
+
+            {:error, reason, failed_data}
         end
       end
     else
@@ -613,6 +669,107 @@ defmodule HydraSrt.RouteHandler do
 
   defp close_existing_port(_), do: :ok
 
+  defp schedule_retry_restart(%{retry_scheduled?: true} = data), do: data
+
+  defp schedule_retry_restart(data) do
+    Process.send_after(self(), :retry_start, @retry_restart_interval_ms)
+    %{data | retry_scheduled?: true}
+  end
+
+  defp mark_restarting_runtime(data) do
+    case HydraSrt.set_route_runtime_status(data.id, "restarting") do
+      {:ok, _route} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("RouteHandler: failed to mark route restarting: #{inspect(reason)}")
+    end
+
+    %{data | recovering?: true}
+  end
+
+  defp retry_pipeline_start(data) do
+    with {:ok, route} <- Db.get_route(data.id, true),
+         {:ok, source_id} <- retry_source_id(route, data.active_source_id),
+         :ok <- close_existing_port(data.port),
+         {:ok, port} <- open_and_initialize_native_pipeline(route, data.id, source_id) do
+      _ = Db.set_route_active_source(data.id, source_id, "failed")
+
+      %{
+        data
+        | route: route,
+          port: port,
+          active_source_id: source_id,
+          zero_bitrate_ticks: 0,
+          reconnecting_since_ms: nil,
+          cooldown_until: nil,
+          primary_stable_since_ms: nil,
+          primary_probe_inflight?: false,
+          recovering?: true
+      }
+    else
+      {:error, reason} ->
+        Logger.warning(
+          "RouteHandler: retry start failed route_id=#{data.id} reason=#{inspect(reason)}"
+        )
+
+        data
+        |> Map.put(:port, nil)
+        |> mark_restarting_runtime()
+        |> schedule_retry_restart()
+    end
+  end
+
+  defp retry_source_id(route, active_source_id)
+       when is_map(route) and is_binary(active_source_id) do
+    sources = Map.get(route, "sources", [])
+
+    source_id =
+      case next_enabled_source(sources, active_source_id, "active") do
+        %{"id" => id} when is_binary(id) -> id
+        _ -> active_source_id
+      end
+
+    case source_record_from_route(route, source_id) do
+      {:ok, %{"enabled" => true}} -> {:ok, source_id}
+      _ -> source_record_from_route(route, nil) |> map_source_record_to_id()
+    end
+  end
+
+  defp retry_source_id(route, _active_source_id) when is_map(route) do
+    source_record_from_route(route, nil) |> map_source_record_to_id()
+  end
+
+  defp map_source_record_to_id({:ok, %{"id" => id, "enabled" => true}}) when is_binary(id),
+    do: {:ok, id}
+
+  defp map_source_record_to_id(_), do: {:error, :no_enabled_source}
+
+  defp maybe_mark_restarting_before_switch(data, reason)
+       when reason in ["zero_bitrate", "reconnecting", "failed", "manual", "primary_recovered"] do
+    mark_restarting_runtime(data)
+  end
+
+  defp maybe_mark_restarting_before_switch(data, _reason), do: data
+
+  defp backup_mode(route), do: backup_value(route, "backup_mode", "passive")
+
+  defp backup_switch_after_ms(route),
+    do: backup_value(route, "backup_switch_after_ms", 3000)
+
+  defp backup_cooldown_ms(route),
+    do: backup_value(route, "backup_cooldown_ms", 10_000)
+
+  defp backup_primary_stable_ms(route),
+    do: backup_value(route, "backup_primary_stable_ms", 15_000)
+
+  defp backup_probe_interval_ms(route),
+    do: backup_value(route, "backup_probe_interval_ms", 5000)
+
+  defp backup_value(route, flat_key, default) when is_map(route) do
+    Map.get(route, flat_key) || default
+  end
+
   @doc false
   def parse_native_json_line(json) when is_binary(json) do
     case Jason.decode(json) do
@@ -632,8 +789,13 @@ defmodule HydraSrt.RouteHandler do
   end
 
   @doc false
-  def normalize_runtime_status("stopped", "failure"), do: :ignore
-  def normalize_runtime_status(status, _reason) when is_binary(status), do: {:update, status}
+  def normalize_runtime_status(status, reason), do: normalize_runtime_status(status, reason, %{})
+  def normalize_runtime_status("stopped", "failure", _data), do: :ignore
+  def normalize_runtime_status("starting", _reason, _data), do: :ignore
+  def normalize_runtime_status("processing", _reason, %{recovering?: true}), do: :ignore
+
+  def normalize_runtime_status(status, _reason, _data) when is_binary(status),
+    do: {:update, status}
 
   @doc false
   def publish_stats(route_id, %{} = stats, metadata \\ %{}) when is_binary(route_id) do
@@ -1004,8 +1166,8 @@ defmodule HydraSrt.RouteHandler do
   @doc false
   def should_trigger_failover?(data, reason)
       when is_map(data) and reason in [:zero_bitrate, :reconnecting, :failed] do
-    mode = get_in(data, [:route, "backup_config", "mode"]) || "passive"
-    switch_after_ms = get_in(data, [:route, "backup_config", "switch_after_ms"]) || 3000
+    mode = backup_mode(data.route)
+    switch_after_ms = backup_switch_after_ms(data.route)
     cooldown_until = Map.get(data, :cooldown_until)
     now_ms = Map.get(data, :now_ms, 0)
 

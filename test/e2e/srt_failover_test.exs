@@ -29,11 +29,9 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
     route_id =
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_srt_failover_manual_switch",
-        "backup_config" => %{
-          "mode" => "passive",
-          "switch_after_ms" => 1000,
-          "cooldown_ms" => 2000
-        }
+        "backup_mode" => "passive",
+        "backup_switch_after_ms" => 1000,
+        "backup_cooldown_ms" => 2000
       })
 
     on_exit(fn ->
@@ -141,11 +139,9 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
     route_id =
       E2EHelpers.api_create_route!(base_url, token, %{
         "name" => "e2e_srt_failover_cascading",
-        "backup_config" => %{
-          "mode" => "passive",
-          "switch_after_ms" => 1000,
-          "cooldown_ms" => 1000
-        }
+        "backup_mode" => "passive",
+        "backup_switch_after_ms" => 1000,
+        "backup_cooldown_ms" => 1000
       })
 
     on_exit(fn ->

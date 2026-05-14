@@ -54,13 +54,11 @@ const DEFAULT_DESTINATION = {
 const getInitialFormValues = (initialValues) => ({
   enabled: true,
   node: 'self',
-  backup_config: {
-    mode: 'passive',
-    switch_after_ms: 3000,
-    cooldown_ms: 10000,
-    primary_stable_ms: 15000,
-    probe_interval_ms: 5000,
-  },
+  backup_mode: 'passive',
+  backup_switch_after_ms: 3000,
+  backup_cooldown_ms: 10000,
+  backup_primary_stable_ms: 15000,
+  backup_probe_interval_ms: 5000,
   sources: [DEFAULT_SOURCE],
   destinations: [DEFAULT_DESTINATION],
   ...initialValues,
@@ -233,10 +231,11 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
           destinations: Array.isArray(route?.destinations) && route.destinations.length > 0
             ? route.destinations
             : [DEFAULT_DESTINATION],
-          backup_config: {
-            mode: 'passive',
-            ...route.backup_config,
-          },
+          backup_mode: route?.backup_mode || 'passive',
+          backup_switch_after_ms: route?.backup_switch_after_ms ?? 3000,
+          backup_cooldown_ms: route?.backup_cooldown_ms ?? 10000,
+          backup_primary_stable_ms: route?.backup_primary_stable_ms ?? 15000,
+          backup_probe_interval_ms: route?.backup_probe_interval_ms ?? 5000,
         };
 
         setRouteData(route);
@@ -388,7 +387,11 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         enabled: values.enabled,
         node: values.node,
         gstDebug: values.gstDebug,
-        backup_config: values.backup_config || {},
+        backup_mode: values.backup_mode,
+        backup_switch_after_ms: values.backup_switch_after_ms,
+        backup_cooldown_ms: values.backup_cooldown_ms,
+        backup_primary_stable_ms: values.backup_primary_stable_ms,
+        backup_probe_interval_ms: values.backup_probe_interval_ms,
         tags: Array.isArray(values.tags) ? values.tags : [],
       };
 
@@ -596,7 +599,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                 <Card title="Source failover backup" size="small" style={{ maxWidth: '700px', width: '100%' }}>
                   <Form.Item
                     label="Mode"
-                    name={['backup_config', 'mode']}
+                    name="backup_mode"
                     extra="Active: auto-failover + auto-return to primary when stable. Passive: failover only, no auto-return. Disabled: no automatic failover."
                   >
                     <Radio.Group buttonStyle="solid">
@@ -610,7 +613,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                     <Col>
                       <Form.Item
                         label="Switch After (ms)"
-                        name={['backup_config', 'switch_after_ms']}
+                        name="backup_switch_after_ms"
                         extra="Debounce window before automatic switch on reconnecting/zero-bitrate conditions."
                       >
                         <InputNumber min={0} />
@@ -619,7 +622,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                     <Col>
                       <Form.Item
                         label="Cooldown (ms)"
-                        name={['backup_config', 'cooldown_ms']}
+                        name="backup_cooldown_ms"
                         extra="Minimum time between automatic switches to prevent flapping."
                       >
                         <InputNumber min={0} />
@@ -627,13 +630,13 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                     </Col>
                   </Row>
 
-                  <Form.Item noStyle dependencies={[[ 'backup_config', 'mode' ]]}>
-                    {({ getFieldValue }) => getFieldValue(['backup_config', 'mode']) === 'active' ? (
+                  <Form.Item noStyle dependencies={['backup_mode']}>
+                    {({ getFieldValue }) => getFieldValue('backup_mode') === 'active' ? (
                       <Row gutter={16}>
                         <Col>
                           <Form.Item
                             label="Primary Stable (ms)"
-                            name={['backup_config', 'primary_stable_ms']}
+                            name="backup_primary_stable_ms"
                             extra="How long primary must stay healthy before automatic return from backup."
                           >
                             <InputNumber min={0} />
@@ -642,7 +645,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                         <Col>
                           <Form.Item
                             label="Probe Interval (ms)"
-                            name={['backup_config', 'probe_interval_ms']}
+                            name="backup_probe_interval_ms"
                             extra="How often primary source health is checked while running on backup."
                           >
                             <InputNumber min={0} />

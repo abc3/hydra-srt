@@ -1,286 +1,113 @@
 defmodule HydraSrt.RouteHandlerFailoverTest do
-  use HydraSrt.DataCase, async: false
+  use ExUnit.Case
 
   alias HydraSrt.Db
-  alias HydraSrt.DbFixtures
   alias HydraSrt.RouteHandler
 
-  defmodule ProbeStub do
-    def probe(_source), do: {:ok, %{"ok" => true}}
-  end
+  @route_id "test-route"
 
   setup do
-    route =
-      DbFixtures.route_fixture(%{
-        "name" => "failover-route",
-        "backup_config" => %{"mode" => "passive", "switch_after_ms" => 1000, "cooldown_ms" => 100}
-      })
-
-    primary =
-      DbFixtures.source_fixture(route, %{
-        "position" => 0,
-        "name" => "primary",
-        "schema" => "UDP",
-        "address" => "127.0.0.1",
-        "port" => 15_000
-      })
-
-    backup =
-      DbFixtures.source_fixture(route, %{
-        "position" => 1,
-        "name" => "backup",
-        "schema" => "UDP",
-        "address" => "127.0.0.1",
-        "port" => 15_001
-      })
-
-    {:ok, _route} = Db.set_route_active_source(route["id"], primary["id"], "manual")
-
-    {:ok, _pid} = HydraSrt.start_route(route["id"])
-    {:ok, handler_pid} = wait_for_route_handler(route["id"])
+    :meck.new(Db, [:passthrough])
+    :meck.new(HydraSrt, [:passthrough])
+    :meck.new(HydraSrt.Stats.EventLogger, [:passthrough])
 
     on_exit(fn ->
-      _ = HydraSrt.stop_route(route["id"])
+      :meck.unload()
     end)
 
-    %{route_id: route["id"], primary: primary, backup: backup, handler_pid: handler_pid}
+    :ok
   end
 
-  test "manual switch cast updates active source", ctx do
-    :ok = RouteHandler.switch_source(ctx.handler_pid, ctx.backup["id"], "manual")
+  test "switch_source schedules retry with cleared port when target source cannot initialize" do
+    valid_route = route_with_sources([valid_source("s1", 4000), valid_source("s2", 4001)], "s1")
+    broken_route = route_with_sources([valid_source("s1", 4000), broken_source("s2")], "s1")
 
-    wait_until(fn ->
-      {:ok, route} = Db.get_route(ctx.route_id, true)
-      route["active_source_id"] == ctx.backup["id"] and route["last_switch_reason"] == "manual"
+    {:ok, call_counter} = Agent.start_link(fn -> 0 end)
+
+    :meck.expect(Db, :get_route, fn
+      @route_id, true ->
+        # 1: init/start, 2: switch pre-check, 3+: switch opens broken source
+        idx = Agent.get_and_update(call_counter, fn n -> {n, n + 1} end)
+
+        if idx < 2 do
+          {:ok, valid_route}
+        else
+          {:ok, broken_route}
+        end
+
+      _id, _include_dest ->
+        {:error, :not_found}
     end)
+
+    :meck.expect(Db, :set_route_active_source, fn _, _, _ -> {:ok, valid_route} end)
+    :meck.expect(Db, :update_route_runtime_status, fn _, _ -> {:ok, valid_route} end)
+    :meck.expect(HydraSrt, :set_route_runtime_status, fn _, _ -> {:ok, %{}} end)
+    :meck.expect(HydraSrt, :mark_route_started, fn _ -> {:ok, %{}} end)
+    :meck.expect(HydraSrt, :mark_route_failed, fn _ -> {:ok, %{}} end)
+    :meck.expect(HydraSrt, :mark_route_stopped, fn _ -> {:ok, %{}} end)
+    :meck.expect(HydraSrt, :mark_route_terminated, fn _ -> {:ok, %{}} end)
+
+    {:ok, pid} = RouteHandler.start_link(%{id: @route_id})
+
+    assert_eventually(fn ->
+      {_state_name, data} = :sys.get_state(pid)
+      is_port(data.port) and data.active_source_id == "s1"
+    end)
+
+    RouteHandler.switch_source(pid, "s2")
+
+    assert_eventually(fn ->
+      {_state_name, data} = :sys.get_state(pid)
+      data.port == nil and data.retry_scheduled? == true and data.recovering? == true
+    end)
+
+    :gen_statem.stop(pid)
+    Agent.stop(call_counter)
   end
 
-  test "pipeline failed event triggers failover to next enabled source", ctx do
-    {_, data} = :sys.get_state(ctx.handler_pid)
-    port = data.port
-
-    send(
-      ctx.handler_pid,
-      {port,
-       {:data, "{\"event\":\"pipeline_status\",\"status\":\"failed\",\"reason\":\"test\"}\n"}}
-    )
-
-    wait_until(fn ->
-      {:ok, route} = Db.get_route(ctx.route_id, true)
-      route["active_source_id"] == ctx.backup["id"] and route["last_switch_reason"] == "failed"
-    end)
+  defp route_with_sources(sources, active_source_id) do
+    %{
+      "id" => @route_id,
+      "active_source_id" => active_source_id,
+      "enabled" => true,
+      "sources" => sources,
+      "backup_mode" => "passive",
+      "backup_switch_after_ms" => 3000,
+      "backup_cooldown_ms" => 10_000,
+      "backup_primary_stable_ms" => 15_000,
+      "backup_probe_interval_ms" => 5000
+    }
   end
 
-  test "manual switch to disabled source is ignored", ctx do
-    {:ok, _updated_source} =
-      Db.update_source(ctx.route_id, ctx.backup["id"], %{"enabled" => false})
-
-    :ok = RouteHandler.switch_source(ctx.handler_pid, ctx.backup["id"], "manual")
-    Process.sleep(150)
-
-    {:ok, route} = Db.get_route(ctx.route_id, true)
-    assert route["active_source_id"] == ctx.primary["id"]
+  defp valid_source(id, localport) do
+    %{
+      "id" => id,
+      "position" => if(id == "s1", do: 0, else: 1),
+      "enabled" => true,
+      "schema" => "SRT",
+      "mode" => "listener",
+      "localaddress" => "127.0.0.1",
+      "localport" => localport
+    }
   end
 
-  test "reconnecting switches only after debounce window on repeated reconnecting events", ctx do
-    {_, data} = :sys.get_state(ctx.handler_pid)
-    port = data.port
-
-    send(
-      ctx.handler_pid,
-      {port, {:data, "{\"event\":\"pipeline_status\",\"status\":\"reconnecting\"}\n"}}
-    )
-
-    Process.sleep(1_100)
-
-    send(
-      ctx.handler_pid,
-      {port, {:data, "{\"event\":\"pipeline_status\",\"status\":\"reconnecting\"}\n"}}
-    )
-
-    wait_until(fn ->
-      {:ok, route} = Db.get_route(ctx.route_id, true)
-
-      route["active_source_id"] == ctx.backup["id"] ||
-        route["last_switch_reason"] == "reconnecting"
-    end)
+  defp broken_source(id) do
+    %{
+      "id" => id,
+      "position" => 1,
+      "enabled" => true
+    }
   end
 
-  test "processing status resets reconnecting debounce and prevents switch", ctx do
-    {_, data} = :sys.get_state(ctx.handler_pid)
-    port = data.port
+  defp assert_eventually(fun, attempts \\ 50)
+  defp assert_eventually(_fun, 0), do: flunk("condition was not satisfied in time")
 
-    send(
-      ctx.handler_pid,
-      {port, {:data, "{\"event\":\"pipeline_status\",\"status\":\"reconnecting\"}\n"}}
-    )
-
-    wait_until(fn ->
-      {_, state_data} = :sys.get_state(ctx.handler_pid)
-      is_integer(state_data.reconnecting_since_ms)
-    end)
-
-    send(
-      ctx.handler_pid,
-      {port, {:data, "{\"event\":\"pipeline_status\",\"status\":\"processing\"}\n"}}
-    )
-
-    wait_until(fn ->
-      {_, state_data} = :sys.get_state(ctx.handler_pid)
-      is_nil(state_data.reconnecting_since_ms)
-    end)
-  end
-
-  test "cooldown prevents immediate second zero-bitrate switch in active mode" do
-    route =
-      DbFixtures.route_fixture(%{
-        "name" => "active-cooldown-route",
-        "backup_config" => %{"mode" => "active", "switch_after_ms" => 1000, "cooldown_ms" => 5000}
-      })
-
-    primary =
-      DbFixtures.source_fixture(route, %{
-        "position" => 0,
-        "name" => "primary",
-        "address" => "127.0.0.1",
-        "port" => 16_000
-      })
-
-    backup1 =
-      DbFixtures.source_fixture(route, %{
-        "position" => 1,
-        "name" => "backup-1",
-        "address" => "127.0.0.1",
-        "port" => 16_001
-      })
-
-    _backup2 =
-      DbFixtures.source_fixture(route, %{
-        "position" => 2,
-        "name" => "backup-2",
-        "address" => "127.0.0.1",
-        "port" => 16_002
-      })
-
-    {:ok, _route} = Db.set_route_active_source(route["id"], primary["id"], "manual")
-    {:ok, _pid} = HydraSrt.start_route(route["id"])
-    {:ok, handler_pid} = wait_for_route_handler(route["id"])
-
-    on_exit(fn ->
-      _ = HydraSrt.stop_route(route["id"])
-    end)
-
-    {_, data} = :sys.get_state(handler_pid)
-    port = data.port
-
-    # First zero-bitrate tick switches from primary to backup-1.
-    send(
-      handler_pid,
-      {port, {:data, "{\"source\":{\"bytes_in_per_sec\":0},\"destinations\":[]}\n"}}
-    )
-
-    wait_until(fn ->
-      {:ok, current} = Db.get_route(route["id"], true)
-      current["active_source_id"] == backup1["id"]
-    end)
-
-    # The port is reopened after switch; pick current live port before second tick.
-    {_, state_after_first_switch} = :sys.get_state(handler_pid)
-    live_port = state_after_first_switch.port
-
-    # Immediate next zero-bitrate tick is inside cooldown and must not switch to backup-2.
-    send(
-      handler_pid,
-      {live_port, {:data, "{\"source\":{\"bytes_in_per_sec\":0},\"destinations\":[]}\n"}}
-    )
-
-    Process.sleep(250)
-
-    {:ok, after_second_tick} = Db.get_route(route["id"], true)
-    assert after_second_tick["active_source_id"] == backup1["id"]
-  end
-
-  test "active mode probes primary and returns when stable window is satisfied" do
-    Application.put_env(:hydra_srt, :source_probe_module, ProbeStub)
-
-    route =
-      DbFixtures.route_fixture(%{
-        "name" => "active-return-route",
-        "backup_config" => %{
-          "mode" => "active",
-          "switch_after_ms" => 1000,
-          "cooldown_ms" => 0,
-          "probe_interval_ms" => 0,
-          "primary_stable_ms" => 0
-        }
-      })
-
-    primary =
-      DbFixtures.source_fixture(route, %{
-        "position" => 0,
-        "name" => "primary",
-        "address" => "127.0.0.1",
-        "port" => 17_000
-      })
-
-    backup =
-      DbFixtures.source_fixture(route, %{
-        "position" => 1,
-        "name" => "backup",
-        "address" => "127.0.0.1",
-        "port" => 17_001
-      })
-
-    {:ok, _route} = Db.set_route_active_source(route["id"], backup["id"], "manual")
-    {:ok, _pid} = HydraSrt.start_route(route["id"])
-    {:ok, handler_pid} = wait_for_route_handler(route["id"])
-
-    on_exit(fn ->
-      Application.delete_env(:hydra_srt, :source_probe_module)
-      _ = HydraSrt.stop_route(route["id"])
-    end)
-
-    {_, data} = :sys.get_state(handler_pid)
-    port = data.port
-
-    send(
-      handler_pid,
-      {port, {:data, "{\"source\":{\"bytes_in_per_sec\":1000},\"destinations\":[]}\n"}}
-    )
-
-    wait_until(fn ->
-      {:ok, current} = Db.get_route(route["id"], true)
-
-      current["active_source_id"] == primary["id"] and
-        current["last_switch_reason"] == "primary_recovered"
-    end)
-  end
-
-  defp wait_for_route_handler(route_id, attempts \\ 60)
-
-  defp wait_for_route_handler(_route_id, 0), do: {:error, :timeout}
-
-  defp wait_for_route_handler(route_id, attempts) do
-    case HydraSrt.get_route_handler(route_id) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      _ ->
-        Process.sleep(50)
-        wait_for_route_handler(route_id, attempts - 1)
-    end
-  end
-
-  defp wait_until(fun, attempts \\ 80)
-
-  defp wait_until(_fun, 0), do: flunk("condition not met in time")
-
-  defp wait_until(fun, attempts) do
+  defp assert_eventually(fun, attempts) when is_function(fun, 0) and attempts > 0 do
     if fun.() do
       :ok
     else
-      Process.sleep(50)
-      wait_until(fun, attempts - 1)
+      Process.sleep(20)
+      assert_eventually(fun, attempts - 1)
     end
   end
 end

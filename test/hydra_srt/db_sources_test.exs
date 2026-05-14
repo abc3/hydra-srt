@@ -33,7 +33,7 @@ defmodule HydraSrt.DbSourcesTest do
   end
 
   test "route_to_map includes sources and backup fields" do
-    route = route_fixture(%{"backup_config" => %{"mode" => "passive"}})
+    route = route_fixture(%{"backup_mode" => "passive"})
     source = source_fixture(route, %{"position" => 0, "name" => "primary"})
 
     assert {:ok, updated_route} = Db.set_route_active_source(route["id"], source["id"], "manual")
