@@ -16,7 +16,11 @@ defmodule HydraSrt.Api.Route do
     field :schema_status, :string
     field :node, :string
     field :gst_debug, :string
-    field :backup_config, :map, default: %{}
+    field :backup_mode, :string, default: "passive"
+    field :backup_switch_after_ms, :integer, default: 3000
+    field :backup_cooldown_ms, :integer, default: 10000
+    field :backup_primary_stable_ms, :integer, default: 15000
+    field :backup_probe_interval_ms, :integer, default: 5000
     field :last_switch_reason, :string
     field :last_switch_at, :utc_datetime_usec
 
@@ -54,7 +58,11 @@ defmodule HydraSrt.Api.Route do
       :schema_status,
       :node,
       :gst_debug,
-      :backup_config,
+      :backup_mode,
+      :backup_switch_after_ms,
+      :backup_cooldown_ms,
+      :backup_primary_stable_ms,
+      :backup_probe_interval_ms,
       :active_source_id,
       :last_switch_reason,
       :last_switch_at,
@@ -65,7 +73,7 @@ defmodule HydraSrt.Api.Route do
     # For now, require only minimal fields to not break existing logic too hard,
     # or align with what's actually mandatory. The previous code required:
     |> validate_required([:name])
-    |> validate_backup_config()
+    |> validate_backup_fields()
     |> optimistic_lock(:lock_version)
   end
 
@@ -93,23 +101,26 @@ defmodule HydraSrt.Api.Route do
     end
   end
 
-  defp validate_backup_config(changeset) do
-    backup_config = get_field(changeset, :backup_config) || %{}
-    mode = Map.get(backup_config, "mode", "passive")
-
+  defp validate_backup_fields(changeset) do
+    mode = get_field(changeset, :backup_mode) || "passive"
     allowed_modes = ["active", "passive", "disabled"]
 
     changeset =
       if mode in allowed_modes do
         changeset
       else
-        add_error(changeset, :backup_config, "mode must be active, passive or disabled")
+        add_error(changeset, :backup_mode, "must be active, passive or disabled")
       end
 
-    numeric_keys = ["switch_after_ms", "cooldown_ms", "primary_stable_ms", "probe_interval_ms"]
+    numeric_fields = [
+      :backup_switch_after_ms,
+      :backup_cooldown_ms,
+      :backup_primary_stable_ms,
+      :backup_probe_interval_ms
+    ]
 
-    Enum.reduce(numeric_keys, changeset, fn key, acc ->
-      case Map.get(backup_config, key) do
+    Enum.reduce(numeric_fields, changeset, fn field, acc ->
+      case get_field(acc, field) do
         nil ->
           acc
 
@@ -117,7 +128,7 @@ defmodule HydraSrt.Api.Route do
           acc
 
         _ ->
-          add_error(acc, :backup_config, "#{key} must be a non-negative integer")
+          add_error(acc, field, "must be a non-negative integer")
       end
     end)
   end

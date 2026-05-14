@@ -49,6 +49,8 @@ const getStatusMeta = (status) => {
     case 'stopping':
     case 'reconnecting':
       return { badgeStatus: 'processing', label: status };
+    case 'restarting':
+      return { badgeStatus: 'warning', label: status };
     case 'failed':
       return { badgeStatus: 'error', label: status };
     case 'stopped':
