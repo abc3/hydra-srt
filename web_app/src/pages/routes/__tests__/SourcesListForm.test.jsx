@@ -1,7 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import RouteSourceEdit from '../RouteSourceEdit';
+
+vi.mock('../../../utils/api', async () => {
+  const actual = await vi.importActual('../../../utils/api');
+  return {
+    ...actual,
+    tagsApi: {
+      ...actual.tagsApi,
+      getAll: vi.fn(async () => ({ data: [] })),
+    },
+  };
+});
 
 describe('SourcesListForm', () => {
   it('adds and reorders backup sources in form list', async () => {

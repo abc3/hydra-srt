@@ -177,6 +177,23 @@ defmodule HydraSrtWeb.RouteController do
     end
   end
 
+  def statuses_history(conn, params) do
+    with {:ok, query_params} <- Analytics.build_query_params(params),
+         {:ok, payload} <- Analytics.fetch_routes_status_history(query_params, params) do
+      data(conn, payload)
+    else
+      {:error, {:bad_request, message}} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: message})
+
+      {:error, _reason} ->
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: "Failed to fetch route status history"})
+    end
+  end
+
   def events(conn, %{"route_id" => route_id} = params) do
     with {:ok, payload} <- Analytics.fetch_route_events(route_id, params) do
       data(conn, payload)

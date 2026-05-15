@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Table, Card, Button, Space, Typography, message, Modal, Dropdown, Tooltip, Input, Badge, Drawer, Tree, Empty, Tag, Select, DatePicker } from 'antd';
+import { useEffect, useRef, useState } from 'react';
+import { Table, Card, Button, Space, Typography, message, Modal, Dropdown, Tooltip, Input, Badge, Drawer, Tree, Empty, Tag, Select, DatePicker, Tabs, Collapse } from 'antd';
 import {
   PlusOutlined,
   EditOutlined,
@@ -28,7 +28,7 @@ import {
 } from 'recharts';
 import { routesApi, tagsApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
-import { subscribeToItemSource, subscribeToItemStatus, subscribeToStats } from '../../utils/realtime';
+import { subscribeToItemSource, subscribeToItemStatus, subscribeToRouteEvents, subscribeToStats } from '../../utils/realtime';
 import {
   ACTIVE_ROUTE_STATUSES,
   compareUptime,
@@ -67,6 +67,11 @@ const STATUS_SERIES = [
 const LIVE_WINDOW = 'live';
 const CUSTOM_WINDOW = 'custom';
 const LIVE_WINDOW_MINUTES = 5;
+const LIVE_WINDOW_MS = LIVE_WINDOW_MINUTES * 60 * 1000;
+const STATUS_VIEW_CHART = 'chart';
+const STATUS_VIEW_HISTORY = 'history';
+const STATUS_VIEW_VALUES = new Set([STATUS_VIEW_CHART, STATUS_VIEW_HISTORY]);
+const STATUS_TIMELINE_EXPANDED_STORAGE_KEY = 'routes.status_timeline_expanded';
 const WINDOW_OPTIONS = [
   { label: 'live', value: LIVE_WINDOW },
   { label: 'last 30 min', value: 'last_30_min' },
@@ -132,6 +137,17 @@ const getStatusMeta = (status) => {
 const renderStatusBadge = (status) => {
   const { color, label } = getStatusMeta(status);
   return <Badge color={color} text={formatStatusLabel(label).toLowerCase()} />;
+};
+
+const historyEventKey = (event) => `${event?.route_id || ''}:${event?.ts || ''}:${event?.new_status || ''}`;
+
+const mergeHistoryEvents = (incoming, current) => {
+  const all = [...(incoming || []), ...(current || [])];
+  const deduped = all.filter((event, index, arr) => (
+    arr.findIndex((candidate) => historyEventKey(candidate) === historyEventKey(event)) === index
+  ));
+
+  return deduped.sort((a, b) => Date.parse(b?.ts || '') - Date.parse(a?.ts || ''));
 };
 
 const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -313,6 +329,7 @@ const getRouteSourceEndpoint = (route) => {
 };
 
 const Routes = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [routes, setRoutes] = useState([]);
   const [routesFilter, setRoutesFilter] = useState('');
   const [selectedTags, setSelectedTags] = useState([]);
@@ -329,17 +346,38 @@ const Routes = () => {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pendingRouteActions, setPendingRouteActions] = useState({});
   const [selectedRouteIds, setSelectedRouteIds] = useState([]);
-  const [statusChartWindow, setStatusChartWindow] = useState(LIVE_WINDOW);
+  const [statusChartWindow, setStatusChartWindow] = useState(() => {
+    const timeFromUrl = searchParams.get('time');
+    return timeFromUrl && WINDOW_VALUES.has(timeFromUrl) ? timeFromUrl : LIVE_WINDOW;
+  });
   const [customRangeDraft, setCustomRangeDraft] = useState([dayjs().subtract(1, 'hour'), dayjs()]);
   const [customRangeApplied, setCustomRangeApplied] = useState([dayjs().subtract(1, 'hour'), dayjs()]);
   const [statusAnalyticsData, setStatusAnalyticsData] = useState({ points: [], meta: null });
   const [statusAnalyticsLoading, setStatusAnalyticsLoading] = useState(false);
   const [statusAnalyticsError, setStatusAnalyticsError] = useState(null);
   const [statusAnalyticsRefreshTick, setStatusAnalyticsRefreshTick] = useState(0);
+  const [statusTimelineView, setStatusTimelineView] = useState(() => {
+    const viewFromUrl = searchParams.get('status_view');
+    return viewFromUrl && STATUS_VIEW_VALUES.has(viewFromUrl) ? viewFromUrl : STATUS_VIEW_CHART;
+  });
+  const [statusHistoryData, setStatusHistoryData] = useState({ events: [], meta: null });
+  const [statusHistoryLoading, setStatusHistoryLoading] = useState(false);
+  const [statusHistoryError, setStatusHistoryError] = useState(null);
+  const [statusHistoryPage, setStatusHistoryPage] = useState(1);
+  const [statusHistoryPageSize, setStatusHistoryPageSize] = useState(50);
+  const [statusHistoryRefreshTick, setStatusHistoryRefreshTick] = useState(0);
+  const [statusTimelineExpanded, setStatusTimelineExpanded] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(STATUS_TIMELINE_EXPANDED_STORAGE_KEY);
+      return raw === null ? true : raw === 'true';
+    } catch {
+      return true;
+    }
+  });
   const [messageApi, contextHolder] = message.useMessage();
   const [modal, modalContextHolder] = Modal.useModal();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const urlInitRef = useRef(false);
   const initialPageFromUrl = (() => {
     const raw = searchParams.get('page');
     const parsed = raw ? Number.parseInt(raw, 10) : NaN;
@@ -356,11 +394,24 @@ const Routes = () => {
   }));
 
   useEffect(() => {
+    if (urlInitRef.current) {
+      return;
+    }
+
+    urlInitRef.current = true;
+  }, []);
+
+  useEffect(() => {
     const timeFromUrl = searchParams.get('time');
-    if (timeFromUrl && WINDOW_VALUES.has(timeFromUrl)) {
+    if (timeFromUrl && WINDOW_VALUES.has(timeFromUrl) && timeFromUrl !== statusChartWindow) {
       setStatusChartWindow(timeFromUrl);
     }
-  }, [searchParams]);
+
+    const viewFromUrl = searchParams.get('status_view');
+    if (viewFromUrl && STATUS_VIEW_VALUES.has(viewFromUrl) && viewFromUrl !== statusTimelineView) {
+      setStatusTimelineView(viewFromUrl);
+    }
+  }, [searchParams, statusChartWindow, statusTimelineView]);
 
   useEffect(() => {
     if (window.setBreadcrumbItems) {
@@ -474,6 +525,25 @@ const Routes = () => {
   }, [routeIdsSignature]);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        STATUS_TIMELINE_EXPANDED_STORAGE_KEY,
+        statusTimelineExpanded ? 'true' : 'false'
+      );
+    } catch {
+      // ignore
+    }
+  }, [statusTimelineExpanded]);
+
+  useEffect(() => {
+    if (!statusTimelineExpanded) {
+      return;
+    }
+
+    if (statusTimelineView !== STATUS_VIEW_CHART) {
+      return;
+    }
+
     let mounted = true;
 
     const fetchStatusesAnalytics = async () => {
@@ -521,10 +591,239 @@ const Routes = () => {
     return () => {
       mounted = false;
     };
-  }, [statusChartWindow, customRangeApplied, statusAnalyticsRefreshTick]);
+  }, [
+    statusChartWindow,
+    customRangeApplied,
+    statusAnalyticsRefreshTick,
+    statusTimelineExpanded,
+    statusTimelineView,
+  ]);
 
   useEffect(() => {
-    if (statusChartWindow !== LIVE_WINDOW) {
+    if (!statusTimelineExpanded) {
+      return;
+    }
+
+    if (statusTimelineView !== STATUS_VIEW_HISTORY) {
+      return;
+    }
+
+    let mounted = true;
+
+    const fetchStatusesHistory = async () => {
+      setStatusHistoryLoading(true);
+      setStatusHistoryError(null);
+
+      const params = {
+        limit: statusHistoryPageSize,
+        offset: (statusHistoryPage - 1) * statusHistoryPageSize,
+      };
+
+      if (statusChartWindow === LIVE_WINDOW) {
+        const liveTo = dayjs();
+        const liveFrom = liveTo.subtract(LIVE_WINDOW_MINUTES, 'minute');
+        params.from = liveFrom.toISOString();
+        params.to = liveTo.toISOString();
+      } else if (statusChartWindow === CUSTOM_WINDOW) {
+        const [from, to] = customRangeApplied;
+        if (from && to) {
+          params.from = from.toDate().toISOString();
+          params.to = to.toDate().toISOString();
+        }
+      } else {
+        params.window = statusChartWindow;
+      }
+
+      try {
+        const result = await routesApi.getStatusesHistory(params);
+        if (!mounted) return;
+        if (result?.error) throw new Error(result.error);
+
+        let events = Array.isArray(result?.data?.events) ? result.data.events : [];
+        let meta = result?.data?.meta || null;
+        let isFallback = false;
+
+        if (statusChartWindow === LIVE_WINDOW && events.length === 0) {
+          const fallbackResult = await routesApi.getStatusesHistory({
+            window: 'last_24_hour',
+            limit: 1,
+            offset: 0,
+          });
+
+          if (!mounted) return;
+          if (fallbackResult?.error) throw new Error(fallbackResult.error);
+
+          const fallbackEvents = Array.isArray(fallbackResult?.data?.events)
+            ? fallbackResult.data.events
+            : [];
+
+          if (fallbackEvents.length > 0) {
+            events = fallbackEvents.map((event) => ({ ...event, _fallback: true }));
+            isFallback = true;
+            meta = {
+              ...(meta || {}),
+              ...(fallbackResult?.data?.meta || {}),
+              limit: statusHistoryPageSize,
+              offset: (statusHistoryPage - 1) * statusHistoryPageSize,
+              window: LIVE_WINDOW,
+              total: fallbackEvents.length,
+              is_fallback: true,
+            };
+          }
+        }
+
+        const shouldMergeWithLiveRealtime =
+          statusTimelineView === STATUS_VIEW_HISTORY &&
+          statusChartWindow === LIVE_WINDOW &&
+          statusHistoryPage === 1;
+
+        setStatusHistoryData((prev) => {
+          const prevEvents = Array.isArray(prev?.events) ? prev.events : [];
+          const nextEvents = shouldMergeWithLiveRealtime
+            ? mergeHistoryEvents(events, prevEvents)
+            : events;
+
+          return {
+            events: nextEvents,
+            meta: {
+              ...(meta || {}),
+              total: isFallback ? nextEvents.length : meta?.total,
+              is_fallback: isFallback,
+            },
+          };
+        });
+      } catch (error) {
+        if (!mounted) return;
+        setStatusHistoryError(error.message || 'Failed to load status history');
+        setStatusHistoryData({ events: [], meta: null });
+      } finally {
+        if (mounted) {
+          setStatusHistoryLoading(false);
+        }
+      }
+    };
+
+    fetchStatusesHistory();
+    return () => {
+      mounted = false;
+    };
+  }, [
+    statusTimelineView,
+    statusChartWindow,
+    customRangeApplied,
+    statusHistoryPage,
+    statusHistoryPageSize,
+    statusHistoryRefreshTick,
+    statusTimelineExpanded,
+  ]);
+
+  useEffect(() => {
+    if (!statusTimelineExpanded) {
+      return undefined;
+    }
+
+    if (statusTimelineView !== STATUS_VIEW_HISTORY || statusChartWindow !== LIVE_WINDOW) {
+      return undefined;
+    }
+
+    if (statusHistoryPage !== 1) {
+      return undefined;
+    }
+
+    const routeIds = routeIdsSignature ? routeIdsSignature.split('|') : [];
+    if (routeIds.length === 0) {
+      return undefined;
+    }
+
+    const routeNameById = routes.reduce((acc, route) => {
+      if (route?.id) {
+        acc[route.id] = route.name || null;
+      }
+      return acc;
+    }, {});
+
+    const unsubscribers = routeIds.map((routeId) =>
+      subscribeToRouteEvents(routeId, (payload) => {
+        if (payload?.event_type !== 'route_status_change') {
+          return;
+        }
+
+        let oldStatus = null;
+        let newStatus = null;
+        try {
+          const details = payload?.details_json ? JSON.parse(payload.details_json) : null;
+          oldStatus = details?.old_status || null;
+          newStatus = details?.new_status || null;
+        } catch {
+          oldStatus = null;
+          newStatus = null;
+        }
+
+        if (!newStatus) {
+          return;
+        }
+
+        const ts = payload?.ts || new Date().toISOString();
+
+        setStatusHistoryData((prev) => {
+          const prevEvents = Array.isArray(prev?.events) ? prev.events : [];
+          const cutoffMs = Date.now() - LIVE_WINDOW_MS;
+
+          const nextEvent = {
+            ts,
+            route_id: routeId,
+            route_name: routeNameById[routeId] || routeId,
+            old_status: oldStatus,
+            new_status: newStatus,
+          };
+
+          const merged = mergeHistoryEvents([nextEvent], prevEvents);
+          const hasLiveEvent = merged.some((event) => {
+            const tsMs = Date.parse(event?.ts || '');
+            return Number.isFinite(tsMs) && tsMs >= cutoffMs && event?._fallback !== true;
+          });
+
+          const trimmed = merged.filter((event) => {
+            const tsMs = Date.parse(event?.ts || '');
+            if (!Number.isFinite(tsMs)) return false;
+            if (tsMs >= cutoffMs) return true;
+            if (event?._fallback === true && !hasLiveEvent) return true;
+            return false;
+          });
+
+          return {
+            events: trimmed,
+            meta: {
+              ...(prev?.meta || {}),
+              from: new Date(cutoffMs).toISOString(),
+              to: new Date().toISOString(),
+              window: LIVE_WINDOW,
+              total: trimmed.length,
+              is_fallback: false,
+            },
+          };
+        });
+      }),
+    );
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [
+    routeIdsSignature,
+    routes,
+    statusChartWindow,
+    statusHistoryPage,
+    statusTimelineExpanded,
+    statusTimelineView,
+  ]);
+
+  useEffect(() => {
+    if (
+      !statusTimelineExpanded ||
+      statusTimelineView !== STATUS_VIEW_CHART ||
+      statusChartWindow !== LIVE_WINDOW
+    ) {
       return undefined;
     }
 
@@ -533,17 +832,18 @@ const Routes = () => {
     }, LIVE_REFRESH_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
-  }, [statusChartWindow]);
+  }, [statusChartWindow, statusTimelineExpanded, statusTimelineView]);
 
   useEffect(() => {
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set('time', statusChartWindow);
+    nextParams.set('status_view', statusTimelineView);
     const current = searchParams.toString();
     const next = nextParams.toString();
     if (current !== next) {
       setSearchParams(nextParams, { replace: true });
     }
-  }, [searchParams, setSearchParams, statusChartWindow]);
+  }, [searchParams, setSearchParams, statusChartWindow, statusTimelineView]);
 
   useEffect(() => {
     const routeIds = routeIdsSignature ? routeIdsSignature.split('|') : [];
@@ -906,14 +1206,6 @@ const Routes = () => {
       },
     },
     {
-      title: 'Source Addr',
-      key: 'addr',
-      render: (_, record) => renderEndpointAddress(getRouteSourceEndpoint(record)),
-      sorter: (a, b) =>
-        getEndpointAddressString(getRouteSourceEndpoint(a))
-          .localeCompare(getEndpointAddressString(getRouteSourceEndpoint(b))),
-    },
-    {
       title: 'Tags',
       key: 'tags',
       render: (_, record) => {
@@ -1094,16 +1386,68 @@ const Routes = () => {
   const hasLocalFilters = normalizedRoutesFilter.length > 0 || selectedTags.length > 0;
   const tableTotal = hasLocalFilters ? filteredRoutes.length : pagination.total;
   const selectedRoutesCount = selectedRouteIds.length;
-  const chartSeriesData = (statusAnalyticsData.points || []).map((point) => ({
+  const rawChartSeriesData = (statusAnalyticsData.points || []).map((point) => ({
     ...point,
     tsMs: new Date(point.timestamp).getTime(),
   }));
+  const metaFromMs = Date.parse(statusAnalyticsData?.meta?.from || '');
+  const metaToMs = Date.parse(statusAnalyticsData?.meta?.to || '');
+  const latestPointMs = rawChartSeriesData.reduce(
+    (max, point) => (Number.isFinite(point.tsMs) && point.tsMs > max ? point.tsMs : max),
+    Number.NEGATIVE_INFINITY
+  );
+  const liveDomainEnd = Math.max(
+    nowMs,
+    Number.isFinite(metaToMs) ? metaToMs : Number.NEGATIVE_INFINITY,
+    Number.isFinite(latestPointMs) ? latestPointMs : Number.NEGATIVE_INFINITY
+  );
+  const liveDomainStart = liveDomainEnd - LIVE_WINDOW_MS;
+  const chartSeriesData = statusChartWindow === LIVE_WINDOW
+    ? rawChartSeriesData.filter((point) => Number.isFinite(point.tsMs) && point.tsMs >= liveDomainStart && point.tsMs <= liveDomainEnd)
+    : rawChartSeriesData;
+  const chartDomain = statusChartWindow === LIVE_WINDOW
+    ? [liveDomainStart, liveDomainEnd]
+    : [
+        Number.isFinite(metaFromMs) ? metaFromMs : 'auto',
+        Number.isFinite(metaToMs) ? metaToMs : 'auto',
+      ];
   const rowSelection = {
     selectedRowKeys: selectedRouteIds,
     onChange: (selectedRowKeys) => {
       setSelectedRouteIds(selectedRowKeys);
     },
   };
+  const statusHistoryRows = statusHistoryData?.events || [];
+  const statusHistoryTotal = statusHistoryData?.meta?.total || 0;
+  const statusHistoryColumns = [
+    {
+      title: 'Time',
+      dataIndex: 'ts',
+      key: 'ts',
+      render: (value) => formatChartTimestamp(value, true),
+    },
+    {
+      title: 'Route',
+      key: 'route',
+      render: (_, row) => (
+        <a href={`#/routes/${row.route_id}`}>
+          {row.route_name || row.route_id}
+        </a>
+      ),
+    },
+    {
+      title: 'To',
+      dataIndex: 'new_status',
+      key: 'new_status',
+      render: (value) => renderStatusBadge(value),
+    },
+    {
+      title: 'From',
+      dataIndex: 'old_status',
+      key: 'old_status',
+      render: (value) => renderStatusBadge(value),
+    },
+  ];
 
   return (
     <div>
@@ -1123,29 +1467,55 @@ const Routes = () => {
           </Space>
         </Space>
 
-        <Card
-          title="Status timeline"
-          loading={statusAnalyticsLoading && chartSeriesData.length === 0}
-          extra={(
-            <Space wrap>
-              <Select
-                style={{ minWidth: 180 }}
-                value={statusChartWindow}
-                options={WINDOW_OPTIONS}
-                onChange={setStatusChartWindow}
-                aria-label="Route status time window"
-              />
-              <Button
-                icon={<ReloadOutlined />}
-                onClick={() => setStatusAnalyticsRefreshTick((prev) => prev + 1)}
-                loading={statusAnalyticsLoading}
-                disabled={statusChartWindow === LIVE_WINDOW}
-              >
-                Refresh
-              </Button>
-            </Space>
-          )}
-        >
+        <Collapse
+          activeKey={statusTimelineExpanded ? ['status_timeline'] : []}
+          onChange={(keys) => {
+            const activeKeys = Array.isArray(keys) ? keys : [keys];
+            setStatusTimelineExpanded(activeKeys.includes('status_timeline'));
+          }}
+          items={[
+            {
+              key: 'status_timeline',
+              label: 'Status timeline',
+              collapsible: 'icon',
+              extra: (
+                <Space
+                  wrap
+                  onClick={(event) => {
+                    event.stopPropagation();
+                  }}
+                >
+                  <Select
+                    style={{ minWidth: 180 }}
+                    value={statusChartWindow}
+                    options={WINDOW_OPTIONS}
+                    onChange={setStatusChartWindow}
+                    aria-label="Route status time window"
+                  />
+                  <Button
+                    aria-label="Refresh status timeline"
+                    icon={<ReloadOutlined />}
+                    onClick={() => {
+                      if (statusTimelineView === STATUS_VIEW_HISTORY) {
+                        setStatusHistoryRefreshTick((prev) => prev + 1);
+                        return;
+                      }
+
+                      setStatusAnalyticsRefreshTick((prev) => prev + 1);
+                    }}
+                    loading={
+                      statusTimelineView === STATUS_VIEW_HISTORY
+                        ? statusHistoryLoading
+                        : statusAnalyticsLoading
+                    }
+                    disabled={statusTimelineView === STATUS_VIEW_CHART && statusChartWindow === LIVE_WINDOW}
+                  >
+                    Refresh
+                  </Button>
+                </Space>
+              ),
+              children: (
+                <>
           {statusChartWindow === CUSTOM_WINDOW ? (
             <Space style={{ width: '100%', justifyContent: 'flex-end', marginBottom: 12 }} wrap>
               <DatePicker.RangePicker
@@ -1164,49 +1534,85 @@ const Routes = () => {
               </Button>
             </Space>
           ) : null}
-          {statusAnalyticsError ? (
-            <Empty description={statusAnalyticsError} />
-          ) : chartSeriesData.length === 0 && !statusAnalyticsLoading ? (
-            <Empty description="No analytics data for selected period" />
-          ) : (
-            <div style={{ width: '100%', height: 300 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartSeriesData} margin={{ top: 8, right: 20, left: 8, bottom: 8 }}>
-                  <CartesianGrid {...CHART_GRID_STYLE} />
-                  <XAxis
-                    type="number"
-                    dataKey="tsMs"
-                    domain={[
-                      Number.isFinite(Date.parse(statusAnalyticsData?.meta?.from || ''))
-                        ? Date.parse(statusAnalyticsData.meta.from)
-                        : 'auto',
-                      Number.isFinite(Date.parse(statusAnalyticsData?.meta?.to || ''))
-                        ? Date.parse(statusAnalyticsData.meta.to)
-                        : 'auto',
-                    ]}
-                    tickFormatter={(value) => formatChartTimestamp(new Date(value).toISOString())}
-                    minTickGap={24}
+          <Tabs
+            activeKey={statusTimelineView}
+            onChange={(value) => {
+              setStatusTimelineView(value);
+              if (value === STATUS_VIEW_HISTORY) {
+                setStatusHistoryPage(1);
+              }
+            }}
+            items={[
+              {
+                key: STATUS_VIEW_CHART,
+                label: 'Charts',
+                children: statusAnalyticsError ? (
+                  <Empty description={statusAnalyticsError} />
+                ) : chartSeriesData.length === 0 && !statusAnalyticsLoading ? (
+                  <Empty description="No analytics data for selected period" />
+                ) : (
+                  <div style={{ width: '100%', height: 300 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={chartSeriesData} margin={{ top: 8, right: 20, left: 8, bottom: 8 }}>
+                        <CartesianGrid {...CHART_GRID_STYLE} />
+                        <XAxis
+                          type="number"
+                          dataKey="tsMs"
+                          domain={chartDomain}
+                          tickFormatter={(value) => formatChartTimestamp(new Date(value).toISOString())}
+                          minTickGap={24}
+                        />
+                        <YAxis allowDecimals={false} />
+                        <RechartsTooltip content={renderStatusTimelineTooltip} />
+                        {STATUS_SERIES.map((item) => (
+                          <Area
+                            key={item.key}
+                            type="stepBefore"
+                            dataKey={item.key}
+                            name={item.label}
+                            stackId="statuses"
+                            stroke={item.color}
+                            fill={item.color}
+                            fillOpacity={0.45}
+                            isAnimationActive={false}
+                          />
+                        ))}
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                ),
+              },
+              {
+                key: STATUS_VIEW_HISTORY,
+                label: 'History',
+                children: statusHistoryError ? (
+                  <Empty description={statusHistoryError} />
+                ) : (
+                  <Table
+                    rowKey={(row) => `${row.route_id}-${row.ts}-${row.new_status}`}
+                    columns={statusHistoryColumns}
+                    dataSource={statusHistoryRows}
+                    loading={statusHistoryLoading}
+                    pagination={{
+                      current: statusHistoryPage,
+                      pageSize: statusHistoryPageSize,
+                      total: statusHistoryTotal,
+                      showSizeChanger: true,
+                      onChange: (page, pageSize) => {
+                        setStatusHistoryPage(page);
+                        setStatusHistoryPageSize(pageSize);
+                      },
+                    }}
                   />
-                  <YAxis allowDecimals={false} />
-                  <RechartsTooltip content={renderStatusTimelineTooltip} />
-                  {STATUS_SERIES.map((item) => (
-                    <Area
-                      key={item.key}
-                      type="monotone"
-                      dataKey={item.key}
-                      name={item.label}
-                      stackId="statuses"
-                      stroke={item.color}
-                      fill={item.color}
-                      fillOpacity={0.45}
-                      isAnimationActive={false}
-                    />
-                  ))}
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </Card>
+                ),
+              },
+            ]}
+          />
+                </>
+              ),
+            },
+          ]}
+        />
 
         <Card>
           <Space style={{ marginBottom: 16, width: '100%' }} wrap>
