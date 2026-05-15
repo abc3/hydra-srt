@@ -42,6 +42,7 @@ defmodule HydraSrtWeb.Router do
     delete "/tags/:id", RouteController, :delete_tag
     resources "/routes", RouteController, except: [:new, :edit]
     get "/routes/statuses/analytics", RouteController, :statuses_analytics
+    get "/routes/statuses/history", RouteController, :statuses_history
     get "/routes/:route_id/analytics", RouteController, :analytics
     get "/routes/:route_id/events", RouteController, :events
     get "/routes/:route_id/start", RouteController, :start

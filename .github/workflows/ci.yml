@@ -84,7 +84,7 @@ jobs:
         cache: 'npm'
         cache-dependency-path: web_app/package-lock.json
     - run: npm ci
-    - run: npm run test:unit
+    - run: timeout 20m npm run test:unit:ci
 
   js_e2e_test:
     name: JS E2E Tests

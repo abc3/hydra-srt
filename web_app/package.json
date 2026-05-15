@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:unit": "vitest run",
+    "test:unit:ci": "bash ./scripts/run-vitest-ci.sh",
     "test:unit:watch": "vitest",
     "e2e:server": "node ./scripts/e2e-server.js",
     "test:e2e": "playwright test"

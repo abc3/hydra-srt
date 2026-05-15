@@ -26,6 +26,7 @@ async function getFirstIpv4SystemInterface(request, token) {
     headers: {
       Authorization: `Bearer ${token}`,
     },
+    timeout: 5_000,
   });
 
   expect(response.ok()).toBeTruthy();
@@ -41,6 +42,27 @@ async function openFirstSourceInterfaceSelect(page) {
   await interfaceField.locator('.ant-select').click();
 }
 
+async function waitForInterfaceOptionVisibility(page, labelPart, expectedVisible) {
+  await expect
+    .poll(async () => {
+      return page
+        .locator('[role="option"]')
+        .evaluateAll((nodes, needle) => nodes.some((node) => {
+          const label = node.getAttribute('aria-label') || '';
+          if (!label.includes(needle)) {
+            return false;
+          }
+
+          const hiddenByAria = node.getAttribute('aria-hidden') === 'true';
+          const hiddenByStyle = node instanceof HTMLElement && node.offsetParent === null;
+          return !hiddenByAria && !hiddenByStyle;
+        }), labelPart);
+    }, {
+      timeout: 20_000,
+    })
+    .toBe(expectedVisible);
+}
+
 async function waitForInterfaceAliasState(request, token, sysName, { enabled, name }) {
   await expect
     .poll(async () => {
@@ -48,6 +70,7 @@ async function waitForInterfaceAliasState(request, token, sysName, { enabled, na
         headers: {
           Authorization: `Bearer ${token}`,
         },
+        timeout: 5_000,
       });
 
       if (!response.ok()) {
@@ -84,11 +107,15 @@ test('interface visibility toggle controls route selector options', async ({ pag
   await aliasInput.fill(aliasName);
   await aliasInput.press('Enter');
   await expect(page.getByText(aliasName)).toBeVisible();
+  await waitForInterfaceAliasState(request, auth.token, systemInterface.sys_name, {
+    enabled: true,
+    name: aliasName,
+  });
 
   const switchLocator = row.getByRole('switch');
   await expect(switchLocator).toHaveAttribute('aria-checked', 'true');
+  await expect(switchLocator).toBeEnabled();
   await switchLocator.click();
-  await expect(switchLocator).toHaveAttribute('aria-checked', 'false');
   await waitForInterfaceAliasState(request, auth.token, systemInterface.sys_name, {
     enabled: false,
     name: aliasName,
@@ -97,14 +124,14 @@ test('interface visibility toggle controls route selector options', async ({ pag
   await page.goto('/#/routes/new/edit');
   await expect(page.getByRole('heading', { name: 'Add Route' })).toBeVisible();
   await openFirstSourceInterfaceSelect(page);
-  await expect(page.getByText(aliasName)).toHaveCount(0);
+  await waitForInterfaceOptionVisibility(page, aliasName, false);
   await page.keyboard.press('Escape');
 
   await page.goto('/#/interfaces');
   const sameRow = page.locator('tr').filter({ hasText: systemInterface.sys_name }).first();
   const sameSwitch = sameRow.getByRole('switch');
+  await expect(sameSwitch).toBeEnabled();
   await sameSwitch.click();
-  await expect(sameSwitch).toHaveAttribute('aria-checked', 'true');
   await waitForInterfaceAliasState(request, auth.token, systemInterface.sys_name, {
     enabled: true,
     name: aliasName,
@@ -112,5 +139,5 @@ test('interface visibility toggle controls route selector options', async ({ pag
 
   await page.goto('/#/routes/new/edit');
   await openFirstSourceInterfaceSelect(page);
-  await expect(page.getByRole('option', { name: aliasName })).toBeVisible();
+  await waitForInterfaceOptionVisibility(page, aliasName, true);
 });

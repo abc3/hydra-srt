@@ -137,7 +137,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
 
         const savedBySysName = saved.reduce((acc, item) => {
           if (item?.sys_name) {
-            acc[item.sys_name] = item;
+            acc[item.sys_name] = acc[item.sys_name] || item;
           }
           return acc;
         }, {});

@@ -66,7 +66,8 @@ const Interfaces = () => {
 
       const savedBySysName = saved.reduce((acc, item) => {
         if (item?.sys_name) {
-          acc[item.sys_name] = item;
+          // Keep the first item because `saved` is ordered by newest first.
+          acc[item.sys_name] = acc[item.sys_name] || item;
         }
         return acc;
       }, {});
@@ -163,8 +164,15 @@ const Interfaces = () => {
         enabled: record.enabled ?? true,
       };
 
-      if (record.id) {
-        await interfacesApi.update(record.id, payload);
+      let targetId = record.id;
+      if (!targetId) {
+        const existing = await interfacesApi.getAll();
+        const existingRow = (existing?.data || []).find((item) => item?.sys_name === record.sys_name);
+        targetId = existingRow?.id || null;
+      }
+
+      if (targetId) {
+        await interfacesApi.update(targetId, payload);
       } else {
         await interfacesApi.create(payload);
       }
@@ -195,8 +203,15 @@ const Interfaces = () => {
         enabled,
       };
 
-      if (record.id) {
-        await interfacesApi.update(record.id, payload);
+      let targetId = record.id;
+      if (!targetId) {
+        const existing = await interfacesApi.getAll();
+        const existingRow = (existing?.data || []).find((item) => item?.sys_name === record.sys_name);
+        targetId = existingRow?.id || null;
+      }
+
+      if (targetId) {
+        await interfacesApi.update(targetId, payload);
       } else {
         await interfacesApi.create(payload);
       }

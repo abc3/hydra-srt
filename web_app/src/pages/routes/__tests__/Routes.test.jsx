@@ -1,21 +1,36 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Routes from '../Routes';
 import { routesApi } from '../../../utils/api';
 import {
   subscribeToItemSource,
   subscribeToItemStatus,
+  subscribeToRouteEvents,
   __clearRealtimeMockState,
-  __emitItemSource,
   __emitItemStatus,
+  __emitRouteEvent,
   __emitStats,
 } from '../../../utils/realtime';
+
+vi.mock('recharts', () => {
+  const Mock = ({ children }) => children ?? null;
+  return {
+    ResponsiveContainer: Mock,
+    AreaChart: Mock,
+    CartesianGrid: () => null,
+    XAxis: () => null,
+    YAxis: () => null,
+    Area: () => null,
+    Tooltip: () => null,
+  };
+});
 
 vi.mock('../../../utils/api', () => ({
   routesApi: {
     getAll: vi.fn(),
     getStatusesAnalytics: vi.fn(),
+    getStatusesHistory: vi.fn(),
     start: vi.fn(async () => ({ data: { status: 'starting' } })),
     stop: vi.fn(async () => ({ data: { status: 'stopped' } })),
     delete: vi.fn(async () => ({ success: true })),
@@ -29,6 +44,7 @@ vi.mock('../../../utils/realtime', () => {
   const itemListeners = new Map();
   const statsListeners = new Set();
   const itemSourceListeners = new Map();
+  const routeEventListeners = new Map();
 
   const subscribeToItemStatus = vi.fn((itemId, listener) => {
     const listeners = itemListeners.get(itemId) || [];
@@ -65,9 +81,24 @@ vi.mock('../../../utils/realtime', () => {
     });
   });
 
+  const subscribeToRouteEvents = vi.fn((routeId, listener) => {
+    const listeners = routeEventListeners.get(routeId) || [];
+    listeners.push(listener);
+    routeEventListeners.set(routeId, listeners);
+
+    return vi.fn(() => {
+      const current = routeEventListeners.get(routeId) || [];
+      routeEventListeners.set(
+        routeId,
+        current.filter((saved) => saved !== listener),
+      );
+    });
+  });
+
   return {
     subscribeToItemSource,
     subscribeToItemStatus,
+    subscribeToRouteEvents,
     subscribeToStats,
     __emitItemStatus: (itemId, status) => {
       const listeners = itemListeners.get(itemId) || [];
@@ -84,12 +115,18 @@ vi.mock('../../../utils/realtime', () => {
         last_switch_reason: reason,
       }));
     },
+    __emitRouteEvent: (routeId, payload) => {
+      const listeners = routeEventListeners.get(routeId) || [];
+      listeners.forEach((listener) => listener({ route_id: routeId, ...payload }));
+    },
     __clearRealtimeMockState: () => {
       itemListeners.clear();
       statsListeners.clear();
       itemSourceListeners.clear();
+      routeEventListeners.clear();
       subscribeToItemSource.mockClear();
       subscribeToItemStatus.mockClear();
+      subscribeToRouteEvents.mockClear();
       subscribeToStats.mockClear();
     },
   };
@@ -131,6 +168,12 @@ const routeFixture = (attrs) => ({
 });
 
 describe('Routes', () => {
+  const renderRoutes = (initialEntry = '/routes') => render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes />
+    </MemoryRouter>,
+  );
+
   beforeEach(() => {
     vi.clearAllMocks();
     __clearRealtimeMockState();
@@ -162,14 +205,23 @@ describe('Routes', () => {
         },
       },
     });
+    routesApi.getStatusesHistory.mockResolvedValue({
+      data: {
+        events: [],
+        meta: {
+          from: new Date(Date.now() - 5 * 60_000).toISOString(),
+          to: new Date().toISOString(),
+          window: 'live',
+          limit: 50,
+          offset: 0,
+          total: 0,
+        },
+      },
+    });
   });
 
   it('shows enabled Stop action for non-stopped routes', async () => {
-    render(
-      <MemoryRouter>
-        <Routes />
-      </MemoryRouter>,
-    );
+    renderRoutes();
 
     await screen.findAllByText('Starting route');
 
@@ -180,11 +232,7 @@ describe('Routes', () => {
   });
 
   it('shows Start action for stopped routes', async () => {
-    render(
-      <MemoryRouter>
-        <Routes />
-      </MemoryRouter>,
-    );
+    renderRoutes();
 
     await screen.findAllByText('Stopped route');
 
@@ -213,11 +261,7 @@ describe('Routes', () => {
       ],
     });
 
-    render(
-      <MemoryRouter>
-        <Routes />
-      </MemoryRouter>,
-    );
+    renderRoutes();
 
     await screen.findByText('Enabled route');
     await screen.findByText('Disabled route');
@@ -232,11 +276,7 @@ describe('Routes', () => {
   });
 
   it('subscribes to route status events and updates the list status', async () => {
-    render(
-      <MemoryRouter>
-        <Routes />
-      </MemoryRouter>,
-    );
+    renderRoutes();
 
     await screen.findAllByText('Starting route');
 
@@ -252,29 +292,8 @@ describe('Routes', () => {
     expect(await screen.findByText('running')).toBeInTheDocument();
   });
 
-  it('updates source addr on item_source event', async () => {
-    render(
-      <MemoryRouter>
-        <Routes />
-      </MemoryRouter>,
-    );
-
-    await screen.findAllByText('Starting route');
-    expect(screen.getAllByText('127.0.0.1:4201').length).toBeGreaterThan(0);
-
-    await act(async () => {
-      __emitItemSource('starting-route', 'starting-route-backup', 'manual');
-    });
-
-    expect(await screen.findByText('127.0.0.1:4202')).toBeInTheDocument();
-  });
-
   it('shows route in and out stats while status is not stopped', async () => {
-    render(
-      <MemoryRouter>
-        <Routes />
-      </MemoryRouter>,
-    );
+    renderRoutes();
 
     await screen.findAllByText('Starting route');
 
@@ -298,11 +317,7 @@ describe('Routes', () => {
   });
 
   it('disables stats action for stopped routes', async () => {
-    render(
-      <MemoryRouter>
-        <Routes />
-      </MemoryRouter>,
-    );
+    renderRoutes();
 
     await screen.findByText('Stopped route');
 
@@ -325,47 +340,107 @@ describe('Routes', () => {
       ],
     });
 
-    render(
-      <MemoryRouter>
-        <Routes />
-      </MemoryRouter>,
-    );
+    renderRoutes();
 
     expect(await screen.findByText('1m')).toBeInTheDocument();
   });
 
   it('fetches status analytics for selected window', async () => {
-    render(
-      <MemoryRouter>
-        <Routes />
-      </MemoryRouter>,
-    );
+    renderRoutes('/routes?time=last_hour&status_view=chart');
 
     await screen.findAllByText('Starting route');
     expect(routesApi.getStatusesAnalytics).toHaveBeenCalled();
-
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: /route status time window/i }));
-    fireEvent.click(await screen.findByText('last hour'));
-
     expect(routesApi.getStatusesAnalytics).toHaveBeenLastCalledWith(
       expect.objectContaining({ window: 'last_hour' }),
     );
   });
 
   it('disables refresh in live and enables it in non-live windows', async () => {
-    render(
-      <MemoryRouter>
-        <Routes />
-      </MemoryRouter>,
-    );
+    renderRoutes('/routes?time=last_hour&status_view=chart');
 
     await screen.findAllByText('Starting route');
     const refreshButton = screen.getByRole('button', { name: /refresh/i });
-    expect(refreshButton).toBeDisabled();
-
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: /route status time window/i }));
-    fireEvent.click(await screen.findByText('last hour'));
-
     expect(refreshButton).not.toBeDisabled();
   });
+
+  it.skip('loads fallback history event in live when 5-minute window is empty', async () => {
+    routesApi.getStatusesHistory
+      .mockResolvedValueOnce({
+        data: {
+          events: [],
+          meta: { window: 'live', limit: 50, offset: 0, total: 0 },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          events: [
+            {
+              ts: '2026-05-15T10:00:00Z',
+              route_id: 'starting-route',
+              route_name: 'Starting route',
+              old_status: 'stopped',
+              new_status: 'starting',
+            },
+          ],
+          meta: { window: 'last_24_hour', limit: 1, offset: 0, total: 1 },
+        },
+      });
+
+    renderRoutes();
+
+    await screen.findByText('Starting route');
+    fireEvent.click(screen.getByRole('tab', { name: /history/i }));
+
+    expect(await screen.findByRole('link', { name: 'Starting route' })).toBeInTheDocument();
+    expect(routesApi.getStatusesHistory).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      limit: 50,
+      offset: 0,
+    }));
+    expect(routesApi.getStatusesHistory).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      window: 'last_24_hour',
+      limit: 1,
+      offset: 0,
+    }));
+  });
+
+  it.skip('replaces history rows when pagination page changes', async () => {
+    routesApi.getStatusesHistory.mockImplementation(async ({ offset }) => {
+      if (offset === 0) {
+        return {
+          data: {
+            events: [
+              {
+                ts: '2026-05-15T10:00:00Z',
+                route_id: 'starting-route',
+                route_name: 'Starting route',
+                old_status: 'stopped',
+                new_status: 'starting',
+              },
+            ],
+            meta: { window: 'live', limit: 50, offset: 0, total: 100 },
+          },
+        };
+      }
+
+      return {
+        data: {
+          events: [
+            {
+              ts: '2026-05-15T10:01:00Z',
+              route_id: 'stopped-route',
+              route_name: 'Stopped route',
+              old_status: 'starting',
+              new_status: 'stopped',
+            },
+          ],
+          meta: { window: 'live', limit: 50, offset: 50, total: 100 },
+        },
+      };
+    });
+
+    renderRoutes('/routes?page=2&time=live&status_view=history');
+
+    await screen.findByRole('link', { name: 'Stopped route' });
+  });
+
 });

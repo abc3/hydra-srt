@@ -19,6 +19,8 @@ defmodule HydraSrt.Stats.Analytics do
   @default_max_points 300
   @min_max_points 50
   @max_max_points 2_000
+  @default_history_limit 50
+  @max_history_limit 200
 
   @type query_params :: %{
           required(:from) => DateTime.t(),
@@ -241,6 +243,116 @@ defmodule HydraSrt.Stats.Analytics do
            to: DateTime.to_iso8601(query_params.to),
            window: query_params.window,
            bucket_ms: query_params.bucket_ms
+         }
+       }}
+    end
+  end
+
+  @spec fetch_routes_status_history(query_params(), map(), GenServer.server()) ::
+          {:ok, map()} | {:error, term()}
+  def fetch_routes_status_history(query_params, params, conn \\ HydraSrt.AnalyticsConn)
+      when is_map(query_params) and is_map(params) do
+    limit = parse_limit_param(Map.get(params, "limit"), @default_history_limit)
+    offset = parse_int_param(Map.get(params, "offset"), 0)
+    route_id_filter = Map.get(params, "route_id")
+    status_filter = Map.get(params, "status")
+
+    sql = """
+    SELECT ts, route_id, details_json
+    FROM events
+    WHERE event_type = 'route_status_change'
+      AND ts >= CAST(? AS TIMESTAMP)
+      AND ts <= CAST(? AS TIMESTAMP)
+      AND (? IS NULL OR route_id = ?)
+      AND (? IS NULL OR json_extract_string(details_json, '$.new_status') = ?)
+    ORDER BY ts DESC
+    LIMIT ?
+    OFFSET ?
+    """
+
+    query_args = [
+      DateTime.to_iso8601(query_params.from),
+      DateTime.to_iso8601(query_params.to),
+      route_id_filter,
+      route_id_filter,
+      status_filter,
+      status_filter,
+      limit,
+      offset
+    ]
+
+    count_sql = """
+    SELECT COUNT(*) AS total
+    FROM events
+    WHERE event_type = 'route_status_change'
+      AND ts >= CAST(? AS TIMESTAMP)
+      AND ts <= CAST(? AS TIMESTAMP)
+      AND (? IS NULL OR route_id = ?)
+      AND (? IS NULL OR json_extract_string(details_json, '$.new_status') = ?)
+    """
+
+    count_args = [
+      DateTime.to_iso8601(query_params.from),
+      DateTime.to_iso8601(query_params.to),
+      route_id_filter,
+      route_id_filter,
+      status_filter,
+      status_filter
+    ]
+
+    with {:ok, routes} <- Db.get_all_routes(false),
+         {:ok, rows_result} <- Adbc.Connection.query(conn, sql, query_args),
+         {:ok, total_result} <- Adbc.Connection.query(conn, count_sql, count_args) do
+      route_name_by_id =
+        Enum.reduce(routes, %{}, fn route, acc ->
+          route_id = route["id"]
+          route_name = route["name"]
+
+          if is_binary(route_id) do
+            Map.put(acc, route_id, route_name)
+          else
+            acc
+          end
+        end)
+
+      rows = rows_result |> Adbc.Result.to_map() |> route_status_history_rows_from_columns()
+
+      events =
+        Enum.map(rows, fn row ->
+          route_id = row["route_id"]
+
+          %{
+            "ts" => row["ts"],
+            "route_id" => route_id,
+            "route_name" => Map.get(route_name_by_id, route_id),
+            "old_status" => row["old_status"],
+            "new_status" => row["new_status"]
+          }
+        end)
+
+      total =
+        total_result
+        |> Adbc.Result.to_map()
+        |> Map.get("total", [0])
+        |> List.first(0)
+        |> case do
+          value when is_integer(value) -> value
+          value when is_float(value) -> trunc(value)
+          _ -> 0
+        end
+
+      {:ok,
+       %{
+         events: events,
+         meta: %{
+           from: DateTime.to_iso8601(query_params.from),
+           to: DateTime.to_iso8601(query_params.to),
+           window: query_params.window,
+           limit: limit,
+           offset: offset,
+           route_id: route_id_filter,
+           status: status_filter,
+           total: total
          }
        }}
     end
@@ -619,6 +731,21 @@ defmodule HydraSrt.Stats.Analytics do
 
   defp parse_int_param(_value, default), do: default
 
+  defp parse_limit_param(nil, default), do: default
+
+  defp parse_limit_param(value, default) when is_integer(value) do
+    if value > 0, do: min(value, @max_history_limit), else: default
+  end
+
+  defp parse_limit_param(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} when parsed > 0 -> min(parsed, @max_history_limit)
+      _ -> default
+    end
+  end
+
+  defp parse_limit_param(_value, default), do: default
+
   defp fetch_route_status_seed_rows(query_params, conn) do
     sql = """
     WITH ranked AS (
@@ -700,6 +827,33 @@ defmodule HydraSrt.Stats.Analytics do
       end)
       |> Enum.reject(fn row ->
         is_nil(row["route_id"]) or is_nil(row["ts_ms"]) or is_nil(row["status"])
+      end)
+    end
+  end
+
+  defp route_status_history_rows_from_columns(columns) when is_map(columns) do
+    length =
+      columns
+      |> Map.values()
+      |> List.first([])
+      |> Kernel.length()
+
+    if length == 0 do
+      []
+    else
+      Enum.map(0..(length - 1), fn index ->
+        details = value_at(columns, "details_json", index)
+        {old_status, new_status} = extract_status_transition_from_details(details)
+
+        %{
+          "ts" => normalize_timestamp(value_at(columns, "ts", index)),
+          "route_id" => value_at(columns, "route_id", index),
+          "old_status" => old_status,
+          "new_status" => new_status
+        }
+      end)
+      |> Enum.reject(fn row ->
+        is_nil(row["ts"]) or is_nil(row["route_id"]) or is_nil(row["new_status"])
       end)
     end
   end
@@ -801,6 +955,19 @@ defmodule HydraSrt.Stats.Analytics do
   end
 
   defp extract_new_status_from_details(_value), do: nil
+
+  defp extract_status_transition_from_details(details_json) when is_binary(details_json) do
+    case Jason.decode(details_json) do
+      {:ok, %{"old_status" => old_status, "new_status" => new_status}}
+      when is_binary(old_status) and is_binary(new_status) ->
+        {old_status, new_status}
+
+      _ ->
+        {nil, nil}
+    end
+  end
+
+  defp extract_status_transition_from_details(_value), do: {nil, nil}
 
   defp timestamp_to_ms(%DateTime{} = value), do: DateTime.to_unix(value, :millisecond)
 

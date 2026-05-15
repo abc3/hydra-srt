@@ -49,6 +49,7 @@ async function getFirstIpv4SystemInterface(request, token) {
     headers: {
       Authorization: `Bearer ${token}`,
     },
+    timeout: 5_000,
   });
 
   expect(response.ok()).toBeTruthy();
@@ -59,7 +60,10 @@ async function getFirstIpv4SystemInterface(request, token) {
 }
 
 async function listInterfaces(request, headers) {
-  const response = await request.get('/api/interfaces', { headers });
+  const response = await request.get('/api/interfaces', {
+    headers,
+    timeout: 5_000,
+  });
   expect(response.ok()).toBeTruthy();
   const payload = await response.json();
   return Array.isArray(payload.data) ? payload.data : [];
