@@ -41,6 +41,33 @@ async function openFirstSourceInterfaceSelect(page) {
   await interfaceField.locator('.ant-select').click();
 }
 
+async function waitForInterfaceAliasState(request, token, sysName, { enabled, name }) {
+  await expect
+    .poll(async () => {
+      const response = await request.get('/api/interfaces', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok()) {
+        return false;
+      }
+
+      const payload = await response.json();
+      const row = (payload.data || []).find((item) => item?.sys_name === sysName);
+
+      if (!row) {
+        return false;
+      }
+
+      return row.enabled === enabled && row.name === name;
+    }, {
+      timeout: 20_000,
+    })
+    .toBe(true);
+}
+
 test('interface visibility toggle controls route selector options', async ({ page, request }) => {
   const auth = await loginByApi(page, request);
   const systemInterface = await getFirstIpv4SystemInterface(request, auth.token);
@@ -62,6 +89,10 @@ test('interface visibility toggle controls route selector options', async ({ pag
   await expect(switchLocator).toHaveAttribute('aria-checked', 'true');
   await switchLocator.click();
   await expect(switchLocator).toHaveAttribute('aria-checked', 'false');
+  await waitForInterfaceAliasState(request, auth.token, systemInterface.sys_name, {
+    enabled: false,
+    name: aliasName,
+  });
 
   await page.goto('/#/routes/new/edit');
   await expect(page.getByRole('heading', { name: 'Add Route' })).toBeVisible();
@@ -74,8 +105,12 @@ test('interface visibility toggle controls route selector options', async ({ pag
   const sameSwitch = sameRow.getByRole('switch');
   await sameSwitch.click();
   await expect(sameSwitch).toHaveAttribute('aria-checked', 'true');
+  await waitForInterfaceAliasState(request, auth.token, systemInterface.sys_name, {
+    enabled: true,
+    name: aliasName,
+  });
 
   await page.goto('/#/routes/new/edit');
   await openFirstSourceInterfaceSelect(page);
-  await expect(page.getByText(aliasName)).toBeVisible();
+  await expect(page.getByRole('option', { name: aliasName })).toBeVisible();
 });
