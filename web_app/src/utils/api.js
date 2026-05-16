@@ -189,6 +189,27 @@ export const routesApi = {
     return response.json();
   },
 
+  getPipelineLogsDistinct: async (id, column) => {
+    const response = await authFetch(`/api/routes/${id}/pipeline-logs/distinct?column=${encodeURIComponent(column)}`);
+    return response.json();
+  },
+
+  getPipelineLogs: async (id, params = {}) => {
+    const query = new URLSearchParams();
+
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === '') {
+        return;
+      }
+
+      query.set(key, value);
+    });
+
+    const querySuffix = query.toString().length > 0 ? `?${query.toString()}` : '';
+    const response = await authFetch(`/api/routes/${id}/pipeline-logs${querySuffix}`);
+    return response.json();
+  },
+
   getStatusesAnalytics: async (params = {}) => {
     const query = new URLSearchParams();
 

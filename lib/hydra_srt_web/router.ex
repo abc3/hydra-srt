@@ -45,6 +45,8 @@ defmodule HydraSrtWeb.Router do
     get "/routes/statuses/history", RouteController, :statuses_history
     get "/routes/:route_id/analytics", RouteController, :analytics
     get "/routes/:route_id/events", RouteController, :events
+    get "/routes/:route_id/pipeline-logs", RouteController, :pipeline_logs
+    get "/routes/:route_id/pipeline-logs/distinct", RouteController, :pipeline_logs_distinct
     get "/routes/:route_id/start", RouteController, :start
     get "/routes/:route_id/stop", RouteController, :stop
     get "/routes/:route_id/restart", RouteController, :restart

@@ -17,7 +17,8 @@ import {
   Select,
   DatePicker,
   Alert,
-  Empty
+  Empty,
+  Tabs,
 } from 'antd';
 import {
   PlayCircleOutlined,
@@ -54,6 +55,7 @@ import {
 import { getEndpointAddressString, renderEndpointAddress } from '../../utils/routeEndpointAddress';
 import SwitchMarkers from './SwitchMarkers';
 import SourceTimeline from './SourceTimeline';
+import PipelineLogsTab from './PipelineLogsTab';
 import dayjs from 'dayjs';
 import {
   LineChart,
@@ -1173,11 +1175,6 @@ const RouteItem = () => {
                 Enabled: {routeData?.enabled ? 'Yes' : 'No'}
               </Tag>
               {renderRuntimeStatusBadge(runtimeStatus)}
-              {routeData?.status && routeData?.schema_status && routeData.status !== routeData.schema_status && (
-                <Tag color={statusDetails.color}>
-                  Route {formatStatusLabel(routeData.status)}
-                </Tag>
-              )}
               <Text type="secondary">
                 Last Updated: {new Date(routeData.updated_at).toLocaleString()}
               </Text>
@@ -1268,72 +1265,94 @@ const RouteItem = () => {
           </Space>
         )}
       >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {analyticsError && (
-            <Alert type="error" showIcon message={analyticsError} />
-          )}
+        <Tabs
+          defaultActiveKey="bandwidth"
+          items={[
+            {
+              key: 'bandwidth',
+              label: 'Bandwidth',
+              children: (
+                <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                  {analyticsError && (
+                    <Alert type="error" showIcon message={analyticsError} />
+                  )}
 
-          {!analyticsError && chartData.length === 0 && !analyticsLoading && (
-            <Empty description="No analytics data for selected period" />
-          )}
+                  {!analyticsError && chartData.length === 0 && !analyticsLoading && (
+                    <Empty description="No analytics data for selected period" />
+                  )}
 
-          <div style={{ width: '100%', height: 320 }}>
-            <ResponsiveContainer>
-              <LineChart data={chartData} margin={{ top: 8, right: 20, left: 28, bottom: 8 }}>
-                <CartesianGrid {...CHART_GRID_STYLE} />
-                <XAxis dataKey="xLabel" />
-                <YAxis width={88} tickMargin={8} tickFormatter={(value) => formatBitrate(value)} />
-                <RechartsTooltip content={renderBandwidthTooltip} />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="source"
-                  name={`${routeData.name || 'Source'} in`}
-                  stroke={ANALYTICS_COLORS[0]}
-                  dot={false}
-                  isAnimationActive={false}
-                  connectNulls
-                />
-                {sourceTimeline.map((segment, index) => (
-                  <ReferenceArea
-                    key={`${segment.source_id}-${segment.from}-${index}-bg`}
-                    x1={formatChartTimestamp(segment.from, analyticsWindow === LIVE_ANALYTICS_WINDOW)}
-                    x2={formatChartTimestamp(segment.to, analyticsWindow === LIVE_ANALYTICS_WINDOW)}
-                    y1={0}
-                    y2={1}
-                    ifOverflow="extendDomain"
-                    fill={sourceColorById[segment.source_id] || '#d9d9d9'}
-                    fillOpacity={0.08}
-                    strokeOpacity={0}
+                  <div style={{ width: '100%', height: chartData.length === 0 && !analyticsLoading ? 0 : 320, overflow: 'hidden' }}>
+                    <ResponsiveContainer>
+                      <LineChart data={chartData} margin={{ top: 8, right: 20, left: 28, bottom: 8 }}>
+                        <CartesianGrid {...CHART_GRID_STYLE} />
+                        <XAxis dataKey="xLabel" />
+                        <YAxis width={88} tickMargin={8} tickFormatter={(value) => formatBitrate(value)} />
+                        <RechartsTooltip content={renderBandwidthTooltip} />
+                        <Legend />
+                        <Line
+                          type="monotone"
+                          dataKey="source"
+                          name={`${routeData.name || 'Source'} in`}
+                          stroke={ANALYTICS_COLORS[0]}
+                          dot={false}
+                          isAnimationActive={false}
+                          connectNulls
+                        />
+                        {sourceTimeline.map((segment, index) => (
+                          <ReferenceArea
+                            key={`${segment.source_id}-${segment.from}-${index}-bg`}
+                            x1={formatChartTimestamp(segment.from, analyticsWindow === LIVE_ANALYTICS_WINDOW)}
+                            x2={formatChartTimestamp(segment.to, analyticsWindow === LIVE_ANALYTICS_WINDOW)}
+                            y1={0}
+                            y2={1}
+                            ifOverflow="extendDomain"
+                            fill={sourceColorById[segment.source_id] || '#d9d9d9'}
+                            fillOpacity={0.08}
+                            strokeOpacity={0}
+                          />
+                        ))}
+                        <SwitchMarkers
+                          switches={switches}
+                          isLiveWindow={analyticsWindow === LIVE_ANALYTICS_WINDOW}
+                          formatChartTimestamp={formatChartTimestamp}
+                        />
+                        {destinationSeriesIds.map((destinationId, index) => (
+                          <Line
+                            key={destinationId}
+                            type="monotone"
+                            dataKey={`dest_${destinationId}`}
+                            name={`${destinationNameById[destinationId] || destinationId} out`}
+                            stroke={ANALYTICS_COLORS[(index + 1) % ANALYTICS_COLORS.length]}
+                            dot={false}
+                            isAnimationActive={false}
+                            connectNulls
+                          />
+                        ))}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <SourceTimeline
+                    sourceTimeline={sourceTimeline}
+                    sourceNameById={sourceNameById}
+                    formatChartTimestamp={formatChartTimestamp}
                   />
-                ))}
-                <SwitchMarkers
-                  switches={switches}
-                  isLiveWindow={analyticsWindow === LIVE_ANALYTICS_WINDOW}
-                  formatChartTimestamp={formatChartTimestamp}
+                </Space>
+              ),
+            },
+            {
+              key: 'pipeline_logs',
+              label: 'Pipeline Logs',
+              children: (
+                <PipelineLogsTab
+                  routeId={id}
+                  analyticsWindow={analyticsWindow}
+                  customRangeApplied={customRangeApplied}
                 />
-                {destinationSeriesIds.map((destinationId, index) => (
-                  <Line
-                    key={destinationId}
-                    type="monotone"
-                    dataKey={`dest_${destinationId}`}
-                    name={`${destinationNameById[destinationId] || destinationId} out`}
-                    stroke={ANALYTICS_COLORS[(index + 1) % ANALYTICS_COLORS.length]}
-                    dot={false}
-                    isAnimationActive={false}
-                    connectNulls
-                  />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-          <SourceTimeline
-            sourceTimeline={sourceTimeline}
-            sourceNameById={sourceNameById}
-            formatChartTimestamp={formatChartTimestamp}
-          />
-        </Space>
+              ),
+            },
+          ]}
+        />
       </Card>
 
       <Card

@@ -303,10 +303,10 @@ defmodule HydraSrt.RouteHandler do
     env_opts =
       case route["gstDebug"] do
         debug when is_binary(debug) and debug != "" ->
-          [env: [{~c"GST_DEBUG", String.to_charlist(debug)}]]
+          [env: [{~c"GST_DEBUG", String.to_charlist(debug)}, {~c"GST_DEBUG_NO_COLOR", ~c"1"}]]
 
         _ ->
-          []
+          [env: [{~c"GST_DEBUG_NO_COLOR", ~c"1"}]]
       end
 
     Logger.info(
@@ -461,7 +461,28 @@ defmodule HydraSrt.RouteHandler do
   end
 
   defp process_port_line(line, data) do
-    Logger.warning("RouteHandler: pipeline: #{inspect(line)}")
+    Logger.debug("RouteHandler: pipeline: #{inspect(line)}")
+
+    case HydraSrt.Stats.PipelineLogParser.parse(line) do
+      {:ok, log} ->
+        log = Map.put(log, :route_id, data.id)
+
+        Phoenix.PubSub.broadcast(
+          HydraSrt.PubSub,
+          "pipeline_logs",
+          {:pipeline_log, log}
+        )
+
+        :telemetry.execute(
+          [:hydra, :pipeline, :log_line],
+          %{count: 1},
+          %{route_id: data.id, level: log.level}
+        )
+
+      :error ->
+        :ok
+    end
+
     data
   end
 

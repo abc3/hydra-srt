@@ -403,15 +403,22 @@ const Routes = () => {
 
   useEffect(() => {
     const timeFromUrl = searchParams.get('time');
-    if (timeFromUrl && WINDOW_VALUES.has(timeFromUrl) && timeFromUrl !== statusChartWindow) {
+    if (timeFromUrl && WINDOW_VALUES.has(timeFromUrl)) {
       setStatusChartWindow(timeFromUrl);
     }
 
     const viewFromUrl = searchParams.get('status_view');
-    if (viewFromUrl && STATUS_VIEW_VALUES.has(viewFromUrl) && viewFromUrl !== statusTimelineView) {
+    if (viewFromUrl && STATUS_VIEW_VALUES.has(viewFromUrl)) {
       setStatusTimelineView(viewFromUrl);
     }
-  }, [searchParams, statusChartWindow, statusTimelineView]);
+  // Only re-run when the URL (searchParams) changes — not when state changes.
+  // State values must NOT be deps here: this effect syncs URL → state on external
+  // navigation (browser back/forward). If state were a dep, clicking a tab would
+  // re-run this effect before Effect 2 updates the URL, reading the stale URL value
+  // and resetting the state, creating an infinite redirect loop.
+  // React's built-in bail-out handles no-op setState calls (same-value strings).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   useEffect(() => {
     if (window.setBreadcrumbItems) {
@@ -836,8 +843,19 @@ const Routes = () => {
 
   useEffect(() => {
     const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('time', statusChartWindow);
-    nextParams.set('status_view', statusTimelineView);
+
+    if (statusChartWindow === LIVE_WINDOW) {
+      nextParams.delete('time');
+    } else {
+      nextParams.set('time', statusChartWindow);
+    }
+
+    if (statusTimelineView === STATUS_VIEW_CHART) {
+      nextParams.delete('status_view');
+    } else {
+      nextParams.set('status_view', statusTimelineView);
+    }
+
     const current = searchParams.toString();
     const next = nextParams.toString();
     if (current !== next) {
@@ -909,7 +927,11 @@ const Routes = () => {
 
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
-        next.set('page', String(nextPage));
+        if (nextPage === DEFAULT_PAGE) {
+          next.delete('page');
+        } else {
+          next.set('page', String(nextPage));
+        }
         return next;
       }, { replace: true });
     } catch (error) {

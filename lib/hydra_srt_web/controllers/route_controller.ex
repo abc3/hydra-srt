@@ -210,6 +210,44 @@ defmodule HydraSrtWeb.RouteController do
     end
   end
 
+  def pipeline_logs(conn, %{"route_id" => route_id} = params) do
+    with {:ok, payload} <- Analytics.fetch_route_pipeline_logs(route_id, params) do
+      data(conn, payload)
+    else
+      {:error, {:bad_request, message}} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: message})
+
+      {:error, _reason} ->
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: "Failed to fetch pipeline logs"})
+    end
+  end
+
+  def pipeline_logs_distinct(conn, %{"route_id" => route_id, "column" => column}) do
+    with {:ok, values} <- Analytics.fetch_route_pipeline_log_distinct(route_id, column) do
+      data(conn, values)
+    else
+      {:error, {:bad_request, message}} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: message})
+
+      {:error, _reason} ->
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: "Failed to fetch distinct values"})
+    end
+  end
+
+  def pipeline_logs_distinct(conn, _params) do
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: "Missing required 'column' parameter"})
+  end
+
   def test_source(conn, %{"route" => route_params}) do
     case SourceProbe.probe(route_params) do
       {:ok, result} ->
