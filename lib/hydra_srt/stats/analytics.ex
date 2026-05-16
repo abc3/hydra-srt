@@ -217,6 +217,115 @@ defmodule HydraSrt.Stats.Analytics do
     end
   end
 
+  @allowed_distinct_columns ~w(level category)
+
+  @spec fetch_route_pipeline_log_distinct(binary(), binary(), GenServer.server()) ::
+          {:ok, [binary()]} | {:error, term()}
+  def fetch_route_pipeline_log_distinct(route_id, column, conn \\ HydraSrt.AnalyticsConn)
+
+  def fetch_route_pipeline_log_distinct(route_id, column, conn)
+      when is_binary(route_id) and column in @allowed_distinct_columns do
+    sql =
+      "SELECT DISTINCT #{column} FROM pipeline_logs WHERE route_id = ? AND #{column} IS NOT NULL ORDER BY #{column} ASC"
+
+    case Adbc.Connection.query(conn, sql, [route_id]) do
+      {:ok, result} ->
+        values =
+          result
+          |> Adbc.Result.to_map()
+          |> Map.get(column, [])
+          |> Enum.reject(&is_nil/1)
+
+        {:ok, values}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def fetch_route_pipeline_log_distinct(_route_id, _column, _conn),
+    do: {:error, {:bad_request, "Invalid column"}}
+
+  @spec fetch_route_pipeline_logs(binary(), map(), GenServer.server()) ::
+          {:ok, map()} | {:error, term()}
+  def fetch_route_pipeline_logs(route_id, params, conn \\ HydraSrt.AnalyticsConn)
+      when is_binary(route_id) and is_map(params) do
+    limit = parse_limit_param(Map.get(params, "limit"), @default_history_limit)
+    offset = parse_int_param(Map.get(params, "offset"), 0)
+
+    level_filters = parse_csv_param(Map.get(params, "levels", ""))
+    category_filters = parse_csv_param(Map.get(params, "categories", ""))
+
+    with {:ok, range} <- parse_range(params) do
+      {level_clause, level_params} = build_in_clause("level", level_filters)
+      {category_clause, category_params} = build_in_clause("category", category_filters)
+
+      base_params = [
+        route_id,
+        DateTime.to_iso8601(range.from),
+        DateTime.to_iso8601(range.to)
+      ]
+
+      sql = """
+      SELECT ts, route_id, gst_ts, pid, thread_id, level, category, element,
+             file, line, function, message, dropped_count
+      FROM pipeline_logs
+      WHERE route_id = ?
+        AND ts >= CAST(? AS TIMESTAMP)
+        AND ts <= CAST(? AS TIMESTAMP)
+        #{level_clause}
+        #{category_clause}
+      ORDER BY ts DESC
+      LIMIT ?
+      OFFSET ?
+      """
+
+      count_sql = """
+      SELECT COUNT(*) AS total
+      FROM pipeline_logs
+      WHERE route_id = ?
+        AND ts >= CAST(? AS TIMESTAMP)
+        AND ts <= CAST(? AS TIMESTAMP)
+        #{level_clause}
+        #{category_clause}
+      """
+
+      query_params = base_params ++ level_params ++ category_params ++ [limit, offset]
+      count_params = base_params ++ level_params ++ category_params
+
+      with {:ok, rows_result} <- Adbc.Connection.query(conn, sql, query_params),
+           {:ok, count_result} <- Adbc.Connection.query(conn, count_sql, count_params) do
+        rows = rows_result |> Adbc.Result.to_map() |> pipeline_log_rows_from_columns()
+
+        total =
+          count_result
+          |> Adbc.Result.to_map()
+          |> Map.get("total", [0])
+          |> List.first(0)
+          |> case do
+            value when is_integer(value) -> value
+            value when is_float(value) -> trunc(value)
+            _ -> 0
+          end
+
+        {:ok,
+         %{
+           logs: rows,
+           meta: %{
+             from: DateTime.to_iso8601(range.from),
+             to: DateTime.to_iso8601(range.to),
+             window: range.window,
+             limit: limit,
+             offset: offset,
+             levels: level_filters,
+             categories: category_filters,
+             total: total
+           }
+         }}
+      end
+    end
+  end
+
   @spec fetch_routes_status_timeseries(query_params(), GenServer.server()) ::
           {:ok, map()} | {:error, term()}
   def fetch_routes_status_timeseries(query_params, conn \\ HydraSrt.AnalyticsConn)
@@ -696,6 +805,37 @@ defmodule HydraSrt.Stats.Analytics do
     end
   end
 
+  defp pipeline_log_rows_from_columns(columns) when is_map(columns) do
+    length =
+      columns
+      |> Map.values()
+      |> List.first([])
+      |> Kernel.length()
+
+    if length == 0 do
+      []
+    else
+      Enum.map(0..(length - 1), fn index ->
+        %{
+          "ts" => normalize_timestamp(value_at(columns, "ts", index)),
+          "route_id" => value_at(columns, "route_id", index),
+          "gst_ts" => value_at(columns, "gst_ts", index),
+          "pid" => value_at(columns, "pid", index),
+          "thread_id" => value_at(columns, "thread_id", index),
+          "level" => value_at(columns, "level", index),
+          "category" => value_at(columns, "category", index),
+          "element" => value_at(columns, "element", index),
+          "file" => value_at(columns, "file", index),
+          "line" => value_at(columns, "line", index),
+          "function" => value_at(columns, "function", index),
+          "message" => value_at(columns, "message", index),
+          "dropped_count" => value_at(columns, "dropped_count", index)
+        }
+      end)
+      |> Enum.reject(&is_nil(&1["ts"]))
+    end
+  end
+
   defp switch_rows_from_columns(columns) when is_map(columns) do
     length =
       columns
@@ -745,6 +885,23 @@ defmodule HydraSrt.Stats.Analytics do
   end
 
   defp parse_limit_param(_value, default), do: default
+
+  defp parse_csv_param(nil), do: []
+  defp parse_csv_param(""), do: []
+
+  defp parse_csv_param(value) when is_binary(value) do
+    value
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp build_in_clause(_column, []), do: {"", []}
+
+  defp build_in_clause(column, values) when is_list(values) and length(values) > 0 do
+    placeholders = Enum.map_join(values, ", ", fn _ -> "?" end)
+    {"AND #{column} IN (#{placeholders})", values}
+  end
 
   defp fetch_route_status_seed_rows(query_params, conn) do
     sql = """

@@ -42,7 +42,27 @@ defmodule HydraSrt.Stats.Duckdb do
       """,
       "CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)",
       "CREATE INDEX IF NOT EXISTS idx_events_route_id ON events(route_id)",
-      "CREATE INDEX IF NOT EXISTS idx_events_event_type ON events(event_type)"
+      "CREATE INDEX IF NOT EXISTS idx_events_event_type ON events(event_type)",
+      """
+      CREATE TABLE IF NOT EXISTS pipeline_logs (
+        ts TIMESTAMP,
+        route_id VARCHAR,
+        gst_ts VARCHAR,
+        pid INTEGER,
+        thread_id VARCHAR,
+        level VARCHAR,
+        category VARCHAR,
+        element VARCHAR,
+        file VARCHAR,
+        line INTEGER,
+        function VARCHAR,
+        message VARCHAR,
+        dropped_count INTEGER
+      )
+      """,
+      "CREATE INDEX IF NOT EXISTS idx_pipeline_logs_ts ON pipeline_logs(ts)",
+      "CREATE INDEX IF NOT EXISTS idx_pipeline_logs_route_id ON pipeline_logs(route_id)",
+      "CREATE INDEX IF NOT EXISTS idx_pipeline_logs_level ON pipeline_logs(level)"
     ]
 
     Enum.reduce_while(statements, :ok, fn statement, :ok ->
@@ -82,6 +102,31 @@ defmodule HydraSrt.Stats.Duckdb do
       when is_integer(hours) and hours > 0 do
     sql = "DELETE FROM events WHERE ts < (CURRENT_TIMESTAMP - INTERVAL '#{hours} HOURS')"
     execute(conn, sql)
+  end
+
+  @spec delete_pipeline_logs_older_than(pos_integer(), GenServer.server()) ::
+          :ok | {:error, term()}
+  def delete_pipeline_logs_older_than(hours, conn \\ HydraSrt.AnalyticsConn)
+      when is_integer(hours) and hours > 0 do
+    sql = "DELETE FROM pipeline_logs WHERE ts < (CURRENT_TIMESTAMP - INTERVAL '#{hours} HOURS')"
+    execute(conn, sql)
+  end
+
+  @spec insert_pipeline_logs([map()], GenServer.server()) :: :ok | {:error, term()}
+  def insert_pipeline_logs(rows, conn \\ HydraSrt.AnalyticsConn)
+  def insert_pipeline_logs([], _conn), do: :ok
+
+  def insert_pipeline_logs(rows, conn) when is_list(rows) do
+    columns = to_pipeline_log_columns(rows)
+
+    case Adbc.Connection.bulk_insert(conn, columns, table: "pipeline_logs", mode: :append) do
+      {:ok, _inserted_rows_count} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("Stats DuckDB pipeline_logs insert failed reason=#{inspect(reason)}")
+        {:error, reason}
+    end
   end
 
   @spec insert_events([map()], GenServer.server()) :: :ok | {:error, term()}
@@ -149,6 +194,25 @@ defmodule HydraSrt.Stats.Duckdb do
       Adbc.Column.string(Enum.map(rows, &Map.get(&1, :reason)), name: "reason"),
       Adbc.Column.string(Enum.map(rows, &Map.get(&1, :message)), name: "message"),
       Adbc.Column.string(Enum.map(rows, &Map.get(&1, :details_json)), name: "details_json")
+    ]
+  end
+
+  @spec to_pipeline_log_columns([map()]) :: [Adbc.Column.t()]
+  def to_pipeline_log_columns(rows) when is_list(rows) do
+    [
+      Adbc.Column.timestamp(Enum.map(rows, &normalize_ts/1), :microseconds, "UTC", name: "ts"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :route_id)), name: "route_id"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :gst_ts)), name: "gst_ts"),
+      Adbc.Column.s64(Enum.map(rows, &Map.get(&1, :pid)), name: "pid"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :thread_id)), name: "thread_id"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :level)), name: "level"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :category)), name: "category"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :element)), name: "element"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :file)), name: "file"),
+      Adbc.Column.s64(Enum.map(rows, &Map.get(&1, :line)), name: "line"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :function)), name: "function"),
+      Adbc.Column.string(Enum.map(rows, &Map.get(&1, :message)), name: "message"),
+      Adbc.Column.s64(Enum.map(rows, &(Map.get(&1, :dropped_count) || 0)), name: "dropped_count")
     ]
   end
 
