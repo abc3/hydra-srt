@@ -23,7 +23,7 @@ config :hydra_srt, HydraSrtWeb.Endpoint,
   debug_errors: true,
   secret_key_base: "9re8gLwrcmLnNcUbxe8xgKSCNfm8gIpgoBBiCXhV0dVfJMB8DVFB3QQJwOye0iIo",
   watchers: [
-    npm: ["run", "dev", cd: Path.expand("../web_app", __DIR__)]
+    # npm: ["run", "dev", cd: Path.expand("../web_app", __DIR__)]
   ]
 
 config :hydra_srt,
