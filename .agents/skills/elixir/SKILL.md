@@ -1,0 +1,50 @@
+---
+name: elixir
+description: Use this skill for Elixir/Phoenix development in this repo: implementing features, refactors, debugging, tests, Ecto changes, and production-safe fixes.
+---
+
+# Elixir Skill
+
+## When to use
+Use for any task touching Elixir, Phoenix, Ecto, Mix, OTP, or ExUnit.
+
+## Workflow
+1. Read context first: routes, schema, context modules, and related tests.
+2. Keep business logic in contexts, not in controllers/channels/live views.
+3. Prefer small pure functions and explicit pattern matching.
+4. Add or update tests with each behavior change.
+5. Run targeted tests first, then broader suite if needed.
+
+## Repo commands
+- Format: `mix format`
+- Compile with warnings: `mix compile --warnings-as-errors`
+- Run tests: `mix test`
+- Run specific test file: `mix test path/to/test_file.exs`
+- Run one test line: `mix test path/to/test_file.exs:123`
+
+## Ecto and DB
+- Keep schema constraints mirrored in changesets (`validate_required`, `unique_constraint`, `foreign_key_constraint`).
+- Prefer explicit preload strategy; avoid hidden N+1 queries.
+- For migrations: make them reversible and safe for existing data.
+
+## OTP and Concurrency
+- Keep GenServer state minimal and explicit.
+- Avoid blocking calls in server callbacks.
+- Use `Task.Supervisor` for isolated async work.
+- Add timeouts and backpressure where needed.
+
+## Phoenix
+- Controllers should orchestrate, not own domain logic.
+- Keep params validation close to boundaries.
+- Return consistent error payloads and status codes.
+
+## Testing standards
+- Cover happy path, validation failures, and edge cases.
+- Use factories/builders instead of large inline fixtures.
+- Assert behavior and observable side effects, not implementation details.
+
+## PR checklist
+- Code formatted and compiles without warnings.
+- New/changed behavior has tests.
+- No obvious N+1 or unbounded process growth.
+- Errors are actionable and structured.
