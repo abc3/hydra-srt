@@ -241,6 +241,9 @@ const RouteItem = () => {
   const [analyticsError, setAnalyticsError] = useState(null);
   const [analyticsData, setAnalyticsData] = useState({ points: [], meta: null });
   const [analyticsRefreshTick, setAnalyticsRefreshTick] = useState(0);
+  const [pipelineLogsRefreshTick, setPipelineLogsRefreshTick] = useState(0);
+  const [analyticsCardTab, setAnalyticsCardTab] = useState('bandwidth');
+  const [pipelineLogsLoading, setPipelineLogsLoading] = useState(false);
   const liveSnapshotBufferRef = useRef(null);
   const liveSnapshotFlushTimerRef = useRef(null);
   const didInitFromUrlRef = useRef(false);
@@ -465,7 +468,7 @@ const RouteItem = () => {
   }, [analyticsWindow, searchParams, setSearchParams]);
 
   useEffect(() => {
-    if (!id) {
+    if (!id || analyticsCardTab !== 'bandwidth') {
       return;
     }
 
@@ -490,10 +493,17 @@ const RouteItem = () => {
     }
 
     fetchAnalyticsData(queryParams);
-  }, [id, analyticsWindow, customRangeApplied, analyticsRefreshTick, fetchAnalyticsData]);
+  }, [
+    id,
+    analyticsWindow,
+    customRangeApplied,
+    analyticsRefreshTick,
+    analyticsCardTab,
+    fetchAnalyticsData,
+  ]);
 
   useEffect(() => {
-    if (!id || analyticsWindow !== LIVE_ANALYTICS_WINDOW) {
+    if (!id || analyticsWindow !== LIVE_ANALYTICS_WINDOW || analyticsCardTab !== 'bandwidth') {
       return undefined;
     }
 
@@ -562,7 +572,7 @@ const RouteItem = () => {
         );
       }
     });
-  }, [id, analyticsWindow]);
+  }, [id, analyticsWindow, analyticsCardTab]);
 
   useEffect(
     () => () => {
@@ -1228,7 +1238,7 @@ const RouteItem = () => {
       </Row>
 
       <Card
-        title="Bandwidth"
+        title="Overview"
         extra={(
           <Space wrap>
             <Select
@@ -1239,9 +1249,18 @@ const RouteItem = () => {
             />
             <Button
               icon={<ReloadOutlined />}
-              onClick={() => setAnalyticsRefreshTick((prev) => prev + 1)}
-              loading={analyticsLoading}
-              disabled={analyticsWindow === LIVE_ANALYTICS_WINDOW}
+              onClick={() => {
+                if (analyticsCardTab === 'pipeline_logs') {
+                  setPipelineLogsRefreshTick((prev) => prev + 1);
+                  return;
+                }
+
+                setAnalyticsRefreshTick((prev) => prev + 1);
+              }}
+              loading={analyticsCardTab === 'pipeline_logs' ? pipelineLogsLoading : analyticsLoading}
+              disabled={
+                analyticsCardTab === 'bandwidth' && analyticsWindow === LIVE_ANALYTICS_WINDOW
+              }
             >
               Refresh
             </Button>
@@ -1266,7 +1285,8 @@ const RouteItem = () => {
         )}
       >
         <Tabs
-          defaultActiveKey="bandwidth"
+          activeKey={analyticsCardTab}
+          onChange={setAnalyticsCardTab}
           items={[
             {
               key: 'bandwidth',
@@ -1346,8 +1366,11 @@ const RouteItem = () => {
               children: (
                 <PipelineLogsTab
                   routeId={id}
+                  active={analyticsCardTab === 'pipeline_logs'}
                   analyticsWindow={analyticsWindow}
                   customRangeApplied={customRangeApplied}
+                  refreshTick={pipelineLogsRefreshTick}
+                  onLoadingChange={setPipelineLogsLoading}
                 />
               ),
             },

@@ -16,6 +16,14 @@ The collection path is:
 3. `HydraSrt.Stats.SystemTelemetryCollector` listens to these events.
 4. Collector converts events to rows and writes to DuckDB via `HydraSrt.Stats.Duckdb`.
 
+`HydraSrt.RouteHandler` parses GStreamer debug lines from native pipeline stdout and broadcasts them on PubSub. `HydraSrt.Stats.PipelineLogger` buffers accepted lines for DuckDB (`pipeline_logs` table) and emits matching `:telemetry` events:
+
+- `hydra_srt_pipeline_log_lines_total` — lines actually buffered (aligned with persisted history).
+- `hydra_srt_pipeline_log_lines_dropped_total` — verbose lines dropped by per-route rate limiting.
+- `hydra_srt_pipeline_log_lines_unparsed_total` — stdout lines that failed parsing (emitted from `RouteHandler`).
+
+Prometheus export is via `HydraSrt.PromEx.Plugins.PipelineLogs` on `/metrics` (`level` and `route_id` labels on stored/dropped counters).
+
 ## Collected Metric Groups
 
 `OsMon` plugin emits:
