@@ -39,26 +39,42 @@ defmodule HydraSrt.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
+      # Phoenix
       {:phoenix, "~> 1.7.14"},
       {:phoenix_ecto, "~> 4.5"},
+      {:plug_cowboy, "~> 2.7"},
+      {:cors_plug, "~> 3.0"},
+
+      # Database
       {:ecto_sql, "~> 3.10"},
       {:ecto_sqlite3, ">= 0.0.0"},
       {:adbc, "~> 0.1"},
+
+      # Telemetry and observability
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
-      {:jason, "~> 1.2"},
-      {:plug_cowboy, "~> 2.7"},
-      {:uuid, "~> 1.1"},
-      {:cors_plug, "~> 3.0"},
-      {:syn, "~> 3.3"},
-      {:cachex, "~> 3.6"},
-      {:observer_cli, "~> 1.7"},
       {:prom_ex, "~> 1.11"},
       {:peep, "~> 4.2", override: true},
-      {:meck, "~> 1.0", only: [:dev, :test], override: true},
+      {:observer_cli, "~> 1.7"},
+
+      # Runtime
+      {:syn, "~> 3.3"},
+      {:cachex, "~> 3.6"},
+
+      # Utilities
+      {:jason, "~> 1.2"},
+      {:uuid, "~> 1.1"},
+
+      # Linting
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:credence, "~> 0.5.0", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:benchee, "~> 1.3", only: :dev}
+
+      # Benchmarking
+      {:benchee, "~> 1.3", only: :dev},
+
+      # Test utilities
+      {:meck, "~> 1.0", only: [:dev, :test], override: true}
     ]
   end
 
