@@ -97,7 +97,8 @@ defmodule HydraSrt.Stats.PipelineLoggerTest do
 
     send(
       PipelineLogger,
-      {:pipeline_log, %{route_id: route_id, level: "ERROR", category: "srt", message: "via genserver"}}
+      {:pipeline_log,
+       %{route_id: route_id, level: "ERROR", category: "srt", message: "via genserver"}}
     )
 
     send(PipelineLogger, :flush)
