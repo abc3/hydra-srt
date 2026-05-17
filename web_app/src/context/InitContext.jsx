@@ -7,6 +7,7 @@ const INIT_FALLBACK = {
   elixir_version: 'unknown',
   erlang_version: 'unknown',
   rust_version: 'unknown',
+  demo_data: false,
 };
 const InitContext = createContext(INIT_FALLBACK);
 

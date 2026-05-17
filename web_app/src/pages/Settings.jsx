@@ -73,10 +73,14 @@ const Settings = () => {
     setActiveTab(tab);
 
     const parts = location.pathname.split('/').filter(Boolean);
-    if (parts.length < 2 || !tabKeyByPath[parts[1]]) {
+    const section = parts[1];
+    const isUnknownSection = parts.length < 2 || !tabKeyByPath[section];
+    const isSignalGenerationWithoutDemo = section === 'signal-generation' && !initData.demo_data;
+
+    if (isUnknownSection || isSignalGenerationWithoutDemo) {
       navigate('/settings/about', { replace: true });
     }
-  }, [location.pathname]);
+  }, [location.pathname, initData.demo_data]);
 
   const loadTags = async () => {
     setTagsLoading(true);
@@ -120,14 +124,14 @@ const Settings = () => {
   };
 
   useEffect(() => {
-    if (activeTab === 'signal-generation') {
+    if (initData.demo_data && activeTab === 'signal-generation') {
       const shouldHydrate = !signalFormHydratedRef.current;
       loadSignalStatus({ initial: true, hydrateForm: shouldHydrate });
     }
-  }, [activeTab]);
+  }, [activeTab, initData.demo_data]);
 
   useEffect(() => {
-    if (activeTab !== 'signal-generation') {
+    if (!initData.demo_data || activeTab !== 'signal-generation') {
       return undefined;
     }
 
@@ -602,11 +606,13 @@ const Settings = () => {
       label: 'Routes',
       children: <RoutesTabContent />,
     },
-    {
-      key: 'signal-generation',
-      label: 'Signal generation',
-      children: <SignalGenerationTabContent />,
-    },
+    ...(initData.demo_data
+      ? [{
+          key: 'signal-generation',
+          label: 'Signal generation',
+          children: <SignalGenerationTabContent />,
+        }]
+      : []),
   ];
 
   return (

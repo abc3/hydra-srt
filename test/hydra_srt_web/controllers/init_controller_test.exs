@@ -15,5 +15,6 @@ defmodule HydraSrtWeb.InitControllerTest do
     assert payload["erlang_version"] != ""
     assert is_binary(payload["rust_version"])
     assert payload["rust_version"] != ""
+    assert payload["demo_data"] in [true, false]
   end
 end

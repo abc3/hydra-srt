@@ -7,7 +7,8 @@ defmodule HydraSrtWeb.InitController do
       system_version: system_version(),
       elixir_version: System.version(),
       erlang_version: erlang_version(),
-      rust_version: rust_version()
+      rust_version: rust_version(),
+      demo_data: Application.get_env(:hydra_srt, :demo_data, false)
     })
   end
 
