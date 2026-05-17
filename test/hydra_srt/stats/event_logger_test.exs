@@ -38,4 +38,17 @@ defmodule HydraSrt.Stats.EventLoggerTest do
 
     assert_receive {:event, %{"route_id" => "route-1", "event_type" => "source_switch"}}
   end
+
+  test "broadcast_event publishes to global events topic" do
+    Phoenix.PubSub.subscribe(HydraSrt.PubSub, "events:all")
+
+    :ok =
+      EventLogger.broadcast_event(%{
+        route_id: "route-2",
+        event_type: "route_status_change",
+        ts: ~U[2026-01-01 00:00:02Z]
+      })
+
+    assert_receive {:event, %{"route_id" => "route-2", "event_type" => "route_status_change"}}
+  end
 end

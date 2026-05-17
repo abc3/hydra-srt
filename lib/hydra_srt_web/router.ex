@@ -68,6 +68,10 @@ defmodule HydraSrtWeb.Router do
     get "/interfaces/system/raw", InterfaceController, :system_raw
     resources "/interfaces", InterfaceController, except: [:new, :edit]
 
+    get "/notifications/telegram", NotificationController, :show_telegram
+    put "/notifications/telegram", NotificationController, :update_telegram
+    post "/notifications/telegram/test", NotificationController, :test_telegram
+
     get "/backup/export", BackupController, :export
     get "/backup/create-download-link", BackupController, :create_download_link
     get "/backup/create-backup-download-link", BackupController, :create_backup_download_link

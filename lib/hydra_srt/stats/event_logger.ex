@@ -99,13 +99,17 @@ defmodule HydraSrt.Stats.EventLogger do
   def broadcast_event(event) when is_map(event) do
     route_id = Map.get(event, :route_id) || Map.get(event, "route_id")
 
+    payload = event_to_payload(event)
+
     if is_binary(route_id) and route_id != "" do
       Phoenix.PubSub.broadcast(
         HydraSrt.PubSub,
         "events:" <> route_id,
-        {:event, event_to_payload(event)}
+        {:event, payload}
       )
     end
+
+    Phoenix.PubSub.broadcast(HydraSrt.PubSub, "events:all", {:event, payload})
 
     :ok
   end

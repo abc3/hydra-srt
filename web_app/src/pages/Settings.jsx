@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
-import { Typography, Button, Card, Space, message, Tabs, Modal, Descriptions, Table, Form, Input, Popconfirm } from 'antd';
+import { Typography, Button, Card, Space, message, Tabs, Modal, Descriptions, Table, Form, Input, Popconfirm, Switch } from 'antd';
 import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
-import { backupApi, tagsApi, signalGenerationApi } from '../utils/api';
+import { backupApi, tagsApi, signalGenerationApi, notificationsApi } from '../utils/api';
 import { ROUTES } from '../utils/constants';
 import { useInit } from '../context/InitContext';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -15,6 +15,7 @@ const Settings = () => {
   const tabPathByKey = {
     about: 'about',
     'route-tags': 'route-tags',
+    notifications: 'notifications',
     backup: 'backup',
     routes: 'routes',
     'signal-generation': 'signal-generation',
@@ -46,8 +47,15 @@ const Settings = () => {
   const [signalStarting, setSignalStarting] = useState(false);
   const [signalStopping, setSignalStopping] = useState(false);
   const [signalStatus, setSignalStatus] = useState({ running: false, host: '127.0.0.1', port: 4200 });
+  const [notificationsForm] = Form.useForm();
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsSaving, setNotificationsSaving] = useState(false);
+  const [notificationsTesting, setNotificationsTesting] = useState(false);
+  const [botTokenConfigured, setBotTokenConfigured] = useState(false);
+  const [tokenSuffix, setTokenSuffix] = useState(null);
   const fileInputRef = useRef(null);
   const signalFormHydratedRef = useRef(false);
+  const notificationsFormHydratedRef = useRef(false);
   const [modal, modalContextHolder] = Modal.useModal();
   const [messageApi, contextHolder] = message.useMessage();
   const initData = useInit();
@@ -98,6 +106,41 @@ const Settings = () => {
   useEffect(() => {
     if (activeTab === 'route-tags') {
       loadTags();
+    }
+  }, [activeTab]);
+
+  const loadTelegramNotifications = async ({ initial = false } = {}) => {
+    if (initial) {
+      setNotificationsLoading(true);
+    }
+
+    try {
+      const result = await notificationsApi.getTelegram();
+      const data = result?.data || {};
+      setBotTokenConfigured(Boolean(data.bot_token_configured));
+      setTokenSuffix(data.token_suffix || null);
+
+      if (!notificationsForm.isFieldsTouched()) {
+        notificationsForm.setFieldsValue({
+          enabled: Boolean(data.enabled),
+          chat_id: data.chat_id || '',
+          bot_token: '',
+        });
+        notificationsFormHydratedRef.current = true;
+      }
+    } catch (error) {
+      messageApi.error(`Failed to load notification settings: ${error.message}`);
+    } finally {
+      if (initial) {
+        setNotificationsLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'notifications') {
+      const shouldHydrate = !notificationsFormHydratedRef.current;
+      loadTelegramNotifications({ initial: shouldHydrate });
     }
   }, [activeTab]);
 
@@ -461,6 +504,128 @@ const Settings = () => {
     );
   };
 
+  const NotificationsTabContent = () => {
+    const handleSave = async () => {
+      try {
+        const values = await notificationsForm.validateFields();
+        setNotificationsSaving(true);
+
+        const payload = {
+          enabled: values.enabled,
+          chat_id: values.chat_id,
+        };
+
+        if (values.bot_token) {
+          payload.bot_token = values.bot_token;
+        }
+
+        const result = await notificationsApi.updateTelegram(payload);
+        const data = result?.data || {};
+        setBotTokenConfigured(Boolean(data.bot_token_configured));
+        setTokenSuffix(data.token_suffix || null);
+        notificationsForm.setFieldValue('bot_token', '');
+        notificationsFormHydratedRef.current = true;
+        messageApi.success('Notification settings saved');
+      } catch (error) {
+        if (error?.errorFields) {
+          return;
+        }
+        messageApi.error(error.message || 'Failed to save notification settings');
+      } finally {
+        setNotificationsSaving(false);
+      }
+    };
+
+    const handleTest = async () => {
+      try {
+        const values = await notificationsForm.validateFields();
+        setNotificationsTesting(true);
+
+        const payload = {
+          enabled: values.enabled,
+          chat_id: values.chat_id,
+        };
+
+        if (values.bot_token) {
+          payload.bot_token = values.bot_token;
+        }
+
+        await notificationsApi.testTelegram(payload);
+        messageApi.success('Test notification sent');
+      } catch (error) {
+        if (error?.errorFields) {
+          return;
+        }
+        messageApi.error(error.message || 'Failed to send test notification');
+      } finally {
+        setNotificationsTesting(false);
+      }
+    };
+
+    const tokenPlaceholder = botTokenConfigured
+      ? `Leave blank to keep current token${tokenSuffix ? ` (…${tokenSuffix})` : ''}`
+      : 'Bot token from @BotFather';
+
+    return (
+      <Card title="Telegram notifications" loading={notificationsLoading}>
+        <Form form={notificationsForm} layout="vertical" initialValues={{ enabled: false }}>
+          <Form.Item label="Enabled" name="enabled" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item
+            label="Bot token"
+            name="bot_token"
+            rules={[
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!getFieldValue('enabled')) {
+                    return Promise.resolve();
+                  }
+                  if (value || botTokenConfigured) {
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(new Error('Bot token is required when enabled'));
+                },
+              }),
+            ]}
+          >
+            <Input.Password placeholder={tokenPlaceholder} autoComplete="off" />
+          </Form.Item>
+          <Form.Item
+            label="Chat ID"
+            name="chat_id"
+            rules={[
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!getFieldValue('enabled')) {
+                    return Promise.resolve();
+                  }
+                  if (value && String(value).trim() !== '') {
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(new Error('Chat ID is required when enabled'));
+                },
+              }),
+            ]}
+          >
+            <Input placeholder="Telegram chat or group ID" />
+          </Form.Item>
+          <Space>
+            <Button type="primary" onClick={handleSave} loading={notificationsSaving}>
+              Save
+            </Button>
+            <Button onClick={handleTest} loading={notificationsTesting}>
+              Send test
+            </Button>
+          </Space>
+          <p style={{ marginTop: 16, color: 'rgba(255, 255, 255, 0.65)' }}>
+            Route status changes are sent to Telegram when enabled.
+          </p>
+        </Form>
+      </Card>
+    );
+  };
+
   const SignalGenerationTabContent = () => {
     const handleSave = async () => {
       try {
@@ -595,6 +760,11 @@ const Settings = () => {
       key: 'route-tags',
       label: 'Route tags',
       children: <RouteTagsTabContent />,
+    },
+    {
+      key: 'notifications',
+      label: 'Notifications',
+      children: <NotificationsTabContent />,
     },
     {
       key: 'backup',

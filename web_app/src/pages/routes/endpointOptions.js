@@ -48,6 +48,17 @@ export const normalizeEndpointForForm = (endpoint) => {
 
   const flat = normalizeBooleanAliases({ ...endpoint });
 
+  // Backward compatibility: legacy SRT records may still persist remote peer in `host`
+  // (historically from schema_options JSON) while the current form uses `address`.
+  if (
+    flat.schema === 'SRT' &&
+    (flat.address === undefined || flat.address === null || flat.address === '') &&
+    typeof flat.host === 'string' &&
+    flat.host !== ''
+  ) {
+    flat.address = flat.host;
+  }
+
   if (
     flat.schema === 'SRT' &&
     flat.mode === 'caller' &&
