@@ -3,7 +3,7 @@ defmodule HydraSrt.Stats.PipelineLogParser do
 
   @levels ~w(ERROR WARN INFO DEBUG FIXME LOG TRACE)
 
-  @line_regex ~r/^(\d+:\d+:\d+\.\d+)\s+(\d+)\s+(0x[0-9a-f]+)\s+(#{Enum.join(@levels, "|")})\s+(\S+)\s+([^:]+):(\d+):([^:<\s]+):?(?:<([^>]+)>)?\s+(.+)$/s
+  @line_regex ~r/^(\d+:\d+:\d+\.\d+)\s+(\d+)\s+(0x[0-9a-fA-F]+)\s+(#{Enum.join(@levels, "|")})\s+(\S+)\s+([^:]+):(\d+):([^:<\s]+):?(?:<([^>]+)>)?\s+(.+)$/s
 
   @spec parse(binary()) :: {:ok, map()} | :error
   def parse(line) when is_binary(line) do

@@ -473,14 +473,8 @@ defmodule HydraSrt.RouteHandler do
           {:pipeline_log, log}
         )
 
-        :telemetry.execute(
-          [:hydra, :pipeline, :log_line],
-          %{count: 1},
-          %{route_id: data.id, level: log.level}
-        )
-
       :error ->
-        :ok
+        :ok = HydraSrt.PipelineLogTelemetry.emit_unparsed(data.id)
     end
 
     data

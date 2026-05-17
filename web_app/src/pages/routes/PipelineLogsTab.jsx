@@ -86,7 +86,14 @@ const makeFilterColumn = (routeId, column) => ({
   ),
 });
 
-const PipelineLogsTab = ({ routeId, analyticsWindow, customRangeApplied }) => {
+const PipelineLogsTab = ({
+  routeId,
+  active,
+  analyticsWindow,
+  customRangeApplied,
+  refreshTick,
+  onLoadingChange,
+}) => {
   const [logs, setLogs] = useState([]);
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -121,18 +128,32 @@ const PipelineLogsTab = ({ routeId, analyticsWindow, customRangeApplied }) => {
     }
 
     setLoading(true);
+    onLoadingChange?.(true);
     try {
       const result = await routesApi.getPipelineLogs(routeId, params);
       setLogs(result?.data?.logs || []);
       setMeta(result?.data?.meta || null);
     } finally {
       setLoading(false);
+      onLoadingChange?.(false);
     }
-  }, [routeId, analyticsWindow, customRangeApplied]);
+  }, [routeId, analyticsWindow, customRangeApplied, refreshTick, onLoadingChange]);
 
   useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    setPage(1);
+  }, [active, analyticsWindow, customRangeApplied, refreshTick]);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+
     fetchLogs(page, pageSize, levelFilters, categoryFilters);
-  }, [fetchLogs, page, pageSize, levelFilters, categoryFilters]);
+  }, [active, fetchLogs, page, pageSize, levelFilters, categoryFilters]);
 
   const handleTableChange = (pagination, filters) => {
     const newLevels = filters.level || [];
@@ -215,12 +236,18 @@ const PipelineLogsTab = ({ routeId, analyticsWindow, customRangeApplied }) => {
 
 PipelineLogsTab.propTypes = {
   routeId: PropTypes.string.isRequired,
+  active: PropTypes.bool,
   analyticsWindow: PropTypes.string.isRequired,
   customRangeApplied: PropTypes.array,
+  refreshTick: PropTypes.number,
+  onLoadingChange: PropTypes.func,
 };
 
 PipelineLogsTab.defaultProps = {
+  active: true,
   customRangeApplied: [],
+  refreshTick: 0,
+  onLoadingChange: undefined,
 };
 
 export default PipelineLogsTab;

@@ -3,6 +3,7 @@ defmodule HydraSrt.Stats.PipelineLogger do
   use GenServer
   require Logger
 
+  alias HydraSrt.PipelineLogTelemetry
   alias HydraSrt.Stats.Duckdb
 
   @default_flush_interval_ms 5_000
@@ -66,13 +67,16 @@ defmodule HydraSrt.Stats.PipelineLogger do
       counter = Map.get(rate_counters, route_id, %{count: 0, dropped: 0})
 
       if counter.count >= max_verbose_per_window do
+        :ok = PipelineLogTelemetry.emit_dropped(route_id, log.level)
         updated = %{counter | dropped: counter.dropped + 1}
         {logs, Map.put(rate_counters, route_id, updated)}
       else
+        :ok = PipelineLogTelemetry.emit_stored(route_id, log.level)
         updated = %{counter | count: counter.count + 1}
         {[enrich(log) | logs], Map.put(rate_counters, route_id, updated)}
       end
     else
+      :ok = PipelineLogTelemetry.emit_stored(log.route_id, log.level)
       {[enrich(log) | logs], rate_counters}
     end
   end
@@ -96,6 +100,8 @@ defmodule HydraSrt.Stats.PipelineLogger do
       rate_counters
       |> Enum.filter(fn {_route_id, %{dropped: d}} -> d > 0 end)
       |> Enum.map(fn {route_id, %{dropped: dropped}} ->
+        :ok = PipelineLogTelemetry.emit_stored(route_id, "WARN")
+
         enrich(%{
           route_id: route_id,
           gst_ts: nil,
