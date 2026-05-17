@@ -1,345 +1,83 @@
-# HydraSRT – An Open Source Alternative to Haivision SRT Gateway
+<br />
+<p align="center">
+  <img src="/web_app/public/logo.webp" alt="HydraSRT" width="400"/>
+</p>
 
-<img src="/web_app/public/logo.webp" alt="HydraSRT" width="400"/>
+<h1 align="center">HydraSRT</h1>
 
-> **Project Status**: HydraSRT is under active development. Some features are still evolving, and occasional breaking changes may occur.
+<p align="center">
+  An open-source alternative to Haivision SRT Gateway.
+  <br />
+  <a href="https://github.com/abc3/hydra-srt/issues/new">Report Bug</a>
+  ·
+  <a href="https://github.com/abc3/hydra-srt/issues/new?labels=enhancement">Request Feature</a>
+</p>
 
-- [Overview](#overview)
-- [Motivation](#motivation)
-- [Architecture](#architecture)
-- [Docs](#docs)
-- [Features](#features)
-- [Deployment](#deployment)
-  - [Prerequisites](#prerequisites)
-- [Development](#development)
-- [Building for Production](#building-for-production)
-- [Inspiration](#inspiration)
-- [Contact](#contact)
+## Status
+
+> **Project Status**: Beta. APIs and behavior may change.
+
+[![GitHub License](https://img.shields.io/github/license/abc3/hydra-srt)](https://github.com/abc3/hydra-srt/blob/main/LICENSE)
+
+| Protocol/Feature | Source | Destination | Status  |
+| ---------------- | ------ | ----------- | ------- |
+| SRT              | ✔      | ✔           | Beta    |
+| UDP              | ✔      | ✔           | Beta    |
+| Notifications    | -      | -           | Planned |
+| MCP              | -      | -           | Planned |
+| Cluster Mode     | -      | -           | Planned |
+| RTSP             | -      | -           | Planned |
+| RTMP             | -      | -           | Planned |
+| HLS              | -      | -           | Planned |
+| WebRTC           | -      | -           | Planned |
+| MoQ              | -      | -           | Planned |
+
+Missing a feature? [Open an issue](https://github.com/abc3/hydra-srt/issues/new?labels=enhancement).
 
 ## Overview
 
 https://github.com/user-attachments/assets/8230f902-b037-424f-a337-a3828dac6a3c
 
-HydraSRT is an open-source, high-performance alternative to the **Haivision SRT Gateway**. It is designed to provide a scalable and flexible solution for **Secure Reliable Transport (SRT)** video routing, with support for multiple streaming protocols.
+HydraSRT is an open-source alternative to Haivision SRT Gateway for reliable video transport and routing. It manages SRT and UDP streams with built-in failover, supervision, metrics, and a modern web UI and API designed for broadcast and live production workflows.
 
-## Motivation
-
-HydraSRT aims to deliver a robust and adaptable solution for video routing, offering a scalable alternative to proprietary systems. It supports multiple streaming protocols, ensuring flexibility and high performance.
+Built with Elixir(Erlang/OTP), Rust, and GStreamer, HydraSRT combines strong fault isolation with lightweight orchestration. The BEAM supervises routing and control logic, while isolated media pipelines run only where active streams are present, providing high reliability with low system overhead.
 
 ## Architecture
 
-HydraSRT is structured into **three core layers**, each designed for efficiency, reliability, and modularity:
+HydraSRT has three layers:
 
-### **1. Management & Control Layer (Elixir)**
-
-- **Manages streaming pipelines** and dynamic route configurations.
-- **Exposes a REST API** for frontend interaction.
-- **Uses SQLite (Ecto + `ecto_sqlite3`)** as the **primary database** for system state and configurations.
-
-#### Cluster Mode
-
-Coming soon...
-
-### **2. Streaming & Processing Layer (Isolated Rust + GStreamer)**
-
-- **Memory safety & stability** – The Rust pipeline runs as a separate, isolated process, so faults in the media layer do not compromise the Elixir control plane. Elixir can monitor the process and terminate pipelines if necessary to maintain system stability.
-- **High-performance video processing** via **GStreamer**.
-- **Secure interprocess communication** with the Elixir layer.
-<!-- - **Support for dynamic routing**, allowing real-time addition/removal of destinations. -->
-
-### **3. User Interface Layer (Vite + React + Ant Design)**
-
-- **Communicates with the backend via REST API** for real-time control.
-- **Provides a dashboard and route management tools** for users to interact with the system.
-- **Supports user authentication and session management** to ensure secure access.
-- **Displays route status and allows for route configuration** through a user-friendly interface.
-
-## Docs
-
-- [Backend API Documentation](docs/api.md)
-
-## Features
-
-- [x] SRT Source Modes:
-  - [x] Listener
-  - [x] Caller
-  - [x] Rendezvous
-- [x] SRT Destination Modes:
-  - [x] Listener
-  - [x] Caller
-  - [x] Rendezvous
-- [x] SRT Authentication
-- [x] UDP Support:
-  - [x] Source
-  - [x] Destination
-- [ ] Cluster Mode
-- [ ] Dynamic Routing
-- [ ] RTSP
-- [ ] RTMP
-- [ ] HLS
-- [ ] MPEG-DASH
-- [ ] WebRTC
-
-[Missed something? Add a request!](https://github.com/abc3/hydra-srt/issues/new)
-
-### Source Failover (Primary + Backup)
-
-HydraSRT supports route-level source failover with one active source at a time:
-
-- **Primary + N backup sources** per route.
-- **Automatic failover** when active source fails.
-- **Manual source switch** via UI/API.
-- **Realtime active source updates** in the route page.
-
-#### Failover Modes
-
-- **`active`**: fail over on active source failure and use background probing to return to primary when stable.
-- **`passive`**: fail over only when current active source fails; no background primary probing.
-- **`disabled`**: disables automatic failover.
-
-#### Operational Notes
-
-- Failover is implemented in Elixir control-plane by restarting the native pipeline with the selected source.
-- Native pipeline input selection is **not hot-swapped in-place**.
-- A short output interruption during source switch/restart is expected.
-
-## Deployment
-
-### Prerequisites
-
-#### System Dependencies
-
-Before deploying HydraSRT, ensure your system has the following dependencies installed:
-
-1. **Elixir** (version 1.17.1 or later)
-2. **Erlang/OTP** (version 27.0 or later)
-3. **Node.js** and npm (version 18.13.0 or later, for building the web UI)
-
-   > **Recommended**: Use [asdf](https://asdf-vm.com/) for managing Elixir, Erlang, and Node.js versions.
-   > The project includes a `.tool-versions` file with the following versions:
-   >
-   > - Elixir 1.17.1-otp-27
-   > - Erlang 27.0
-   > - Node.js 18.13.0
-
-4. **Rust**, Cargo, **GStreamer**, and related libraries for the streaming pipeline:
-
-   ```bash
-   # Ubuntu/Debian
-   sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-     gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-     libsrt-openssl-dev libglib2.0-dev pkg-config cargo rustc
-
-   # macOS (using Homebrew)
-   brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
-     srt pkg-config rust
-   ```
-
-5. **Verify streaming pipeline dependencies** are correctly installed:
-   ```bash
-   pkg-config --libs gstreamer-1.0 gstreamer-base-1.0 glib-2.0 srt
-   ```
-   This command should output the linking flags without errors. If you see errors, ensure all required packages are installed.
-
-6. **DuckDB CLI** (used for analytics inspection/debugging):
-
-   ```bash
-   # Ubuntu/Debian and most Linux distributions
-   curl -fsSL https://install.duckdb.org | sh
-
-   # macOS (using Homebrew)
-   brew install duckdb
-   ```
-
-## Development
-
-To run HydraSRT locally, start the Elixir app and Phoenix will also launch the Vite dev server for the web UI.
-
-### Backend
-
-```bash
-# Start the Elixir node and the Vite web UI watcher
-make dev
+```mermaid
+flowchart LR
+  UI[React UI] -->|REST/WebSocket| API[Phoenix API]
+  API --> Control[Elixir/OTP Supervisor]
+  Control -->|spawns & monitors| Pipeline1[Rust Pipeline 1]
+  Control -->|spawns & monitors| Pipeline2[Rust Pipeline 2]
+  Control -->|spawns & monitors| PipelineN[Rust Pipeline N]
+  Control --> SQLite[(SQLite Config)]
+  Control --> DuckDB[(DuckDB Analytics)]
 ```
 
-Web UI dev server is fixed to:
+**Management & Control (Elixir/OTP)**
+- Supervises routes and restarts failed route processes
+- Stores configuration and route state in SQLite
+- Exposes REST and WebSocket APIs
+- Handles failover and source switching
 
-- `host: localhost`
-- `port: 5173`
-- `strictPort: true`
+**Streaming & Processing (Rust + GStreamer)**
+- Runs each route as an isolated OS process
+- Uses GStreamer for media processing
+- Keeps pipeline crashes limited to the affected route
 
-If `5173` is already in use, Vite will fail to start instead of switching to another port.
+**User Interface (React + Vite)**
+- Route management dashboard
+- Real-time status over WebSocket
+- Historical metrics and logs
 
-For Docker/remote dev you can override this behavior:
+See [docs/architecture.md](docs/architecture.md) for details.
 
-- `VITE_DEV_HOST` (example: `0.0.0.0`)
-- `VITE_DEV_PORT` (example: `5173`)
-- `VITE_DEV_STRICT_PORT` (example: `false`)
+## Quick Start
 
-Example:
-
-```bash
-cd web_app
-VITE_DEV_HOST=0.0.0.0 VITE_DEV_STRICT_PORT=false yarn dev
-```
-
-### Demo Mode
-
-HydraSRT can bootstrap local demo entities when `DEMO_DATA=true`.
-
-```bash
-DEMO_DATA=true make dev
-```
-
-When demo mode is enabled:
-
-- `ffmpeg` must be available in `PATH` (startup fails if missing)
-- a `demo_route` is created automatically (idempotent)
-- source: `srt://127.0.0.1:4200?mode=caller`
-- destinations:
-  - `srt://127.0.0.1:4201?mode=listener`
-  - `udp://127.0.0.1:4202` (for local playback)
-- `demo_route` is created with `enabled: false` (it is not auto-started)
-
-After startup with `DEMO_DATA=true`, run signal generation manually:
-
-1. Open [http://localhost:5173/#/settings/signal-generation](http://localhost:5173/#/settings/signal-generation)
-2. Click `Start` in the `Signal generation` section
-3. Start `demo_route` from the Routes UI
-
-Then verify playback with `ffplay`:
-
-```bash
-# SRT destination
-ffplay -fflags nobuffer -flags low_delay -i "srt://127.0.0.1:4201?mode=caller"
-
-# UDP destination
-ffplay -fflags nobuffer -flags low_delay -i "udp://@:4202"
-```
-
-## Building for Production
-
-> **Production Note**: HydraSRT can be built for production, but the project is still evolving. Plan upgrades carefully and validate in staging before rollout.
-
-1. **Clone the repository**:
-
-   ```bash
-   git clone https://github.com/abc3/hydra-srt.git
-   cd hydra-srt
-   ```
-
-2. **Build the release**:
-
-   ```bash
-   # Get Elixir dependencies
-   mix deps.get
-
-   # Install JavaScript dependencies for the web application
-   cd web_app && npm install && cd ..
-
-   # Compile the project
-   MIX_ENV=prod mix compile
-
-   # Create the release (this will automatically build the web app and Rust pipeline)
-   MIX_ENV=prod mix release
-   ```
-
-   The release process will:
-
-   - Compile the Elixir application
-   - Build the Rust pipeline from `./native` via `mix compile.rs_native`
-   - Build the web application using `npm run build`
-   - Package everything into a self-contained release
-
-### Running in Production
-
-For day-to-day debugging, `start_iex` is usually easier than `start` (see the pre-alpha note under **Building for Production** above).
-
-1. **Start the application**:
-
-   ```bash
-   # Interactive Elixir shell (handy for logs and debugging)
-   PHX_SERVER=true DATABASE_PATH=/etc/hydra_srt/hydra_srt.db API_AUTH_USERNAME=your_username API_AUTH_PASSWORD=your_password _build/prod/rel/hydra_srt/bin/hydra_srt start_iex
-   ```
-
-   Or in daemon mode (for stable production environments):
-
-   ```bash
-   # Start the application in the background
-   PHX_SERVER=true DATABASE_PATH=/etc/hydra_srt/hydra_srt.db API_AUTH_USERNAME=your_username API_AUTH_PASSWORD=your_password _build/prod/rel/hydra_srt/bin/hydra_srt start
-   ```
-
-2. **Additional commands**:
-
-   ```bash
-   # To stop the application
-   _build/prod/rel/hydra_srt/bin/hydra_srt stop
-
-   # To connect to a running application remotely
-   _build/prod/rel/hydra_srt/bin/hydra_srt remote
-
-   # To see all available commands
-   _build/prod/rel/hydra_srt/bin/hydra_srt
-   ```
-
-3. **Accessing the Web UI**:
-
-   After starting the application, the web interface will be available at:
-
-   ```
-   http://your_server_ip:4000
-   ```
-
-   Where:
-
-   - `your_server_ip` is the IP address or hostname of your server
-   - `4000` is the default port (can be changed using the `PORT` environment variable)
-
-   You'll need to use the credentials specified in `API_AUTH_USERNAME` and `API_AUTH_PASSWORD` to log in.
-
-### Environment Variables
-
-Configure HydraSRT using the following environment variables:
-
-| Variable               | Description                             | Default          |
-| ---------------------- | --------------------------------------- | ---------------- |
-| `API_AUTH_USERNAME`    | Username for API authentication         | (required)       |
-| `API_AUTH_PASSWORD`    | Password for API authentication         | (required)       |
-| `PORT`                 | HTTP port for the API server            | 4000             |
-| `PHX_CHECK_ORIGIN`     | Comma-separated allowed origins for Phoenix WebSocket origin checks. If unset, origin checks use Phoenix defaults. Example: `http://198.51.100.10:40321,http://203.0.113.20:4000` | (optional) |
-| `RELEASE_COOKIE`       | Erlang distribution cookie              | (auto-generated) |
-| `DATABASE_PATH`        | Path to SQLite database file            | (required)       |
-| `POOL_SIZE`            | DB pool size                            | 5                |
-| `METRICS_SECRET`       | Bearer token for `GET /metrics`. If not set, the endpoint is open to everyone | (optional) |
-| `PROM_POLL_RATE`       | Prometheus metrics polling interval (ms) | 5000             |
-
-### Troubleshooting
-
-1. **Streaming Pipeline Issues**:
-
-   - Verify all dependencies are installed with `pkg-config --libs gstreamer-1.0 gstreamer-base-1.0 glib-2.0 srt`
-   - Rebuild the Rust binary with `mix compile.rs_native`
-
-2. **Web Application Issues**:
-
-   - Ensure Node.js and npm are installed and working correctly
-   - Try building the web app manually: `cd web_app && npm install && npm run build`
-
-3. **Elixir Application Issues**:
-
-   - Ensure all required environment variables are set
-
-## Running with Docker
-
-To run HydraSRT using Docker and Docker Compose, follow these steps:
-
-> `duckdb` CLI is installed in the Docker image during build.
-
-Prebuilt Docker image is available on Docker Hub:
-
-- [streamband/hydra-srt](https://hub.docker.com/r/streamband/hydra-srt)
-
-Quick start with the published image:
+### Docker (Recommended)
 
 ```bash
 docker run --rm -p 4000:4000 \
@@ -353,101 +91,48 @@ docker run --rm -p 4000:4000 \
   streamband/hydra-srt:latest
 ```
 
-Required env vars for this container mode (see `docs/ENVS.md`):
+Open [http://127.0.0.1:4000](http://127.0.0.1:4000) and log in with `admin` / `password123`.
 
-- `API_AUTH_USERNAME`
-- `API_AUTH_PASSWORD`
-- `DATABASE_PATH`
-- `ANALYTICS_DATABASE_PATH`
-
-1. **Build the Docker image**:
-
-   ```bash
-   docker compose build
-   ```
-
-2. **Start the application**:
-
-   ```bash
-   docker compose up
-   ```
-
-   This will start the application in Docker.
-   On first start (fresh `./data/db` volume), the container will automatically run DB migrations.
-   To disable auto-migrations, set `RUN_MIGRATIONS=false`.
-   By default, `docker-compose.yml` uses `DATABASE_PATH=/app/db/hydra_srt.db` and mounts `./data/db` to persist the SQLite database file across restarts.
-
-   To override the DB path (and/or increase `POOL_SIZE`), create a `.env` file:
-
-   ```bash
-   echo "DATABASE_PATH=/app/db/hydra_srt.db" > .env
-   echo "POOL_SIZE=1" >> .env
-   ```
-
-3. **Access the Web UI**:
-
-   After starting the application, the web interface will be available at:
-
-   ```
-   http://127.0.0.1:4000
-   ```
-
-   Use the credentials specified in `API_AUTH_USERNAME` and `API_AUTH_PASSWORD` to log in.
-
-4. **Stop the application**:
-
-   To stop the application and remove the containers, run:
-
-   ```bash
-   docker compose down
-   ```
-
-### Network Mode: Host
-
-HydraSRT supports two Docker networking modes:
-
-- **Default (recommended / portable)**: normal bridge networking with explicit port mappings (works on Linux + Docker Desktop).
-- **Host network (Linux-only)**: share the host network namespace (useful for certain high-performance or port-binding scenarios).
-
-#### Default mode (portable, recommended for macOS/Windows)
+### Local Development
 
 ```bash
-docker compose up --build
+# First-time setup
+mix setup
+
+# Start dev server (Elixir + Vite)
+make dev
 ```
 
-The Web UI will be available at:
+Web UI: [http://localhost:5173](http://localhost:5173).
 
-```
-http://127.0.0.1:4000
-```
+Setup, deployment, and troubleshooting: [docs/development.md](docs/development.md).
 
-Use this mode when you want a simple local setup (for example, on macOS) and only need the mapped ports from `docker-compose.yml` (e.g. `4000/tcp` and `4100-4500/udp`).
+## Features
 
-#### Host network mode (Linux-only, recommended on Linux servers)
+- SRT source and destination modes: Listener, Caller, Rendezvous
+- UDP sources and destinations
+- SRT authentication with passphrase and stream ID support
+- Source failover with primary + backup sources, automatic failover, and manual source switching
+- System metrics via Prometheus `/metrics`
+- Historical analytics and pipeline logs stored in DuckDB
+- Real-time route status updates over WebSocket
 
-Docker Desktop (macOS/Windows) does not support Linux-style `network_mode: "host"` in the same way, so this mode is intended for Linux hosts only.
+## Documentation
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
-```
+| Document                              | Purpose                               |
+| ------------------------------------- | ------------------------------------- |
+| [docs/development.md](docs/development.md) | Setup, deployment, and Docker guide |
+| [docs/architecture.md](docs/architecture.md) | System design and technical details |
+| [docs/api.md](docs/api.md)            | REST API documentation                |
+| [docs/envs.md](docs/envs.md)          | Environment variables reference       |
 
-To stop:
+## Contributing
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.host.yml down
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 
-When using Docker Compose, setting `network_mode: "host"` allows the container to share the host's networking namespace. This means:
+## License
 
-- The container will use the host's IP address and network interfaces.
-- Ports exposed by the container will be accessible on the host's network interfaces.
-- This mode is useful for applications that require high network performance or need to access services running on the host.
-
-**Implications:**
-
-- **Performance**: Network performance can be improved since there is no network translation between the host and the container.
-- **Security**: The container has access to the host's network, which can pose security risks if not managed properly.
-- **Port Conflicts**: Since the container shares the host's network, ensure that there are no port conflicts with other services running on the host.
+Apache 2.0. See [LICENSE](LICENSE).
 
 ## Inspiration
 
@@ -456,4 +141,4 @@ When using Docker Compose, setting `network_mode: "host"` allows the container t
 
 ## Contact
 
-For support or inquiries, create an issue here: [https://github.com/abc3/hydra-srt/issues](https://github.com/abc3/hydra-srt/issues).
+Use GitHub issues: [https://github.com/abc3/hydra-srt/issues](https://github.com/abc3/hydra-srt/issues)

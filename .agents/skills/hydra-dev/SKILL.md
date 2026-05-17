@@ -74,7 +74,7 @@ cd web_app && npm run test:e2e   # Playwright; backend + native build required
 ```bash
 make test_all        # sequential: backend unit, e2e, native unit, web unit, web e2e
 make test_ci_local   # CI-equivalent (slow)
-make dev             # IEx + Phoenix; see docs/ENVS.md for env vars
+make dev             # IEx + Phoenix; see docs/envs.md for env vars
 ```
 
 ## Natural language
@@ -109,4 +109,4 @@ make dev             # IEx + Phoenix; see docs/ENVS.md for env vars
 - `AGENTS.md` — architecture, docs index
 - `test/AGENTS.md` — full test matrix, support modules, tags
 - `Makefile` — all `test_*` targets
-- `docs/ENVS.md` — environment variables
+- `docs/envs.md` — environment variables

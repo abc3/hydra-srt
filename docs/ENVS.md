@@ -21,8 +21,8 @@ All environment variables recognised by Hydra SRT, grouped by purpose.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `API_AUTH_USERNAME` | **prod** (optional in dev) | `admin` (dev) | HTTP Basic Auth username for the API. |
-| `API_AUTH_PASSWORD` | **prod** (optional in dev) | `password123` (dev) | HTTP Basic Auth password for the API. |
+| `API_AUTH_USERNAME` | **prod** (optional in dev) | `admin` (dev) | Username for API login. |
+| `API_AUTH_PASSWORD` | **prod** (optional in dev) | `password123` (dev) | Password for API login. |
 
 ---
 

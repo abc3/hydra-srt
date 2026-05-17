@@ -15,7 +15,7 @@ HydraSRT is an open-source SRT routing platform. The Elixir layer manages routes
 | Task | Command |
 |------|---------|
 | First-time setup | `mix setup` |
-| Local dev server | `make dev` (env vars: `docs/ENVS.md`) |
+| Local dev server | `make dev` (env vars: `docs/envs.md`) |
 | Code quality gate | `mix q` or `mix quality` |
 | Backend unit tests | `mix test` |
 | Full test matrix | See `test/AGENTS.md` |
@@ -52,6 +52,11 @@ flowchart LR
 - Do not delete commented code (see `.cursorrules`).
 - Do not use private functions (`defp`) in Elixir.
 - In tests: use unique ports/IDs; avoid `Process.sleep/1` where a poll condition exists (see `test/AGENTS.md`).
+- Keep human-facing docs separate from agent/machine docs:
+  - Human docs: `README.md`, `CONTRIBUTING.md`, `docs/*.md`, `web_app/README.md`, `native/README.md`.
+  - Agent/machine docs: `AGENTS.md`, `test/AGENTS.md`, `.agents/skills/*`.
+  - Do not send human readers to `AGENTS.md` or `test/AGENTS.md`; put the needed commands or links to `docs/*.md` directly in human docs.
+  - Keep agent behavior, test-matrix details, and command-routing notes in `AGENTS.md`, `test/AGENTS.md`, or skills.
 - **Conventional Commits** for git messages: `type(scope): subject` in imperative mood, lowercase type.
 
   Common types: `feat`, `fix`, `docs`, `chore`, `test`, `refactor`, `perf`, `ci`.
@@ -85,13 +90,12 @@ Workflow skills live under [`.agents/skills/`](.agents/skills/):
 
 | Document | Purpose |
 |----------|---------|
-| [docs/README.md](docs/README.md) | Documentation index |
-| [docs/api.md](docs/api.md) | REST API |
-| [docs/ENVS.md](docs/ENVS.md) | Environment variables |
-| [docs/metrics-architecture.md](docs/metrics-architecture.md) | Metrics collection and export |
-| [docs/backup-download.md](docs/backup-download.md) | Routes backup download |
-| [docs/backup-restore.md](docs/backup-restore.md) | System backup and restore |
-| [README.md](README.md) | Project overview |
+| [README.md](README.md) | Project overview and quick start |
+| [docs/development.md](docs/development.md) | Setup, deployment, and Docker guide |
+| [docs/architecture.md](docs/architecture.md) | System design and technical details |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
+| [docs/api.md](docs/api.md) | REST API documentation |
+| [docs/envs.md](docs/envs.md) | Environment variables reference |
 | [test/AGENTS.md](test/AGENTS.md) | Test suites and helpers |
 
 ## References

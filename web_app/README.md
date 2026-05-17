@@ -1,8 +1,28 @@
-# React + Vite
+# HydraSRT Web App
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React UI for HydraSRT.
 
-Currently, two official plugins are available:
+## Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Normally started by Phoenix:
+
+```bash
+make dev
+```
+
+Run directly when working only on the UI:
+
+```bash
+cd web_app
+yarn dev
+```
+
+Default dev URL: [http://localhost:5173](http://localhost:5173).
+
+## Tests
+
+```bash
+cd web_app
+npm run test:unit
+npm run test:e2e
+```
