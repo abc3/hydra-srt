@@ -91,6 +91,7 @@ defmodule HydraSrt.MixProject do
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "compile.rs_native": &rs_native_build/1,
+      credence: ["credence"],
       q: ["quality"],
       quality: [
         "format --check-formatted",

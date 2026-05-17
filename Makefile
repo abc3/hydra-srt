@@ -97,6 +97,10 @@ docker_host_rebuild:
 docker_clean:
 	docker compose down && docker compose rm -f hydra_srt
 
+.PHONY: credence
+credence:
+	mix credence
+
 .PHONY: test_e2e
 test_e2e:
 	E2E=true mix test --only e2e
