@@ -277,6 +277,37 @@ defmodule HydraSrtWeb.RouteControllerTest do
     end
   end
 
+  describe "pipeline_logs" do
+    setup [:create_route]
+
+    test "returns route pipeline logs payload", %{conn: conn, route: %{id: id}} do
+      conn = get(conn, "/api/routes/#{id}/pipeline-logs?window=last_hour&limit=10&offset=0")
+      response = json_response(conn, 200)
+
+      assert %{"data" => %{"logs" => logs, "meta" => meta}} = response
+      assert is_list(logs)
+      assert meta["window"] == "last_hour"
+      assert meta["limit"] == 10
+      assert meta["offset"] == 0
+      assert is_integer(meta["total"])
+    end
+
+    test "returns distinct pipeline log values for column=level", %{conn: conn, route: %{id: id}} do
+      conn = get(conn, "/api/routes/#{id}/pipeline-logs/distinct?column=level")
+      response = json_response(conn, 200)
+
+      assert %{"data" => values} = response
+      assert is_list(values)
+    end
+
+    test "returns 400 when distinct column is missing", %{conn: conn, route: %{id: id}} do
+      conn = get(conn, "/api/routes/#{id}/pipeline-logs/distinct")
+      response = json_response(conn, 400)
+
+      assert response["error"] == "Missing required 'column' parameter"
+    end
+  end
+
   describe "switch source" do
     setup [:create_route_with_sources]
 
