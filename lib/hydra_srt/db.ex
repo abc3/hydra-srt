@@ -8,6 +8,7 @@ defmodule HydraSrt.Db do
   alias HydraSrt.Api.Endpoint
   alias HydraSrt.Api.Interface
   alias HydraSrt.Api.Tag
+  alias HydraSrt.Api.Notification
   alias HydraSrt.Stats.EventLogger
 
   @status_stopped "stopped"
@@ -251,6 +252,119 @@ defmodule HydraSrt.Db do
     end
   end
 
+  @spec get_notification_by_type(String.t()) :: %Notification{} | nil
+  def get_notification_by_type(type) when is_binary(type) do
+    Repo.get_by(Notification, type: type)
+  end
+
+  @spec upsert_telegram_notification(map()) ::
+          {:ok, %Notification{}} | {:error, %Ecto.Changeset{}}
+  def upsert_telegram_notification(attrs) when is_map(attrs) do
+    type = Notification.telegram_type()
+    incoming_config = notification_config_params(attrs)
+
+    notification =
+      case get_notification_by_type(type) do
+        %Notification{} = row -> row
+        nil -> %Notification{type: type, enabled: false, config: %{}}
+      end
+
+    enabled =
+      case Map.fetch(attrs, "enabled") do
+        {:ok, _} ->
+          notification_param(attrs, "enabled", false)
+
+        :error ->
+          case Map.fetch(attrs, :enabled) do
+            {:ok, _} -> notification_param(attrs, "enabled", false)
+            :error -> notification.enabled
+          end
+      end
+
+    merged_config = merge_telegram_config(notification.config || %{}, incoming_config)
+
+    notification
+    |> Notification.changeset(%{
+      type: type,
+      enabled: enabled,
+      config: merged_config
+    })
+    |> Repo.insert_or_update()
+  end
+
+  def merge_telegram_config(existing_config, incoming_config) when is_map(incoming_config) do
+    existing = stringify_config_keys(existing_config)
+
+    incoming_config
+    |> Enum.reduce(existing, fn
+      {"bot_token", ""}, acc ->
+        acc
+
+      {"bot_token", token}, acc when is_binary(token) ->
+        Map.put(acc, "bot_token", String.trim(token))
+
+      {"chat_id", chat_id}, acc when not is_nil(chat_id) ->
+        Map.put(acc, "chat_id", to_string(chat_id) |> String.trim())
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  def stringify_config_keys(config) when is_map(config) do
+    Map.new(config, fn
+      {key, value} when is_atom(key) -> {Atom.to_string(key), value}
+      {key, value} -> {key, value}
+    end)
+  end
+
+  def notification_param(attrs, key, default) do
+    value = Map.get(attrs, key, Map.get(attrs, String.to_atom(key), default))
+
+    case value do
+      true -> true
+      false -> false
+      "true" -> true
+      "false" -> false
+      1 -> true
+      0 -> false
+      _ -> default
+    end
+  end
+
+  def notification_config_params(attrs) do
+    config =
+      Map.get(attrs, "config") ||
+        Map.get(attrs, :config) ||
+        %{}
+
+    bot_token =
+      notification_param_string(attrs, "bot_token") ||
+        notification_param_string(config, "bot_token")
+
+    chat_id =
+      notification_param_string(attrs, "chat_id") ||
+        notification_param_string(config, "chat_id")
+
+    %{}
+    |> maybe_put_config("bot_token", bot_token)
+    |> maybe_put_config("chat_id", chat_id)
+  end
+
+  def notification_param_string(attrs, key) when is_map(attrs) do
+    value = Map.get(attrs, key, Map.get(attrs, String.to_atom(key)))
+
+    case value do
+      nil -> nil
+      value when is_binary(value) -> String.trim(value)
+      value -> value |> to_string() |> String.trim()
+    end
+  end
+
+  def maybe_put_config(config, _key, nil), do: config
+  def maybe_put_config(config, _key, ""), do: config
+  def maybe_put_config(config, key, value), do: Map.put(config, key, value)
+
   @spec upsert_tags_by_name(list(String.t())) :: {:ok, list(%Tag{})} | {:error, any()}
   def upsert_tags_by_name(names) when is_list(names) do
     upsert_tags_by_name(Repo, names)
@@ -260,8 +374,7 @@ defmodule HydraSrt.Db do
   def upsert_tags_by_name(repo, names) when is_list(names) do
     names =
       names
-      |> Enum.map(&to_string/1)
-      |> Enum.map(&String.trim/1)
+      |> Enum.map(&(to_string(&1) |> String.trim()))
       |> Enum.reject(&(&1 == ""))
       |> Enum.uniq()
 
@@ -671,16 +784,24 @@ defmodule HydraSrt.Db do
   end
 
   defp ensure_destination_position_for_insert(data) when is_map(data) do
-    if Map.has_key?(data, "position") or Map.has_key?(data, :position) do
-      data
-    else
-      rid = Map.get(data, "route_id") || Map.get(data, :route_id)
-
-      if is_binary(rid) do
-        Map.put(data, "position", next_destination_position(rid))
-      else
+    case Map.fetch(data, "position") do
+      {:ok, _} ->
         data
-      end
+
+      :error ->
+        case Map.fetch(data, :position) do
+          {:ok, _} ->
+            data
+
+          :error ->
+            rid = Map.get(data, "route_id") || Map.get(data, :route_id)
+
+            if is_binary(rid) do
+              Map.put(data, "position", next_destination_position(rid))
+            else
+              data
+            end
+        end
     end
   end
 
@@ -1038,7 +1159,6 @@ defmodule HydraSrt.Db do
     route_to_map(route, include_destinations, [], list_sources_for_route(route.id))
   end
 
-  @doc false
   def route_to_map(%Route{} = route, true, destinations, sources)
       when is_list(destinations) and is_list(sources) do
     Map.put(
@@ -1048,11 +1168,27 @@ defmodule HydraSrt.Db do
     )
   end
 
-  @doc false
   def route_to_map(%Route{} = route, false, _destinations, sources) when is_list(sources) do
-    active_source =
-      Enum.find(sources, &(&1.id == route.active_source_id)) ||
-        Enum.find(sources, &(&1.position == 0))
+    {sources_maps, active_source_id, fallback_source_id} =
+      Enum.reduce(sources, {[], nil, nil}, fn source, {mapped, active_id, fallback_id} ->
+        source_map = source_to_map(source)
+
+        next_active_id =
+          if source.id == route.active_source_id do
+            source.id
+          else
+            active_id
+          end
+
+        next_fallback_id =
+          if is_nil(fallback_id) and source.position == 0 do
+            source.id
+          else
+            fallback_id
+          end
+
+        {[source_map | mapped], next_active_id, next_fallback_id}
+      end)
 
     %{
       "id" => route.id,
@@ -1061,8 +1197,8 @@ defmodule HydraSrt.Db do
       "alias" => route.alias,
       "status" => route.status,
       "schema_status" => route.schema_status,
-      "sources" => Enum.map(sources, &source_to_map/1),
-      "active_source_id" => route.active_source_id || (active_source && active_source.id),
+      "sources" => Enum.reverse(sources_maps),
+      "active_source_id" => route.active_source_id || active_source_id || fallback_source_id,
       "backup_mode" => route.backup_mode || "passive",
       "backup_switch_after_ms" => route.backup_switch_after_ms || 3000,
       "backup_cooldown_ms" => route.backup_cooldown_ms || 10000,
@@ -1157,10 +1293,8 @@ defmodule HydraSrt.Db do
     }
   end
 
-  @doc false
   def maybe_put_changeset_id(%Ecto.Changeset{} = changeset, nil), do: changeset
 
-  @doc false
   def maybe_put_changeset_id(%Ecto.Changeset{} = changeset, id) when is_binary(id) do
     Ecto.Changeset.put_change(changeset, :id, id)
   end

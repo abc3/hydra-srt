@@ -506,6 +506,34 @@ export const tagsApi = {
   },
 };
 
+export const notificationsApi = {
+  getTelegram: async () => {
+    const response = await authFetch('/api/notifications/telegram');
+    return response.json();
+  },
+
+  updateTelegram: async (notificationData) => {
+    return requestJson('/api/notifications/telegram', {
+      method: 'PUT',
+      body: JSON.stringify({ notification: notificationData }),
+    }, 'Failed to save Telegram notification settings');
+  },
+
+  testTelegram: async (notificationData = null) => {
+    const requestOptions = {
+      method: 'POST',
+    };
+
+    if (notificationData) {
+      requestOptions.body = JSON.stringify({ notification: notificationData });
+    }
+
+    return requestJson('/api/notifications/telegram/test', {
+      ...requestOptions,
+    }, 'Failed to send Telegram test notification');
+  },
+};
+
 // Destinations API
 export const destinationsApi = {
   // Get all destinations for a route

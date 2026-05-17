@@ -97,8 +97,20 @@ docker_host_rebuild:
 docker_clean:
 	docker compose down && docker compose rm -f hydra_srt
 
-.PHONY: credence
+.PHONY: credence credence_all
 credence:
+	@files=$$(git status --porcelain -u \
+		| sed -E 's/^.. //; s/.* -> //' \
+		| grep -E '\.(ex|exs)$$' \
+		| while read -r f; do [ -f "$$f" ] && echo "$$f"; done \
+		| sort -u); \
+	if [ -z "$$files" ]; then \
+		echo "credence: no changed Elixir files (git status)"; \
+		exit 0; \
+	fi; \
+	echo "credence: $$files"; \
+	mix credence $$files
+credence_all:
 	mix credence
 
 .PHONY: test_e2e

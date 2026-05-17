@@ -23,9 +23,6 @@
 | ---------------- | ------ | ----------- | ------- |
 | SRT              | ✔      | ✔           | Beta    |
 | UDP              | ✔      | ✔           | Beta    |
-| Notifications    | -      | -           | Planned |
-| MCP              | -      | -           | Planned |
-| Cluster Mode     | -      | -           | Planned |
 | RTSP             | -      | -           | Planned |
 | RTMP             | -      | -           | Planned |
 | HLS              | -      | -           | Planned |

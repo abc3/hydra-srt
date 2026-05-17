@@ -45,6 +45,7 @@ defmodule HydraSrt.Application do
       #  repos: Application.fetch_env!(:hydra_srt, :ecto_repos), skip: skip_migrations?()},
       {Phoenix.PubSub, name: HydraSrt.PubSub, partitions: runtime_schedulers},
       {HydraSrt.Stats.PipelineLogger, %{}},
+      {HydraSrt.Notifications.Telegram, %{}},
       HydraSrtWeb.Endpoint
     ]
 
@@ -82,8 +83,14 @@ defmodule HydraSrt.Application do
       "Startup route recovery reset #{reset_counts.routes} routes and #{reset_counts.destinations} destinations to stopped"
     )
 
-    HydraSrt.Db.list_enabled_routes()
-    |> Enum.each(&start_enabled_route/1)
+    :ok = HydraSrt.Notifications.Telegram.suspend_notifications()
+
+    try do
+      HydraSrt.Db.list_enabled_routes()
+      |> Enum.each(&start_enabled_route/1)
+    after
+      :ok = HydraSrt.Notifications.Telegram.resume_notifications()
+    end
 
     :ok
   end

@@ -152,6 +152,43 @@ Notes:
 *   **Endpoint:** `DELETE /api/routes/:route_id/destinations/:dest_id`
 *   **Description:** Removes a destination from a route.
 
+## Notifications
+
+### Get Telegram Settings
+
+*   **Endpoint:** `GET /api/notifications/telegram`
+*   **Description:** Returns Telegram notification settings with masked token fields.
+
+### Update Telegram Settings
+
+*   **Endpoint:** `PUT /api/notifications/telegram`
+*   **Description:** Creates or updates Telegram notification settings.
+*   **Payload:**
+    ```json
+    {
+      "notification": {
+        "enabled": true,
+        "bot_token": "123456:ABCDEF",
+        "chat_id": "-1001234567890"
+      }
+    }
+    ```
+
+### Send Telegram Test Notification
+
+*   **Endpoint:** `POST /api/notifications/telegram/test`
+*   **Description:** Sends a test Telegram notification.
+*   **Payload (optional):** You can pass unsaved form values under `notification` to test credentials before saving.
+    ```json
+    {
+      "notification": {
+        "enabled": true,
+        "bot_token": "123456:ABCDEF",
+        "chat_id": "-1001234567890"
+      }
+    }
+    ```
+
 ## System & Diagnostics
 
 ### List Pipelines
@@ -193,6 +230,7 @@ Notes:
 
 *   **Endpoint:** `GET /api/backup/create-backup-download-link`
 *   **Description:** Generates a temporary link to download a full system backup (SQLite `.db` snapshot).
+*   **Security note:** The backup contains notification settings, including Telegram bot tokens stored in the database.
 
 ### Download Backup
 

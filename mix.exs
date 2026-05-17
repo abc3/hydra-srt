@@ -61,6 +61,10 @@ defmodule HydraSrt.MixProject do
       {:syn, "~> 3.3"},
       {:cachex, "~> 3.6"},
 
+      # Notifications
+      {:telegram, github: "visciang/telegram", ref: "6dca11fff18c41fafffb92bb82082350ff1df217"},
+      {:hackney, "~> 1.18"},
+
       # Utilities
       {:jason, "~> 1.2"},
       {:uuid, "~> 1.1"},
