@@ -43,7 +43,7 @@ defmodule HydraSrt.Stats.PipelineLogger do
   end
 
   def handle_info(:flush, state) do
-    {logs, rate_counters} = flush_events(state.logs, state.rate_counters)
+    {logs, rate_counters} = flush_logs(state.logs, state.rate_counters)
     schedule_flush(state.flush_interval_ms)
     {:noreply, %{state | logs: logs, rate_counters: rate_counters}}
   end
@@ -59,6 +59,24 @@ defmodule HydraSrt.Stats.PipelineLogger do
   def schedule_flush(flush_interval_ms)
       when is_integer(flush_interval_ms) and flush_interval_ms > 0 do
     Process.send_after(self(), :flush, flush_interval_ms)
+  end
+
+  @spec flush_logs([map()], map(), (list() -> :ok | {:error, term()})) :: {[map()], map()}
+  def flush_logs(logs, rate_counters \\ %{}, insert_fun \\ &Duckdb.insert_pipeline_logs/1)
+
+  def flush_logs(logs, rate_counters, insert_fun)
+      when is_list(logs) and is_map(rate_counters) and is_function(insert_fun, 1) do
+    {merged_logs, _rate_counters} = build_synthetic_dropped_records(logs, rate_counters)
+    rows = Enum.reverse(merged_logs)
+
+    case insert_fun.(rows) do
+      :ok ->
+        {[], %{}}
+
+      {:error, reason} ->
+        Logger.error("PipelineLogger flush failed reason=#{inspect(reason)}")
+        {merged_logs, %{}}
+    end
   end
 
   defp maybe_buffer(log, logs, rate_counters, max_verbose_per_window) do
@@ -78,20 +96,6 @@ defmodule HydraSrt.Stats.PipelineLogger do
     else
       :ok = PipelineLogTelemetry.emit_stored(log.route_id, log.level)
       {[enrich(log) | logs], rate_counters}
-    end
-  end
-
-  defp flush_events(logs, rate_counters) do
-    {logs, rate_counters} = build_synthetic_dropped_records(logs, rate_counters)
-    rows = Enum.reverse(logs)
-
-    case Duckdb.insert_pipeline_logs(rows) do
-      :ok ->
-        {[], %{}}
-
-      {:error, reason} ->
-        Logger.error("PipelineLogger flush failed reason=#{inspect(reason)}")
-        {logs, rate_counters}
     end
   end
 

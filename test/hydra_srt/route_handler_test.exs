@@ -570,4 +570,48 @@ defmodule HydraSrt.RouteHandlerTest do
     assert {:update, "failed"} = RouteHandler.normalize_runtime_status("failed", "runtime_error")
     assert :ignore = RouteHandler.normalize_runtime_status("stopped", "failure")
   end
+
+  describe "process_port_line pipeline logs" do
+  @valid_gstreamer_line "0:00:00.123456789 1234 0x7f8b9c000b70 WARN srt src/srt.c:123:srt_connect:<srt-src> connection failed"
+
+  setup do
+    test_pid = self()
+    Phoenix.PubSub.subscribe(HydraSrt.PubSub, "pipeline_logs")
+
+    unparsed_handler = "route-handler-unparsed-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        unparsed_handler,
+        HydraSrt.PipelineLogTelemetry.unparsed_event(),
+        fn event, measurements, metadata, receiver ->
+          send(receiver, {:telemetry_unparsed, event, measurements, metadata})
+        end,
+        test_pid
+      )
+
+    on_exit(fn -> :telemetry.detach(unparsed_handler) end)
+
+    {:ok, data: %{id: "route-handler-pl-1", port_buffer: ""}}
+  end
+
+  test "broadcasts parsed GStreamer line on pipeline_logs pubsub", %{data: data} do
+    RouteHandler.consume_port_output(@valid_gstreamer_line <> "\n", data)
+
+    assert_receive {:pipeline_log, log}
+    assert log.route_id == "route-handler-pl-1"
+    assert log.level == "WARN"
+    assert log.category == "srt"
+    assert log.message == "connection failed"
+  end
+
+  test "emits unparsed telemetry for non-GStreamer lines", %{data: data} do
+    RouteHandler.consume_port_output("not a gstreamer log line\n", data)
+
+    refute_receive {:pipeline_log, _}, 50
+
+    assert_receive {:telemetry_unparsed, _event, %{count: 1},
+                    %{route_id: "route-handler-pl-1"}}
+  end
+  end
 end

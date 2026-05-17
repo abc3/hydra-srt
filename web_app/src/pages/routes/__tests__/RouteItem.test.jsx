@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import RouteItem from '../RouteItem';
 import {
@@ -28,6 +28,13 @@ vi.mock('../../../utils/api', () => {
           },
         },
       })),
+      getPipelineLogs: vi.fn(async () => ({
+        data: {
+          logs: [],
+          meta: { total: 0, window: 'last_hour' },
+        },
+      })),
+      getPipelineLogsDistinct: vi.fn(async () => ({ data: [] })),
       getById: vi.fn(async () => ({
         data: {
           id: 'r1',
@@ -210,6 +217,13 @@ describe('RouteItem', () => {
         },
       },
     });
+    routesApi.getPipelineLogs.mockResolvedValue({
+      data: {
+        logs: [],
+        meta: { total: 0, window: 'last_hour' },
+      },
+    });
+    routesApi.getPipelineLogsDistinct.mockResolvedValue({ data: [] });
   });
 
   it('subscribes to route, source, and destination item status topics', async () => {
@@ -311,6 +325,29 @@ describe('RouteItem', () => {
     });
 
     expect(screen.getByText('reconnecting')).toBeInTheDocument();
+  });
+
+  it('loads pipeline logs when Pipeline Logs tab is selected', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Endpoints');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('tab', { name: 'Pipeline Logs' }));
+    });
+
+    await waitFor(() => {
+      expect(routesApi.getPipelineLogs).toHaveBeenCalledWith(
+        'r1',
+        expect.objectContaining({ limit: 50, offset: 0 }),
+      );
+    });
   });
 
   it('shows route enabled tag under route title', async () => {

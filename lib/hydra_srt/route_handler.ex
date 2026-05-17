@@ -381,7 +381,7 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  defp consume_port_output(chunk, data) do
+  def consume_port_output(chunk, data) when is_binary(chunk) and is_map(data) do
     [buffer | completed_lines] =
       (data.port_buffer <> chunk)
       |> String.split("\n")

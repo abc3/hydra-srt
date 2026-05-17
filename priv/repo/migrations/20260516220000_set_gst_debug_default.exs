@@ -6,6 +6,7 @@ defmodule HydraSrt.Repo.Migrations.SetGstDebugDefault do
   end
 
   def down do
-    execute("UPDATE routes SET gst_debug = NULL WHERE gst_debug = '4'")
+    # Intentionally irreversible: reverting would erase legitimate existing "4" values.
+    :ok
   end
 end
