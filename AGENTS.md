@@ -52,10 +52,34 @@ flowchart LR
 - Do not delete commented code (see `.cursorrules`).
 - Do not use private functions (`defp`) in Elixir.
 - In tests: use unique ports/IDs; avoid `Process.sleep/1` where a poll condition exists (see `test/AGENTS.md`).
+- **Conventional Commits** for git messages: `type(scope): subject` in imperative mood, lowercase type.
+
+  Common types: `feat`, `fix`, `docs`, `chore`, `test`, `refactor`, `perf`, `ci`.
+
+  Examples:
+
+  ```text
+  feat: add route status history endpoint
+  fix: make username and password configurable in development
+  docs: add AGENTS.md for project guidelines
+  chore: comment out npm watcher for dev
+  ```
+
+  Scope is optional (`feat(api): ...`). Keep the subject line concise; put detail in the body when needed.
 
 ## Testing
 
 Unit tests run by default; E2E and native E2E are opt-in via tags and env vars. Full matrix, support modules, and debug flags: **`test/AGENTS.md`**.
+
+## Agent skills
+
+Workflow skills live under [`.agents/skills/`](.agents/skills/):
+
+| Skill | Path |
+|-------|------|
+| `hydra-dev` | [`.agents/skills/hydra-dev/SKILL.md`](.agents/skills/hydra-dev/SKILL.md) |
+
+`AGENTS.md` / `test/AGENTS.md` stay the canonical reference; skills add command routing and agent behaviour.
 
 ## Documentation
 
