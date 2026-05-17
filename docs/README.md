@@ -4,6 +4,7 @@ This directory contains documentation for the Hydra SRT system.
 
 ## Contents
 
+- [API Documentation](api.md) - REST API endpoints and usage
 - [Environment Variables](ENVS.md) - All environment variables recognised by Hydra SRT
 - [Metrics Architecture](metrics-architecture.md) - How system metrics are collected, exported, and stored
 - [Backup Download Feature](backup-download.md) - Documentation for the routes backup download feature

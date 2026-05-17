@@ -6,7 +6,7 @@ defmodule HydraSrt.MixProject do
       app: :hydra_srt,
       version: version(),
       compilers: [:rs_native] ++ Mix.compilers(),
-      elixir: "~> 1.14",
+      elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
@@ -74,7 +74,14 @@ defmodule HydraSrt.MixProject do
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
-      "compile.rs_native": &rs_native_build/1
+      "compile.rs_native": &rs_native_build/1,
+      q: ["quality"],
+      quality: [
+        "format --check-formatted",
+        "compile --warnings-as-errors",
+        "credo --min-priority higher",
+        "dialyzer"
+      ]
     ]
   end
 
