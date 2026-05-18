@@ -76,16 +76,33 @@ defmodule HydraSrt.Env do
     raise ArgumentError, "expected list as default for env #{env}, got #{inspect(default)}"
   end
 
-  @spec get_check_origin(binary()) :: true | [binary()]
+  @check_origin_disabled ~w(false 0 no)
+  @check_origin_enabled ~w(true 1 yes)
+
+  @spec get_check_origin(binary()) :: false | true | [binary()]
   def get_check_origin(env) do
     case get_binary(env, nil) do
       nil ->
-        true
+        false
 
       value ->
-        case String.split(value, ",", trim: true) do
-          [] -> true
-          origins -> origins
+        value = String.trim(value)
+
+        cond do
+          value == "" ->
+            false
+
+          String.downcase(value) in @check_origin_disabled ->
+            false
+
+          String.downcase(value) in @check_origin_enabled ->
+            true
+
+          true ->
+            case String.split(value, ",", trim: true) do
+              [] -> false
+              origins -> origins
+            end
         end
     end
   end

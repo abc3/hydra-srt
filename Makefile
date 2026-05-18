@@ -94,6 +94,14 @@ docker_host_rebuild:
 	PHX_HOST=$$(hostname -I | awk '{print $$1}') docker-compose -f docker-compose.yml -f docker-compose.host.yml build --no-cache
 	PHX_HOST=$$(hostname -I | awk '{print $$1}') docker-compose -f docker-compose.yml -f docker-compose.host.yml up -d
 
+docker_host_down2:
+	docker compose -f docker-compose.yml -f docker-compose.host.yml down
+
+docker_host_rebuild2:
+	docker compose -f docker-compose.yml -f docker-compose.host.yml down
+	docker compose -f docker-compose.yml -f docker-compose.host.yml build --no-cache
+	docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
+
 docker_clean:
 	docker compose down && docker compose rm -f hydra_srt
 

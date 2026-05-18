@@ -14,6 +14,7 @@ alias HydraSrt.Env
 # - ANALYTICS_DATABASE_PATH: required in prod and dev
 # - POOL_SIZE: Ecto pool size (prod default 5)
 # - PORT / PHX_HOST: HTTP listen port and URL host
+# - PHX_CHECK_ORIGIN: WebSocket origin checks (prod default: disabled)
 
 if System.get_env("PHX_SERVER") do
   config :hydra_srt, HydraSrtWeb.Endpoint, server: true

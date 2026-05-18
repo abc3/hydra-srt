@@ -19,14 +19,28 @@ defmodule HydraSrt.EnvTest do
     :ok
   end
 
-  test "returns true when env var is unset" do
+  test "returns false when env var is unset" do
     System.delete_env(@env_key)
-    assert Env.get_check_origin(@env_key) == true
+    assert Env.get_check_origin(@env_key) == false
   end
 
-  test "returns true when env var is empty" do
+  test "returns false when env var is empty" do
     System.put_env(@env_key, "")
-    assert Env.get_check_origin(@env_key) == true
+    assert Env.get_check_origin(@env_key) == false
+  end
+
+  test "returns false when env var is false/0/no" do
+    for value <- ["false", "FALSE", "0", "no"] do
+      System.put_env(@env_key, value)
+      assert Env.get_check_origin(@env_key) == false
+    end
+  end
+
+  test "returns true when env var is true/1/yes" do
+    for value <- ["true", "TRUE", "1", "yes"] do
+      System.put_env(@env_key, value)
+      assert Env.get_check_origin(@env_key) == true
+    end
   end
 
   test "returns origins list when env var is CSV" do
