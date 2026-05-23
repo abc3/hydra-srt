@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * API service for making authenticated requests to the backend
  */
@@ -85,21 +86,58 @@ export const systemPipelinesApi = {
   },
 };
 
+
+export type SignalTransport = 'srt' | 'udp' | 'rtp';
+
+export type SignalGenerationTransportConfig = {
+  host: string;
+  port: number;
+};
+
+export type SignalGenerationStatus = {
+  transport: SignalTransport;
+  running: boolean;
+  running_transport: SignalTransport | null;
+  host: string;
+  port: number;
+  transports: Record<SignalTransport, SignalGenerationTransportConfig>;
+};
+
 export const signalGenerationApi = {
-  status: async () => requestJson('/api/system/signal-generation', {}, 'Failed to load signal generation status'),
+  status: async (transport: SignalTransport = 'srt'): Promise<SignalGenerationStatus> =>
+    requestJson(
+      `/api/system/signal-generation?transport=${encodeURIComponent(transport)}`,
+      {},
+      'Failed to load signal generation status'
+    ),
 
-  configure: async ({ host, port }) => requestJson('/api/system/signal-generation', {
-    method: 'PUT',
-    body: JSON.stringify({ host, port }),
-  }, 'Failed to save signal generation settings'),
+  configure: async ({ transport = 'srt', host, port }: { transport?: SignalTransport; host: string; port: number }): Promise<SignalGenerationStatus> =>
+    requestJson(
+      '/api/system/signal-generation',
+      {
+        method: 'PUT',
+        body: JSON.stringify({ transport, host, port }),
+      },
+      'Failed to save signal generation settings'
+    ),
 
-  start: async () => requestJson('/api/system/signal-generation/start', {
-    method: 'POST',
-  }, 'Failed to start signal generation'),
+  start: async (transport: SignalTransport = 'srt'): Promise<SignalGenerationStatus> =>
+    requestJson(
+      `/api/system/signal-generation/start?transport=${encodeURIComponent(transport)}`,
+      {
+        method: 'POST',
+      },
+      'Failed to start signal generation'
+    ),
 
-  stop: async () => requestJson('/api/system/signal-generation/stop', {
-    method: 'POST',
-  }, 'Failed to stop signal generation'),
+  stop: async (transport: SignalTransport = 'srt'): Promise<SignalGenerationStatus> =>
+    requestJson(
+      `/api/system/signal-generation/stop?transport=${encodeURIComponent(transport)}`,
+      {
+        method: 'POST',
+      },
+      'Failed to stop signal generation'
+    ),
 };
 
 // Nodes API

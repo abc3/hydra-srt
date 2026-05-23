@@ -39,6 +39,17 @@ defmodule HydraSrt.SourceProbeTest do
     assert uri == "udp://0.0.0.0:5000"
   end
 
+  test "build_probe_uri/1 builds RTP probe URI for RTP source" do
+    route = %{
+      "schema" => "RTP",
+      "address" => "127.0.0.1",
+      "port" => 5004
+    }
+
+    assert {:ok, uri} = SourceProbe.build_probe_uri(route)
+    assert uri == "rtp://127.0.0.1:5004"
+  end
+
   test "build_probe_uri/1 returns an error when UDP port is missing" do
     route = %{
       "schema" => "UDP",

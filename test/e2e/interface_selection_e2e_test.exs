@@ -158,6 +158,88 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
     assert probe_bytes >= 20_000
   end
 
+  test "RTP source binds using selected interface and forwards to SRT destination", %{
+    base_url: base_url
+  } do
+    token = E2EHelpers.api_login!(base_url, "admin", "password123")
+
+    interface = %{
+      "sys_name" => "e2e_loopback_rtp_source",
+      "ip" => "127.0.0.1/8",
+      "bind_ip" => "127.0.0.1"
+    }
+
+    interface_id = create_interface_record!(base_url, token, interface, "e2e-rtp-source-iface")
+
+    source_port = E2EHelpers.udp_free_port!()
+    srt_dest_port = E2EHelpers.tcp_free_port!()
+    srt_probe_udp_port = E2EHelpers.udp_free_port!()
+    srt_probe_counter = E2EHelpers.start_udp_counter!(srt_probe_udp_port)
+
+    on_exit(fn ->
+      E2EHelpers.stop_udp_counter!(srt_probe_counter)
+      E2EHelpers.api_delete_interface(base_url, token, interface_id)
+    end)
+
+    route_id =
+      E2EHelpers.api_create_route!(base_url, token, %{
+        "name" => "e2e_rtp_source_selected_interface",
+        "schema" => "RTP",
+        "interface_sys_name" => interface["sys_name"],
+        "address" => interface["bind_ip"],
+        "port" => source_port
+      })
+
+    on_exit(fn ->
+      E2EHelpers.api_stop_route(base_url, token, route_id)
+      E2EHelpers.api_delete_route(base_url, token, route_id)
+    end)
+
+    :ok =
+      E2EHelpers.api_create_destination!(base_url, token, route_id, %{
+        "schema" => "SRT",
+        "name" => "srt_dest_from_rtp_source_selected_interface_e2e",
+        "interface_sys_name" => interface["sys_name"],
+        "address" => interface["bind_ip"],
+        "port" => srt_dest_port,
+        "mode" => "caller"
+      })
+
+    srt_rx =
+      start_srt_probe_listener!(
+        "srt-live-transmit-rtp-source-selected-interface",
+        srt_dest_port,
+        srt_probe_udp_port,
+        interface["bind_ip"]
+      )
+
+    Process.sleep(E2EHelpers.e2e_startup_sleep_ms())
+    :ok = E2EHelpers.api_start_route!(base_url, token, route_id)
+    Process.sleep(E2EHelpers.e2e_startup_sleep_ms())
+
+    tx =
+      start_ffmpeg_rtp_sender!(
+        "ffmpeg_rtp_source_selected_interface",
+        interface["bind_ip"],
+        source_port
+      )
+
+    on_exit(fn ->
+      E2EHelpers.kill_port(tx)
+      E2EHelpers.kill_port(srt_rx)
+    end)
+
+    E2EHelpers.wait_for_route_processing!(base_url, token, route_id,
+      expected_destination_count: 1
+    )
+
+    assert {:ok, %{bytes: probe_bytes}} =
+             E2EHelpers.await_udp_bytes(srt_probe_counter, 20_000, 5_000)
+
+    assert probe_bytes >= 20_000
+    assert E2EHelpers.await_tag_exit_status("ffmpeg_rtp_source_selected_interface", 10_000) == 0
+  end
+
   test "SRT destination caller uses selected interface and reaches downstream listener", %{
     base_url: base_url
   } do
@@ -441,6 +523,50 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
         "-f",
         "mpegts",
         output_url
+      ],
+      tag
+    )
+  end
+
+  defp start_ffmpeg_rtp_sender!(tag, host, port, duration_seconds \\ 6) do
+    E2EHelpers.start_port_logged!(
+      "ffmpeg",
+      [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-re",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=1280x720:rate=30",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000",
+        "-t",
+        Integer.to_string(duration_seconds),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-tune",
+        "zerolatency",
+        "-pix_fmt",
+        "yuv420p",
+        "-g",
+        "60",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-f",
+        "rtp_mpegts",
+        "rtp://#{host}:#{port}"
       ],
       tag
     )

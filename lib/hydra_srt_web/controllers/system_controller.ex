@@ -33,14 +33,31 @@ defmodule HydraSrtWeb.SystemController do
   end
 
   def signal_generation_status(conn, _params) do
-    json(conn, SignalGenerator.status())
+    transport = Map.get(conn.params, "transport", "srt")
+
+    case SignalGenerator.status(transport) do
+      {:error, :invalid_transport} ->
+        conn
+        |> put_status(400)
+        |> json(%{error: "Invalid transport. Use srt, udp, or rtp"})
+
+      status ->
+        json(conn, status)
+    end
   end
 
-  def signal_generation_configure(conn, %{"host" => host, "port" => port}) do
+  def signal_generation_configure(conn, %{"host" => host, "port" => port} = params) do
+    transport = Map.get(params, "transport", "srt")
+
     with {:ok, port_i} <- parse_port(port),
-         {:ok, status} <- SignalGenerator.configure(host, port_i) do
+         {:ok, status} <- SignalGenerator.configure(transport, host, port_i) do
       json(conn, status)
     else
+      {:error, :invalid_transport} ->
+        conn
+        |> put_status(400)
+        |> json(%{error: "Invalid transport. Use srt, udp, or rtp"})
+
       {:error, :invalid_port} ->
         conn
         |> put_status(400)
@@ -54,14 +71,21 @@ defmodule HydraSrtWeb.SystemController do
       {:error, :running} ->
         conn
         |> put_status(409)
-        |> json(%{error: "Stop signal generation before changing host/port"})
+        |> json(%{error: "Stop signal generation before changing host/port/transport"})
     end
   end
 
-  def signal_generation_start(conn, _params) do
-    case SignalGenerator.start_generation() do
+  def signal_generation_start(conn, params) do
+    transport = Map.get(params, "transport", "srt")
+
+    case SignalGenerator.start_generation(transport) do
       {:ok, status} ->
         json(conn, status)
+
+      {:error, :invalid_transport} ->
+        conn
+        |> put_status(400)
+        |> json(%{error: "Invalid transport. Use srt, udp, or rtp"})
 
       {:error, :already_running} ->
         conn
@@ -75,8 +99,9 @@ defmodule HydraSrtWeb.SystemController do
     end
   end
 
-  def signal_generation_stop(conn, _params) do
-    {:ok, status} = SignalGenerator.stop_generation()
+  def signal_generation_stop(conn, params) do
+    transport = Map.get(params, "transport", "srt")
+    {:ok, status} = SignalGenerator.stop_generation(transport)
     json(conn, status)
   end
 

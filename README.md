@@ -25,6 +25,7 @@
 | --------- | ----- | ------ |
 | SRT       | ✔     | ✔      |
 | UDP       | ✔     | ✔      |
+| RTP (TS)  | ✔     | —      |
 
 ### Planned transports
 
@@ -50,7 +51,7 @@ Missing a feature? [Open an issue](https://github.com/abc3/hydra-srt/issues/new?
 
 https://github.com/user-attachments/assets/8230f902-b037-424f-a337-a3828dac6a3c
 
-HydraSRT is an open-source alternative to Haivision SRT Gateway for reliable video transport and routing. It manages SRT and UDP streams with built-in failover, supervision, metrics, and a modern web UI and API designed for broadcast and live production workflows.
+HydraSRT is an open-source alternative to Haivision SRT Gateway for reliable video transport and routing. It manages SRT, UDP, and RTP (TS over RTP) streams with built-in failover, supervision, metrics, and a modern web UI and API designed for broadcast and live production workflows.
 
 Built with Elixir(Erlang/OTP), Rust, and GStreamer, HydraSRT combines strong fault isolation with lightweight orchestration. The BEAM supervises routing and control logic, while isolated media pipelines run only where active streams are present, providing high reliability with low system overhead.
 
@@ -123,6 +124,7 @@ Setup, deployment, and troubleshooting: [docs/development.md](docs/development.m
 
 - SRT source and destination modes: Listener, Caller, Rendezvous
 - UDP sources and destinations
+- RTP (TS over RTP) sources
 - SRT authentication with passphrase and stream ID support
 - Source failover with primary + backup sources, automatic failover, and manual source switching
 - System metrics via Prometheus `/metrics`

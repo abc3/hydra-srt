@@ -69,7 +69,7 @@ defmodule HydraSrt.Api.Endpoint do
     |> put_change(:type, "source")
     |> put_default_enabled(true)
     |> validate_required([:route_id, :position, :schema, :type])
-    |> validate_inclusion(:schema, ["SRT", "UDP"])
+    |> validate_inclusion(:schema, ["SRT", "UDP", "RTP"])
     |> validate_number(:position, greater_than_or_equal_to: 0)
     |> put_bind_target_fields()
     |> unique_constraint([:route_id, :position, :type], name: @source_unique_constraint)
@@ -169,6 +169,9 @@ defmodule HydraSrt.Api.Endpoint do
         end
 
       {"UDP", "source"} ->
+        build_target(changeset)
+
+      {"RTP", "source"} ->
         build_target(changeset)
 
       {"UDP", "destination"} ->

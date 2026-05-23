@@ -67,7 +67,11 @@ defmodule HydraSrt.SourceProbe do
           case source["port"] do
             port when is_integer(port) ->
               address = source["address"] || "0.0.0.0"
-              {:ok, "udp://#{address}:#{port}"}
+
+              probe_scheme =
+                if source["hydra_source_schema"] == "RTP", do: "rtp", else: "udp"
+
+              {:ok, "#{probe_scheme}://#{address}:#{port}"}
 
             _ ->
               {:error, "UDP source is missing a valid port"}

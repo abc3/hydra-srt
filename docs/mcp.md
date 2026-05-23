@@ -159,7 +159,7 @@ Supported `window` values: `last_30_min`, `last_hour`, `last_6_hour`, `last_24_h
 
 ### Probes
 
-**`test_route_source`** and **`test_source`** run an active ffprobe network probe and **may block up to 15 seconds**.
+**`test_route_source`** and **`test_source`** run an active ffprobe network probe. MCP tools use a shorter timeout (~3.5s via `mcp_probe_timeout_ms`); REST probes may block up to **15 seconds**.
 
 ### Out of scope
 
@@ -184,7 +184,7 @@ Implementation reads from `HydraSrt.Db` and related modules directly (no interna
 | `stop_route` | Stop pipeline (`route_id`) |
 | `restart_route` | Restart pipeline (`route_id`) |
 | `switch_route_source` | Switch active source (`route_id`, `source_id`) |
-| `test_route_source` | Probe route source config (`route` object; up to 15s) |
+| `test_route_source` | Probe route source config (`route` object; MCP ~3.5s, REST up to 15s) |
 
 ### Sources (7) — require `route_id`
 
@@ -196,7 +196,7 @@ Implementation reads from `HydraSrt.Db` and related modules directly (no interna
 | `update_source` | Update source (`source_id`, `source`) |
 | `delete_source` | Delete source (`source_id`) |
 | `reorder_sources` | Reorder sources (`source_ids` array) |
-| `test_source` | Probe saved source (`source_id`; up to 15s) |
+| `test_source` | Probe saved source (`source_id`; MCP ~3.5s, REST up to 15s) |
 
 ### Destinations (5) — require `route_id`
 
@@ -264,7 +264,7 @@ WebSocket live stats from the UI are **not** replicated over MCP; poll analytics
 | UI session vs MCP | Different tables / checks; not interchangeable |
 | Revocation | `DELETE /api/tokens/:id` — immediate |
 | Empty token list | `/mcp` unavailable to everyone (all requests `401`) |
-| Token scope | A valid MCP token grants the same operational power as the REST API for curated tools: route/source/destination CRUD, start/stop/restart, **ffprobe network probes** (may reach internal hosts, up to ~15s), raw ifconfig, and analytics reads. Treat leaked tokens like leaked admin API keys — revoke immediately and issue narrowly scoped tokens per client. |
+| Token scope | A valid MCP token grants the same operational power as the REST API for curated tools: route/source/destination CRUD, start/stop/restart, **ffprobe network probes** (may reach internal hosts; MCP ~3.5s, REST up to ~15s), raw ifconfig, and analytics reads. Treat leaked tokens like leaked admin API keys — revoke immediately and issue narrowly scoped tokens per client. |
 | Hermes | Authentication is our Plug before forward; Hermes only passes `conn.assigns` into the frame |
 
 Secrets in SQLite are not encrypted with Cloak (as in Supavisor): a one-way hash is enough for MCP tokens because plaintext is needed only once by the client.
@@ -277,6 +277,7 @@ Secrets in SQLite are not encrypted with Cloak (as in Supavisor): a one-way hash
 |------|---------|
 | `lib/hydra_srt/mcp/server.ex` | Hermes MCP server entrypoint |
 | `lib/hydra_srt/mcp/tool_registry.ex` | Tool registration and dispatch |
+| `lib/hydra_srt/mcp/input_schema.ex` | JSON Schema to Hermes input schema conversion |
 | `lib/hydra_srt/mcp/helpers.ex` | Response envelopes and error mapping |
 | `lib/hydra_srt/mcp/tools/*.ex` | Tool handlers by domain |
 | `lib/hydra_srt/route_control.ex` | Shared route switch/update logic |

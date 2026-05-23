@@ -84,7 +84,7 @@ VITE_DEV_HOST=0.0.0.0 VITE_DEV_STRICT_PORT=false yarn dev
 
 ### Demo Mode
 
-`DEMO_DATA=true` creates a disabled demo route.
+`DEMO_DATA=true` creates disabled demo routes.
 
 ```bash
 DEMO_DATA=true make dev
@@ -93,27 +93,47 @@ DEMO_DATA=true make dev
 When demo mode is enabled:
 
 - `ffmpeg` must be available in `PATH` (startup fails if missing)
-- a `demo_route` is created automatically (idempotent)
-- source: `srt://127.0.0.1:4200?mode=caller`
-- destinations:
-  - `srt://127.0.0.1:4201?mode=listener`
-  - `udp://127.0.0.1:4202` (for local playback)
-- `demo_route` is created with `enabled: false` (it is not auto-started)
+- three routes are created automatically (idempotent):
+  - `demo_route` (SRT source):
+    - source: `srt://127.0.0.1:4200?mode=caller`
+    - destinations:
+      - `srt://127.0.0.1:4211?mode=listener`
+      - `udp://127.0.0.1:4212` (for local playback)
+  - `demo_udp_route` (UDP source):
+    - source: `udp://127.0.0.1:4201`
+    - destinations:
+      - `srt://127.0.0.1:4213?mode=listener`
+      - `udp://127.0.0.1:4214` (for local playback)
+  - `demo_rtp_route` (RTP source):
+    - source: `rtp://127.0.0.1:4202`
+    - destinations:
+      - `srt://127.0.0.1:4205?mode=listener`
+      - `udp://127.0.0.1:4206` (for local playback)
+- routes are created with `enabled: false` (not auto-started)
 
 After startup:
 
-1. Open [http://localhost:5173/#/settings/signal-generation](http://localhost:5173/#/settings/signal-generation)
-2. Click `Start` in the `Signal generation` section
-3. Start `demo_route` from the Routes UI
+1. Open [http://localhost:5173/#/settings/signal-generation/srt](http://localhost:5173/#/settings/signal-generation/srt) (or `/udp`, `/rtp`)
+2. Click `Start` in the `Signal generation` section for the active tab
+3. Start the matching demo route from the Routes UI:
+   - SRT tab → `demo_route`
+   - UDP tab → `demo_udp_route`
+   - RTP tab → `demo_rtp_route`
 
 Verify playback:
 
 ```bash
-# SRT destination
-ffplay -fflags nobuffer -flags low_delay -i "srt://127.0.0.1:4201?mode=caller"
+# demo_route SRT destination
+ffplay -fflags nobuffer -flags low_delay -i "srt://127.0.0.1:4211?mode=caller"
 
-# UDP destination
-ffplay -fflags nobuffer -flags low_delay -i "udp://@:4202"
+# demo_route UDP destination
+ffplay -fflags nobuffer -flags low_delay -i "udp://@:4212"
+
+# demo_udp_route UDP destination
+ffplay -fflags nobuffer -flags low_delay -i "udp://@:4214"
+
+# demo_rtp_route UDP destination
+ffplay -fflags nobuffer -flags low_delay -i "udp://@:4206"
 ```
 
 ### Environment Variables
