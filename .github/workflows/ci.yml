@@ -170,6 +170,8 @@ jobs:
       run: mix compile --warnings-as-errors
     - name: Check Formatting
       run: mix format --check-formatted
+    - name: Run Sobelow
+      run: mix sobelow
     - name: Run Tests
       run: mix test
 

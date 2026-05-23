@@ -34,6 +34,17 @@ defmodule HydraSrt.Monitoring.NetIfMetrics do
     tx_dropped: "net_tx_dropped_per_sec"
   }
 
+  @rate_counter_keys %{
+    rx_bytes: :rx_bytes_per_sec,
+    tx_bytes: :tx_bytes_per_sec,
+    rx_packets: :rx_packets_per_sec,
+    tx_packets: :tx_packets_per_sec,
+    rx_errors: :rx_errors_per_sec,
+    tx_errors: :tx_errors_per_sec,
+    rx_dropped: :rx_dropped_per_sec,
+    tx_dropped: :tx_dropped_per_sec
+  }
+
   @spec counter_keys() :: [atom()]
   def counter_keys, do: @counter_keys
 
@@ -42,4 +53,12 @@ defmodule HydraSrt.Monitoring.NetIfMetrics do
 
   @spec rate_metric_keys() :: %{atom() => binary()}
   def rate_metric_keys, do: @rate_metric_keys
+
+  @spec rate_counter_keys() :: %{atom() => atom()}
+  def rate_counter_keys, do: @rate_counter_keys
+
+  @spec rate_counter_key(atom()) :: atom()
+  def rate_counter_key(counter_key) when is_atom(counter_key) do
+    Map.fetch!(@rate_counter_keys, counter_key)
+  end
 end

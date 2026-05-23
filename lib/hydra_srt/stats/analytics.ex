@@ -1331,13 +1331,13 @@ defmodule HydraSrt.Stats.Analytics do
           row.entity_type == "net_if" and row.metric_key == "net_rx_bytes_per_sec" ->
             case net_interface_name(row.entity_id) do
               nil -> current
-              interface_name -> Map.put(current, :"net_in_#{interface_name}", value)
+              interface_name -> Map.put(current, "net_in_#{interface_name}", value)
             end
 
           row.entity_type == "net_if" and row.metric_key == "net_tx_bytes_per_sec" ->
             case net_interface_name(row.entity_id) do
               nil -> current
-              interface_name -> Map.put(current, :"net_out_#{interface_name}", value)
+              interface_name -> Map.put(current, "net_out_#{interface_name}", value)
             end
 
           true ->

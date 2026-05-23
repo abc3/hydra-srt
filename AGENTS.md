@@ -24,7 +24,7 @@ HydraSRT is an open-source SRT routing platform. The Elixir layer manages routes
 
 ### Quality (`mix q`)
 
-Runs, in order: format check, compile with warnings as errors, Credo, Dialyzer.
+Runs, in order: format check, compile with warnings as errors, Credo, Sobelow, Dialyzer.
 
 One-time Dialyzer setup (if PLT is missing):
 

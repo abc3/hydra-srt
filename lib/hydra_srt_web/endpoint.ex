@@ -15,6 +15,8 @@ defmodule HydraSrtWeb.Endpoint do
     same_site: "Lax"
   ]
 
+  plug(HydraSrtWeb.Plugs.SecureBrowserHeaders)
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # You should set gzip to true if you are running phx.digest

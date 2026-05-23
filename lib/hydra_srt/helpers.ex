@@ -14,6 +14,43 @@ defmodule HydraSrt.Helpers do
     Process.flag(:max_heap_size, %{size: max_heap_words})
   end
 
+  @spec get_by_string_key(map(), String.t(), term()) :: term()
+  def get_by_string_key(map, key, default \\ nil) when is_map(map) and is_binary(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        case existing_atom_key(map, key) do
+          {:ok, value} -> value
+          :error -> default
+        end
+    end
+  end
+
+  @spec get_by_string_key_or(map(), String.t(), term()) :: term()
+  def get_by_string_key_or(map, key, default \\ nil) when is_map(map) and is_binary(key) do
+    Map.get(map, key) ||
+      case existing_atom_key(map, key) do
+        {:ok, value} -> value
+        :error -> default
+      end
+  end
+
+  @spec has_string_key?(map(), String.t()) :: boolean()
+  def has_string_key?(map, key) when is_map(map) and is_binary(key) do
+    Map.has_key?(map, key) or match?({:ok, _}, existing_atom_key(map, key))
+  end
+
+  @doc false
+  def existing_atom_key(map, key) when is_map(map) and is_binary(key) do
+    try do
+      Map.fetch(map, String.to_existing_atom(key))
+    rescue
+      ArgumentError -> :error
+    end
+  end
+
   def sys_kill(process_id) do
     System.cmd("kill", ["-9", "#{process_id}"])
   end

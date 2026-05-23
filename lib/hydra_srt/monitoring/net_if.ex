@@ -5,6 +5,7 @@ defmodule HydraSrt.Monitoring.NetIf do
 
   @sysfs_stats_base "/sys/class/net"
   @linux_proc_net_dev "/proc/net/dev"
+  @iface_name_pattern ~r/^[A-Za-z0-9._:@-]+$/
 
   @type iface_counters :: %{optional(atom()) => non_neg_integer()}
   @type snapshot :: %{optional(binary()) => iface_counters()}
@@ -131,29 +132,40 @@ defmodule HydraSrt.Monitoring.NetIf do
     end
   end
 
-  defp read_linux_iface_stats(iface) do
-    stats_dir = Path.join([@sysfs_stats_base, iface, "statistics"])
+  # sobelow_skip ["Traversal.FileModule"]
+  defp read_linux_iface_stats(iface) when is_binary(iface) do
+    if valid_iface_name?(iface) do
+      stats_dir = Path.join([@sysfs_stats_base, iface, "statistics"])
 
-    NetIfMetrics.counter_keys()
-    |> Enum.reduce(%{}, fn key, acc ->
-      path = Path.join(stats_dir, Atom.to_string(key))
+      NetIfMetrics.counter_keys()
+      |> Enum.reduce(%{}, fn key, acc ->
+        path = Path.join(stats_dir, Atom.to_string(key))
 
-      case File.read(path) do
-        {:ok, value} ->
-          case Integer.parse(String.trim(value)) do
-            {parsed, ""} -> Map.put(acc, key, parsed)
-            _ -> acc
-          end
+        case File.read(path) do
+          {:ok, value} ->
+            case Integer.parse(String.trim(value)) do
+              {parsed, ""} -> Map.put(acc, key, parsed)
+              _ -> acc
+            end
 
-        _ ->
-          acc
+          _ ->
+            acc
+        end
+      end)
+      |> case do
+        stats when map_size(stats) == 0 -> nil
+        stats -> stats
       end
-    end)
-    |> case do
-      stats when map_size(stats) == 0 -> nil
-      stats -> stats
+    else
+      nil
     end
   end
+
+  defp valid_iface_name?(iface) when is_binary(iface) do
+    Regex.match?(@iface_name_pattern, iface)
+  end
+
+  defp valid_iface_name?(_), do: false
 
   defp parse_linux_proc_counters(counters) when length(counters) >= 12 do
     with {:ok, rx_bytes} <- parse_int_at(counters, 0),

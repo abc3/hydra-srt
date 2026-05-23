@@ -32,14 +32,21 @@ defmodule HydraSrt.Backup do
   - Validate via `PRAGMA integrity_check`
   - Stop `HydraSrt.Repo`, atomically swap DB file, remove `-wal/-shm`, restart `HydraSrt.Repo`
   """
+  # sobelow_skip ["Traversal.FileModule"]
   def restore_db_file(binary) when is_binary(binary) do
     :global.trans({__MODULE__, :backup_restore}, fn ->
       db_path = repo_database_path()
-      dir = Path.dirname(db_path)
-      tmp_path = Path.join(dir, "hydra_srt_restore_#{System.unique_integer([:positive])}.db")
+      dir = repo_database_dir()
+
+      tmp_path =
+        Path.join(dir, "hydra_srt_restore_#{System.unique_integer([:positive])}.db")
+
       bak_path = db_path <> ".bak"
 
-      with :ok <- File.mkdir_p(dir),
+      with :ok <- ensure_repo_db_path(dir),
+           :ok <- ensure_repo_db_path(tmp_path),
+           :ok <- ensure_repo_db_path(bak_path),
+           :ok <- File.mkdir_p(dir),
            :ok <- File.write(tmp_path, binary),
            :ok <- validate_db_file(tmp_path),
            :ok <- stop_repo(),
@@ -71,6 +78,23 @@ defmodule HydraSrt.Backup do
       other -> raise "HydraSrt.Repo database path is not configured: #{inspect(other)}"
     end
   end
+
+  def repo_database_dir do
+    repo_database_path() |> Path.dirname() |> Path.expand()
+  end
+
+  def ensure_repo_db_path(path) when is_binary(path) do
+    expanded = Path.expand(path)
+    root = repo_database_dir()
+
+    if expanded == root or String.starts_with?(expanded, root <> "/") do
+      :ok
+    else
+      {:error, :invalid_path}
+    end
+  end
+
+  def ensure_repo_db_path(_), do: {:error, :invalid_path}
 
   @doc false
   def validate_db_file(db_path) when is_binary(db_path) do
@@ -130,17 +154,21 @@ defmodule HydraSrt.Backup do
   @doc false
   def swap_db_files(db_path, tmp_path, bak_path)
       when is_binary(db_path) and is_binary(tmp_path) and is_binary(bak_path) do
-    _ = safe_rm(bak_path)
+    with :ok <- ensure_repo_db_path(db_path),
+         :ok <- ensure_repo_db_path(tmp_path),
+         :ok <- ensure_repo_db_path(bak_path) do
+      _ = safe_rm(bak_path)
 
-    case File.exists?(db_path) do
-      true ->
-        case File.rename(db_path, bak_path) do
-          :ok -> do_swap(tmp_path, db_path, bak_path)
-          {:error, reason} -> {:error, reason}
-        end
+      case File.exists?(db_path) do
+        true ->
+          case File.rename(db_path, bak_path) do
+            :ok -> do_swap(tmp_path, db_path, bak_path)
+            {:error, reason} -> {:error, reason}
+          end
 
-      false ->
-        do_swap(tmp_path, db_path, bak_path)
+        false ->
+          do_swap(tmp_path, db_path, bak_path)
+      end
     end
   end
 
@@ -165,11 +193,14 @@ defmodule HydraSrt.Backup do
   end
 
   @doc false
+  # sobelow_skip ["Traversal.FileModule"]
   def safe_rm(path) when is_binary(path) do
-    case File.rm(path) do
-      :ok -> :ok
-      {:error, :enoent} -> :ok
-      other -> other
+    with :ok <- ensure_repo_db_path(path) do
+      case File.rm(path) do
+        :ok -> :ok
+        {:error, :enoent} -> :ok
+        other -> other
+      end
     end
   end
 end

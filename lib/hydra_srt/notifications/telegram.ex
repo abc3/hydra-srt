@@ -183,7 +183,7 @@ defmodule HydraSrt.Notifications.Telegram do
   end
 
   def config_value(config, key) when is_map(config) do
-    value = Map.get(config, key) || Map.get(config, String.to_atom(key))
+    value = HydraSrt.Helpers.get_by_string_key_or(config, key)
 
     case value do
       nil -> ""

@@ -1,5 +1,5 @@
 defmodule HydraSrt.RouteControlTest do
-  use HydraSrt.DataCase, async: true
+  use HydraSrt.DataCase, async: false
 
   alias HydraSrt.DbFixtures
   alias HydraSrt.RouteControl

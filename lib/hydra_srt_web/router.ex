@@ -3,6 +3,8 @@ defmodule HydraSrtWeb.Router do
 
   pipeline :browser do
     plug(:accepts, ["html"])
+    plug(:fetch_session)
+    plug(:protect_from_forgery)
   end
 
   pipeline :api do

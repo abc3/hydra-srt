@@ -95,7 +95,7 @@ defmodule HydraSrtWeb.NotificationController do
   end
 
   def has_notification_key?(attrs, key) when is_map(attrs) and is_binary(key) do
-    Map.has_key?(attrs, key) or Map.has_key?(attrs, String.to_atom(key))
+    HydraSrt.Helpers.has_string_key?(attrs, key)
   end
 
   def serialize_telegram(nil) do

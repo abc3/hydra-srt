@@ -412,7 +412,7 @@ defmodule HydraSrt.Db do
   end
 
   def notification_param(attrs, key, default) do
-    value = Map.get(attrs, key, Map.get(attrs, String.to_atom(key), default))
+    value = HydraSrt.Helpers.get_by_string_key(attrs, key, default)
 
     case value do
       true -> true
@@ -445,7 +445,7 @@ defmodule HydraSrt.Db do
   end
 
   def notification_param_string(attrs, key) when is_map(attrs) do
-    value = Map.get(attrs, key, Map.get(attrs, String.to_atom(key)))
+    value = HydraSrt.Helpers.get_by_string_key(attrs, key)
 
     case value do
       nil -> nil

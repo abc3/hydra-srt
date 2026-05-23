@@ -208,6 +208,7 @@ test_ci_local:
 	MIX_ENV=test mix deps.compile
 	MIX_ENV=test mix compile --warnings-as-errors
 	MIX_ENV=test mix format --check-formatted
+	MIX_ENV=test mix sobelow
 	MIX_ENV=test mix test
 	@echo "6/6 Elixir E2E tests"
 	MIX_ENV=test E2E=true mix deps.get

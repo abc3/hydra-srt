@@ -83,24 +83,22 @@ defmodule HydraSrt.SourceProbe do
         Logger.error("SourceProbe: ffprobe executable not found in PATH")
         {:error, "ffprobe is not available on the server"}
 
-      path ->
-        Logger.debug("SourceProbe: using ffprobe executable path=#{path}")
-        {:ok, path}
+      _path ->
+        Logger.debug("SourceProbe: using ffprobe executable from PATH")
+        {:ok, :ffprobe}
     end
   end
 
-  defp run_ffprobe(ffprobe_path, probe_uri) do
+  defp run_ffprobe(:ffprobe, probe_uri) do
     sanitized_uri = sanitize_uri(probe_uri)
 
     Logger.info("SourceProbe: starting ffprobe uri=#{sanitized_uri}")
 
-    Logger.debug(
-      "SourceProbe: command=#{ffprobe_path} #{Enum.join(ffprobe_args(sanitized_uri), " ")}"
-    )
+    Logger.debug("SourceProbe: command=ffprobe #{Enum.join(ffprobe_args(sanitized_uri), " ")}")
 
     task =
       Task.async(fn ->
-        System.cmd(ffprobe_path, ffprobe_args(probe_uri), stderr_to_stdout: true)
+        System.cmd("ffprobe", ffprobe_args(probe_uri), stderr_to_stdout: true)
       end)
 
     case Task.yield(task, @ffprobe_timeout_ms) || Task.shutdown(task, :brutal_kill) do
