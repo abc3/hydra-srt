@@ -18,6 +18,10 @@ defmodule HydraSrtWeb.Router do
     plug :check_auth
   end
 
+  pipeline :mcp do
+    plug HydraSrtWeb.Plugs.McpAuth
+  end
+
   scope "/health", HydraSrtWeb do
     get "/", HealthController, :index
   end
@@ -40,6 +44,10 @@ defmodule HydraSrtWeb.Router do
     post "/tags", RouteController, :create_tag
     put "/tags/:id", RouteController, :update_tag
     delete "/tags/:id", RouteController, :delete_tag
+    get "/tokens", TokenController, :index
+    post "/tokens", TokenController, :create
+    put "/tokens/:id", TokenController, :update
+    delete "/tokens/:id", TokenController, :delete
     resources "/routes", RouteController, except: [:new, :edit]
     get "/routes/statuses/analytics", RouteController, :statuses_analytics
     get "/routes/statuses/history", RouteController, :statuses_history
@@ -98,6 +106,12 @@ defmodule HydraSrtWeb.Router do
   scope "/backup", HydraSrtWeb do
     get "/:session_id/download", BackupController, :download
     get "/:session_id/download_backup", BackupController, :download_backup
+  end
+
+  scope "/mcp" do
+    pipe_through :mcp
+
+    forward "/", Hermes.Server.Transport.StreamableHTTP.Plug, server: HydraSrt.Mcp.Server
   end
 
   scope "/", HydraSrtWeb do

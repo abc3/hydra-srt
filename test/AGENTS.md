@@ -38,6 +38,7 @@ Stable, reusable patterns for unit, integration, and E2E tests across Elixir, th
 mix test test/hydra_srt/route_handler_test.exs
 mix test test/hydra_srt/route_handler_test.exs:42
 E2E=true mix test test/e2e/srt_pipeline_e2e_test.exs
+mix test test/hydra_srt/db_tokens_test.exs test/hydra_srt_web/controllers/token_controller_test.exs
 cd web_app && npm run test:unit:watch
 TRACE=true mix test
 SLOWEST=true mix test
@@ -97,6 +98,7 @@ Configured in `test/test_helper.exs`:
 
 ## Standards
 
+- Follow [../AGENTS.md](../AGENTS.md) Standards (American English, no `defp`, etc.).
 - Assert behaviour, not implementation details or log lines.
 - Avoid `Process.sleep/1` where a condition can be polled; some tests use local `assert_eventually/eventually` helpers (centralised `Eventually` module is planned).
 - E2E: unique ports and route IDs; do not rely on parallel ExUnit cases.
@@ -106,6 +108,7 @@ Configured in `test/test_helper.exs`:
 
 - `HydraSrt.RouteHandler` — route lifecycle, failover
 - `HydraSrtWeb` controllers and `RealtimeChannel`
+- MCP tokens and `/mcp` auth — `test/hydra_srt/db_tokens_test.exs`, `test/hydra_srt_web/controllers/token_controller_test.exs`; see [../docs/mcp.md](../docs/mcp.md)
 - E2E SRT/UDP pipelines under `test/e2e/`
 - Native pipeline under `test/native_e2e/`
 - Stats/analytics collectors
@@ -113,6 +116,7 @@ Configured in `test/test_helper.exs`:
 ## References
 
 - [../AGENTS.md](../AGENTS.md) — project guide
+- [../docs/mcp.md](../docs/mcp.md) — MCP behaviour and client setup
 - [test/support/](support/) — shared test helpers
 - [test/e2e/](e2e/) — Elixir E2E tests
 - [test/native_e2e/](native_e2e/) — native pipeline E2E

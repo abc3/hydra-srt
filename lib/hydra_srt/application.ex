@@ -44,6 +44,8 @@ defmodule HydraSrt.Application do
       # {Ecto.Migrator,
       #  repos: Application.fetch_env!(:hydra_srt, :ecto_repos), skip: skip_migrations?()},
       {Phoenix.PubSub, name: HydraSrt.PubSub, partitions: runtime_schedulers},
+      Hermes.Server.Registry,
+      {HydraSrt.Mcp.Server, transport: :streamable_http},
       {HydraSrt.Stats.PipelineLogger, %{}},
       {HydraSrt.Notifications.Telegram, %{}},
       HydraSrtWeb.Endpoint

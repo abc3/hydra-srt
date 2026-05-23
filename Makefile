@@ -8,6 +8,13 @@ help:
 
 .PHONY: dev
 dev:
+	@echo "Cleaning stale dev processes on :4000 and :5173 (if any)..."
+	@for port in 4000 5173; do \
+		pids=$$(lsof -tiTCP:$$port -sTCP:LISTEN 2>/dev/null); \
+		if [ -n "$$pids" ]; then \
+			kill -15 $$pids 2>/dev/null || true; \
+		fi; \
+	done
 	MIX_ENV=dev \
 	VAULT_ENC_KEY="12345678901234567890123456789012" \
 	API_JWT_SECRET=dev \
@@ -18,6 +25,16 @@ dev:
 	DEMO_DATA=true \
 	ERL_AFLAGS="-kernel shell_history enabled +zdbbl 2097151" \
 	iex --name hydra@127.0.0.1 --cookie cookie -S mix phx.server --no-halt
+
+.PHONY: dev_stop
+dev_stop:
+	@echo "Stopping dev processes on :4000 and :5173..."
+	@for port in 4000 5173; do \
+		pids=$$(lsof -tiTCP:$$port -sTCP:LISTEN 2>/dev/null); \
+		if [ -n "$$pids" ]; then \
+			kill -15 $$pids 2>/dev/null || true; \
+		fi; \
+	done
 
 clean:
 	rm -rf _build && rm -rf deps

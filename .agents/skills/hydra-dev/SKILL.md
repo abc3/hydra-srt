@@ -86,6 +86,7 @@ make dev             # IEx + Phoenix; see docs/envs.md for env vars
 | run native tests | `cd native && cargo test` |
 | run web tests | `cd web_app && npm run test:unit` |
 | run playwright | `cd web_app && npm run test:e2e` |
+| MCP token tests | `mix test test/hydra_srt/db_tokens_test.exs test/hydra_srt_web/controllers/token_controller_test.exs` |
 | check quality / before commit | `mix q` |
 | start dev server | `make dev` |
 | like CI | `make test_ci_local` |
@@ -95,8 +96,9 @@ make dev             # IEx + Phoenix; see docs/envs.md for env vars
 1. `mix q` — fast quality gate
 2. `mix test` — Elixir unit
 3. If touching routes/SRT/native: `make test_e2e` and/or `cd native && cargo test`
-4. If touching UI: `cd web_app && npm run test:unit`
-5. Commit with **Conventional Commits** (see `AGENTS.md` Standards): e.g. `feat: ...`, `fix: ...`, `docs: ...`, `chore: ...`
+4. If touching UI: `cd web_app && npm run typecheck && npm run test:unit`
+5. If touching MCP/tokens: `mix test test/hydra_srt/db_tokens_test.exs test/hydra_srt_web/controllers/token_controller_test.exs`
+6. Commit with **Conventional Commits** (see `AGENTS.md` Standards): e.g. `feat: ...`, `fix: ...`, `docs: ...`, `chore: ...`
 
 ## E2E notes
 
@@ -110,3 +112,4 @@ make dev             # IEx + Phoenix; see docs/envs.md for env vars
 - `test/AGENTS.md` — full test matrix, support modules, tags
 - `Makefile` — all `test_*` targets
 - `docs/envs.md` — environment variables
+- `docs/mcp.md` — MCP server, tokens, client setup

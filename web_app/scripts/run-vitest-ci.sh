@@ -11,11 +11,11 @@ test_files=()
 if command -v rg >/dev/null 2>&1; then
   while IFS= read -r line; do
     test_files+=("$line")
-  done < <(rg --files src | rg "__tests__/.*\\.test\\.(js|jsx)$" | sort)
+  done < <(rg --files src | rg "__tests__/.*\\.test\\.(js|jsx|ts|tsx)$" | sort)
 else
   while IFS= read -r line; do
     test_files+=("${line#./}")
-  done < <(find ./src -type f \( -name "*.test.js" -o -name "*.test.jsx" \) | sort)
+  done < <(find ./src -type f \( -name "*.test.js" -o -name "*.test.jsx" -o -name "*.test.ts" -o -name "*.test.tsx" \) | sort)
 fi
 
 if [[ ${#test_files[@]} -eq 0 ]]; then

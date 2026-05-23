@@ -121,6 +121,7 @@ Setup, deployment, and troubleshooting: [docs/development.md](docs/development.m
 | [docs/development.md](docs/development.md) | Setup, deployment, and Docker guide |
 | [docs/architecture.md](docs/architecture.md) | System design and technical details |
 | [docs/api.md](docs/api.md)            | REST API documentation                |
+| [docs/mcp.md](docs/mcp.md)            | MCP server, tokens, and client setup |
 | [docs/envs.md](docs/envs.md)          | Environment variables reference       |
 
 ## Contributing

@@ -12,8 +12,11 @@ Use for any task touching Elixir, Phoenix, Ecto, Mix, OTP, or ExUnit.
 1. Read context first: routes, schema, context modules, and related tests.
 2. Keep business logic in contexts, not in controllers/channels/live views.
 3. Prefer small pure functions and explicit pattern matching.
-4. Add or update tests with each behavior change.
-5. Run targeted tests first, then broader suite if needed.
+4. Prefer bracket access (`map[:key]`) for map reads in app code. Do not use `Map.get/2`. Use `Map.get/3` only when an explicit default value is required.
+5. Add `@spec` for every function (`def`/`defp`).
+6. If a `@spec` becomes hard to read, introduce named custom types (`@type`, `@opaque`) and reuse them in specs.
+7. Add or update tests with each behavior change.
+8. Run targeted tests first, then broader suite if needed.
 
 ## Repo commands
 - Format: `mix format`

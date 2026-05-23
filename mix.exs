@@ -60,6 +60,7 @@ defmodule HydraSrt.MixProject do
       # Runtime
       {:syn, "~> 3.3"},
       {:cachex, "~> 3.6"},
+      {:hermes_mcp, "~> 0.14.1"},
 
       # Notifications
       {:telegram, github: "visciang/telegram", ref: "6dca11fff18c41fafffb92bb82082350ff1df217"},
