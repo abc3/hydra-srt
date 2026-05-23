@@ -28,6 +28,17 @@ defmodule HydraSrt.SourceProbe do
 
   def probe(_), do: {:error, :invalid_source}
 
+  @spec client_error(term()) :: String.t()
+  def client_error(reason) do
+    reason
+    |> to_string()
+    |> String.trim()
+    |> case do
+      "" -> "Failed to test source connection"
+      message -> String.slice(message, 0, 500)
+    end
+  end
+
   @spec build_probe_uri(map()) :: {:ok, binary()} | {:error, atom() | binary()}
   def build_probe_uri(route_params) when is_map(route_params) do
     with {:ok, source} <- RouteHandler.source_from_record(route_params) do

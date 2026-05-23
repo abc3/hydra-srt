@@ -2,8 +2,7 @@ defmodule HydraSrt.Mcp.Server do
   @moduledoc """
   MCP server for Hydra SRT.
   """
-  alias HydraSrt.Db
-  alias Hermes.Server.Response
+  alias HydraSrt.Mcp.ToolRegistry
 
   use Hermes.Server,
     name: "HydraSRT MCP",
@@ -12,28 +11,12 @@ defmodule HydraSrt.Mcp.Server do
 
   @impl true
   def init(_client_info, frame) do
-    {:ok,
-     register_tool(frame, "list_routes",
-       description: "Return Hydra routes data from /api/routes",
-       input_schema: %{}
-     )}
+    {:ok, ToolRegistry.register_all(frame)}
   end
 
   @impl true
-  def handle_tool_call("list_routes", _args, frame) do
-    {:ok, payload} = Db.get_routes_page(true, "created_at", 1, 500)
-
-    response =
-      Response.tool()
-      |> Response.structured(%{
-        "data" => payload.routes,
-        "meta" => %{
-          "page" => payload.page,
-          "limit" => payload.limit,
-          "total" => payload.total
-        }
-      })
-
+  def handle_tool_call(name, args, frame) do
+    {:ok, response} = ToolRegistry.dispatch(name, args)
     {:reply, response, frame}
   end
 end

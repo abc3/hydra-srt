@@ -1,22 +1,21 @@
 defmodule HydraSrtWeb.NodeController do
   use HydraSrtWeb, :controller
 
-  alias HydraSrt.Monitoring.NodeStats
-  alias HydraSrt.Stats.Analytics
+  alias HydraSrt.Nodes
 
   def index(conn, _params) do
-    json(conn, NodeStats.all_nodes())
+    json(conn, Nodes.list())
   end
 
   def show(conn, %{"id" => _node_name}) do
-    json(conn, NodeStats.self_node_stats())
+    json(conn, Nodes.self_stats())
   end
 
   def analytics(conn, %{"id" => node_id} = params) do
-    with {:ok, query_params} <- Analytics.build_query_params(params),
-         {:ok, payload} <- Analytics.fetch_node_timeseries(node_id, query_params) do
-      json(conn, payload)
-    else
+    case Nodes.analytics(node_id, params) do
+      {:ok, payload} ->
+        json(conn, payload)
+
       {:error, {:bad_request, message}} ->
         conn
         |> put_status(:bad_request)
