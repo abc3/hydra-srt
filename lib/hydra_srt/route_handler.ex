@@ -1131,6 +1131,17 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
+  def source_from_record(%{"schema" => "RTP"} = source) do
+    opts = endpoint_options_from_record(source)
+
+    with {:ok, resolved_opts} <- resolve_interface_options(opts) do
+      # TS over RTP source uses udpsrc + rtpmp2tdepay in native pipeline.
+      {:ok,
+       %{"type" => "udpsrc", "hydra_source_schema" => "RTP"}
+       |> Map.merge(resolved_opts)}
+    end
+  end
+
   def source_from_record(_), do: {:error, :invalid_source}
 
   @doc false

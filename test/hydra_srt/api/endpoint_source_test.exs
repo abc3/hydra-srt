@@ -32,10 +32,25 @@ defmodule HydraSrt.Api.EndpointSourceTest do
     route = route_fixture()
 
     changeset =
-      Endpoint.source_changeset(%Endpoint{}, %{route_id: route.id, position: 0, schema: "RTP"})
+      Endpoint.source_changeset(%Endpoint{}, %{route_id: route.id, position: 0, schema: "INVALID"})
 
     refute changeset.valid?
     assert {"is invalid", _} = changeset.errors[:schema]
+  end
+
+  test "RTP source schema is valid" do
+    route = route_fixture()
+
+    changeset =
+      Endpoint.source_changeset(%Endpoint{}, %{
+        route_id: route.id,
+        position: 0,
+        schema: "RTP",
+        address: "127.0.0.1",
+        port: 5000
+      })
+
+    assert changeset.valid?
   end
 
   test "invalid negative position" do

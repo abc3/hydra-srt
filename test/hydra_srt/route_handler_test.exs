@@ -148,6 +148,20 @@ defmodule HydraSrt.RouteHandlerTest do
     assert source["port"] == 4201
   end
 
+  test "source_from_record with RTP schema" do
+    record = %{
+      "schema" => "RTP",
+      "address" => "127.0.0.1",
+      "port" => 5004
+    }
+
+    assert {:ok, source} = RouteHandler.source_from_record(record)
+    assert source["type"] == "udpsrc"
+    assert source["address"] == "127.0.0.1"
+    assert source["port"] == 5004
+    assert source["hydra_source_schema"] == "RTP"
+  end
+
   test "source_from_record with invalid schema" do
     record = %{
       "schema" => "INVALID"

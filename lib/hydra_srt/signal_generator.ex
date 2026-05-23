@@ -3,10 +3,13 @@ defmodule HydraSrt.SignalGenerator do
   use GenServer
 
   @default_host "127.0.0.1"
-  @default_port 4200
+  @default_srt_port 4200
+  @default_udp_port 4201
+  @default_rtp_port 4202
   @stale_signature "HYDRA_SIGNAL_GENERATOR"
+  @supported_transports ["srt", "udp", "rtp"]
 
-  @ffmpeg_base_args [
+  @ffmpeg_common_args [
     "-hide_banner",
     "-loglevel",
     "error",
@@ -32,29 +35,28 @@ defmodule HydraSrt.SignalGenerator do
     "-b:a",
     "128k",
     "-metadata",
-    "title=HYDRA_SIGNAL_GENERATOR",
-    "-f",
-    "mpegts"
+    "title=HYDRA_SIGNAL_GENERATOR"
   ]
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
-  def status do
-    GenServer.call(__MODULE__, :status)
+  def status(transport \\ "srt") do
+    GenServer.call(__MODULE__, {:status, transport})
   end
 
-  def configure(host, port) when is_binary(host) and is_integer(port) do
-    GenServer.call(__MODULE__, {:configure, host, port})
+  def configure(transport, host, port)
+      when is_binary(transport) and is_binary(host) and is_integer(port) do
+    GenServer.call(__MODULE__, {:configure, transport, host, port})
   end
 
-  def start_generation do
-    GenServer.call(__MODULE__, :start_generation)
+  def start_generation(transport \\ "srt") do
+    GenServer.call(__MODULE__, {:start_generation, transport})
   end
 
-  def stop_generation do
-    GenServer.call(__MODULE__, :stop_generation)
+  def stop_generation(transport \\ "srt") do
+    GenServer.call(__MODULE__, {:stop_generation, transport})
   end
 
   @impl true
@@ -64,8 +66,12 @@ defmodule HydraSrt.SignalGenerator do
 
     {:ok,
      %{
-       host: @default_host,
-       port: @default_port,
+       configs: %{
+         "srt" => %{host: @default_host, port: @default_srt_port},
+         "udp" => %{host: @default_host, port: @default_udp_port},
+         "rtp" => %{host: @default_host, port: @default_rtp_port}
+       },
+       running_transport: nil,
        ffmpeg_port: nil,
        ffmpeg_pid: nil,
        ffmpeg_path: System.find_executable("ffmpeg")
@@ -73,68 +79,93 @@ defmodule HydraSrt.SignalGenerator do
   end
 
   @impl true
-  def handle_call(:status, _from, state) do
-    {:reply, status_map(state), state}
+  def handle_call({:status, transport}, _from, state) do
+    with {:ok, transport} <- normalize_transport(transport) do
+      {:reply, status_map(state, transport), state}
+    else
+      {:error, :invalid_transport} ->
+        {:reply, {:error, :invalid_transport}, state}
+    end
   end
 
-  def handle_call({:configure, host, port}, _from, state) do
+  def handle_call({:configure, transport, host, port}, _from, state) do
     host = String.trim(host)
 
-    cond do
-      host == "" ->
-        {:reply, {:error, :invalid_host}, state}
+    with {:ok, transport} <- normalize_transport(transport) do
+      cond do
+        host == "" ->
+          {:reply, {:error, :invalid_host}, state}
 
-      port < 1 or port > 65_535 ->
-        {:reply, {:error, :invalid_port}, state}
+        port < 1 or port > 65_535 ->
+          {:reply, {:error, :invalid_port}, state}
 
-      is_port(state.ffmpeg_port) ->
-        {:reply, {:error, :running}, state}
+        is_port(state.ffmpeg_port) ->
+          {:reply, {:error, :running}, state}
 
-      true ->
-        new_state = %{state | host: host, port: port}
-        {:reply, {:ok, status_map(new_state)}, new_state}
+        true ->
+          new_configs = put_in(state.configs, [transport], %{host: host, port: port})
+          new_state = %{state | configs: new_configs}
+          {:reply, {:ok, status_map(new_state, transport)}, new_state}
+      end
+    else
+      {:error, :invalid_transport} ->
+        {:reply, {:error, :invalid_transport}, state}
     end
   end
 
-  def handle_call(:start_generation, _from, state) do
-    cond do
-      is_port(state.ffmpeg_port) ->
-        {:reply, {:error, :already_running}, state}
+  def handle_call({:start_generation, transport}, _from, state) do
+    with {:ok, transport} <- normalize_transport(transport) do
+      cond do
+        is_port(state.ffmpeg_port) ->
+          {:reply, {:error, :already_running}, state}
 
-      is_nil(state.ffmpeg_path) ->
-        {:reply, {:error, :ffmpeg_not_found}, state}
+        is_nil(state.ffmpeg_path) ->
+          {:reply, {:error, :ffmpeg_not_found}, state}
 
-      true ->
-        output = "srt://#{state.host}:#{state.port}?mode=listener"
+        true ->
+          cfg = Map.fetch!(state.configs, transport)
+          output = output_url(transport, cfg.host, cfg.port)
 
-        ffmpeg_port =
-          Port.open({:spawn_executable, state.ffmpeg_path}, [
-            :binary,
-            :use_stdio,
-            :exit_status,
-            :stderr_to_stdout,
-            args: @ffmpeg_base_args ++ [output]
-          ])
+          ffmpeg_port =
+            Port.open({:spawn_executable, state.ffmpeg_path}, [
+              :binary,
+              :use_stdio,
+              :exit_status,
+              :stderr_to_stdout,
+              args: @ffmpeg_common_args ++ format_args(transport) ++ [output]
+            ])
 
-        ffmpeg_pid =
-          case Port.info(ffmpeg_port, :os_pid) do
-            {:os_pid, pid} when is_integer(pid) and pid > 0 -> pid
-            _ -> nil
-          end
+          ffmpeg_pid =
+            case Port.info(ffmpeg_port, :os_pid) do
+              {:os_pid, pid} when is_integer(pid) and pid > 0 -> pid
+              _ -> nil
+            end
 
-        new_state = %{state | ffmpeg_port: ffmpeg_port, ffmpeg_pid: ffmpeg_pid}
-        {:reply, {:ok, status_map(new_state)}, new_state}
+          new_state = %{
+            state
+            | ffmpeg_port: ffmpeg_port,
+              ffmpeg_pid: ffmpeg_pid,
+              running_transport: transport
+          }
+
+          {:reply, {:ok, status_map(new_state, transport)}, new_state}
+      end
+    else
+      {:error, :invalid_transport} ->
+        {:reply, {:error, :invalid_transport}, state}
     end
   end
 
-  def handle_call(:stop_generation, _from, state) do
+  def handle_call({:stop_generation, transport}, _from, state) do
+    transport = normalize_transport_or_default(transport)
+
     if is_port(state.ffmpeg_port) do
       safe_close_port(state.ffmpeg_port)
       safe_kill_pid(state.ffmpeg_pid)
-      new_state = %{state | ffmpeg_port: nil, ffmpeg_pid: nil}
-      {:reply, {:ok, status_map(new_state)}, new_state}
+      new_state = %{state | ffmpeg_port: nil, ffmpeg_pid: nil, running_transport: nil}
+      {:reply, {:ok, status_map(new_state, transport)}, new_state}
     else
-      {:reply, {:ok, status_map(state)}, state}
+      {:reply, {:ok, status_map(state, transport)}, state}
     end
   end
 
@@ -144,11 +175,11 @@ defmodule HydraSrt.SignalGenerator do
   end
 
   def handle_info({port, {:exit_status, _status}}, %{ffmpeg_port: port} = state) do
-    {:noreply, %{state | ffmpeg_port: nil, ffmpeg_pid: nil}}
+    {:noreply, %{state | ffmpeg_port: nil, ffmpeg_pid: nil, running_transport: nil}}
   end
 
   def handle_info({:EXIT, port, _reason}, %{ffmpeg_port: port} = state) do
-    {:noreply, %{state | ffmpeg_port: nil, ffmpeg_pid: nil}}
+    {:noreply, %{state | ffmpeg_port: nil, ffmpeg_pid: nil, running_transport: nil}}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -160,13 +191,56 @@ defmodule HydraSrt.SignalGenerator do
     :ok
   end
 
-  defp status_map(state) do
+  defp status_map(state, transport) do
+    cfg = Map.fetch!(state.configs, transport)
+
     %{
-      "running" => is_port(state.ffmpeg_port),
-      "host" => state.host,
-      "port" => state.port
+      "transport" => transport,
+      "running" => is_port(state.ffmpeg_port) and state.running_transport == transport,
+      "running_transport" => state.running_transport,
+      "host" => cfg.host,
+      "port" => cfg.port,
+      "transports" => %{
+        "srt" => %{
+          "host" => state.configs["srt"].host,
+          "port" => state.configs["srt"].port
+        },
+        "udp" => %{
+          "host" => state.configs["udp"].host,
+          "port" => state.configs["udp"].port
+        },
+        "rtp" => %{
+          "host" => state.configs["rtp"].host,
+          "port" => state.configs["rtp"].port
+        }
+      }
     }
   end
+
+  defp normalize_transport(transport) when is_binary(transport) do
+    normalized = transport |> String.trim() |> String.downcase()
+
+    if normalized in @supported_transports,
+      do: {:ok, normalized},
+      else: {:error, :invalid_transport}
+  end
+
+  defp normalize_transport(_), do: {:error, :invalid_transport}
+
+  defp normalize_transport_or_default(transport) do
+    case normalize_transport(transport) do
+      {:ok, normalized} -> normalized
+      _ -> "srt"
+    end
+  end
+
+  defp format_args("srt"), do: ["-f", "mpegts"]
+  defp format_args("udp"), do: ["-f", "mpegts"]
+  defp format_args("rtp"), do: ["-f", "rtp_mpegts"]
+
+  defp output_url("srt", host, port), do: "srt://#{host}:#{port}?mode=listener"
+  defp output_url("udp", host, port), do: "udp://#{host}:#{port}?pkt_size=1316"
+  defp output_url("rtp", host, port), do: "rtp://#{host}:#{port}"
 
   defp safe_close_port(port) when is_port(port) do
     try do

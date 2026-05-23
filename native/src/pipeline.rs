@@ -25,12 +25,28 @@ pub fn build_pipeline(
     let tee = gst::ElementFactory::make("tee")
         .build()
         .context("failed to create tee")?;
+    let source_schema = config
+        .source
+        .props
+        .get("hydra_source_schema")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let is_rtp_source = source_schema == "RTP";
 
     tee.set_property("allow-not-linked", true);
     apply_element_properties(&source, &strip_internal_props(&config.source))?;
 
     if source.find_property("do-timestamp").is_some() {
         source.set_property("do-timestamp", true);
+    }
+
+    if is_rtp_source {
+        let caps = gst::Caps::builder("application/x-rtp")
+            .field("media", "video")
+            .field("clock-rate", 90_000_i32)
+            .field("encoding-name", "MP2T")
+            .build();
+        source.set_property("caps", caps);
     }
 
     let source_stream_id = Arc::new(Mutex::new(None));
@@ -67,10 +83,25 @@ pub fn build_pipeline(
         });
     }
 
-    pipeline
-        .add_many([&source, &tee])
-        .context("failed to add source/tee to pipeline")?;
-    source.link(&tee).context("failed to link source to tee")?;
+    let source_stats_pad = if is_rtp_source {
+        let depay = gst::ElementFactory::make("rtpmp2tdepay")
+            .build()
+            .context("failed to create rtpmp2tdepay")?;
+        pipeline
+            .add_many([&source, &depay, &tee])
+            .context("failed to add source/depay/tee to pipeline")?;
+        source
+            .link(&depay)
+            .context("failed to link source to rtpmp2tdepay")?;
+        depay.link(&tee).context("failed to link rtpmp2tdepay to tee")?;
+        depay.static_pad("src")
+    } else {
+        pipeline
+            .add_many([&source, &tee])
+            .context("failed to add source/tee to pipeline")?;
+        source.link(&tee).context("failed to link source to tee")?;
+        source.static_pad("src")
+    };
 
     let source_bytes_total = Arc::new(AtomicU64::new(0));
     let source_bytes_last_interval = Arc::new(AtomicU64::new(0));
@@ -78,7 +109,7 @@ pub fn build_pipeline(
     let processing_pending = Arc::new(AtomicBool::new(true));
     let dest_metrics: Arc<Mutex<Vec<Arc<DestMetrics>>>> = Arc::new(Mutex::new(Vec::new()));
 
-    if let Some(src_pad) = source.static_pad("src") {
+    if let Some(src_pad) = source_stats_pad {
         let bytes_counter = source_bytes_total.clone();
         let lifecycle_ref = lifecycle.clone();
         let processing_pending_ref = processing_pending.clone();

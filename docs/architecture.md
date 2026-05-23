@@ -99,7 +99,8 @@ Media processing runs outside the BEAM. A native crash should terminate the rout
 **Purpose**: Configuration state and operational data.
 
 Used for:
-- Route definitions (sources, destinations, SRT parameters)
+- Route definitions (sources, destinations, SRT parameters, RTP-over-UDP source options)
+- RTP sources expect MPEG-TS over RTP (MP2T payload via `rtpmp2tdepay`)
 - User authentication and sessions
 - Route enable/disable state
 - Active source tracking (for failover)

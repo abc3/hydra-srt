@@ -288,6 +288,7 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }) => {
                                         <Radio.Group buttonStyle="solid">
                                             <Radio.Button value="SRT">SRT</Radio.Button>
                                             <Radio.Button value="UDP">UDP</Radio.Button>
+                                            <Radio.Button value="RTP">RTP (TS)</Radio.Button>
                                         </Radio.Group>
                                     </Form.Item>
 
@@ -486,12 +487,12 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }) => {
                                     {/* UDP specific options */}
                                     <Form.Item noStyle dependencies={['schema']}>
                                         {({ getFieldValue }) =>
-                                            getFieldValue('schema') === 'UDP' && (
+                                            (getFieldValue('schema') === 'UDP' || getFieldValue('schema') === 'RTP') && (
                                                 <>
                                                     <Form.Item
                                                         label="Interface"
                                                         name="interface_sys_name"
-                                                        extra="Select a local interface for UDP bind/multicast settings."
+                                                        extra="Select a local interface for UDP/RTP bind settings."
                                                     >
                                                         <Select
                                                             allowClear
@@ -506,8 +507,8 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }) => {
                                                         label="Address"
                                                         required
                                                         name="host"
-                                                        extra="The host/IP/Multicast group to send the packets to"
-                                                        rules={[{ required: true, message: 'Please enter a UDP source address' }]}
+                                                        extra="The host/IP (or multicast group) to listen on."
+                                                        rules={[{ required: true, message: 'Please enter a source address' }]}
                                                     >
                                                         <Input placeholder="Enter address" />
                                                     </Form.Item>
@@ -516,11 +517,11 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }) => {
                                                         label="Port"
                                                         name="port"
                                                         required
-                                                        extra="The port to send the packets to"
+                                                        extra="The local UDP port to listen on."
                                                         rules={[
                                                             {
                                                                 required: true,
-                                                                message: 'Please enter a UDP source port',
+                                                                message: 'Please enter a source port',
                                                             },
                                                             {
                                                                 type: 'number',

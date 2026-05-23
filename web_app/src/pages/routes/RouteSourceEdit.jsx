@@ -498,7 +498,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
         }
       }
 
-      if (schema === 'UDP') {
+      if (schema === 'UDP' || schema === 'RTP') {
         pathsToValidate.push(['sources', sourceIndex, 'port']);
       }
 
@@ -697,6 +697,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                             <Radio.Group buttonStyle="solid">
                               <Radio.Button value="SRT">SRT</Radio.Button>
                               <Radio.Button value="UDP">UDP</Radio.Button>
+                              <Radio.Button value="RTP">RTP (TS)</Radio.Button>
                             </Radio.Group>
                           </Form.Item>
 
@@ -824,7 +825,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                 );
                               }
 
-                              if (schema === 'UDP') {
+                              if (schema === 'UDP' || schema === 'RTP') {
                                 return (
                                   <>
                                     <Form.Item label="Interface" name={[field.name, 'interface_sys_name']}>
@@ -837,7 +838,7 @@ const RouteSourceEdit = ({ initialValues, onChange }) => {
                                       label="Port"
                                       name={[field.name, 'port']}
                                       rules={[
-                                        { required: true, message: 'Please enter a UDP port' },
+                                        { required: true, message: 'Please enter a source port' },
                                         { type: 'number', min: 1, max: 65535, message: 'Port must be between 1 and 65535' },
                                       ]}
                                     >

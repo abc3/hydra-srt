@@ -13,7 +13,7 @@ All environment variables recognised by Hydra SRT, grouped by purpose.
 | `PORT` | No | `4000` | HTTP listen port. |
 | `PHX_CHECK_ORIGIN` | No | `false` (prod) | WebSocket origin checks: unset/empty/`false`/`0`/`no` disables; `true`/`1`/`yes` uses the endpoint host; comma-separated URLs allow specific origins. Example: `http://198.51.100.10:4000,http://203.0.113.20:4000`. |
 | `SECRET_KEY_BASE` | **prod only** | hardcoded in dev/test | Secret used to sign/encrypt cookies and tokens. Generate with `mix phx.gen.secret`. |
-| `DEMO_DATA` | No | `false` | Enables demo bootstrap: starts a local ffmpeg test stream and auto-creates a `demo_route` with one SRT source and SRT+UDP destinations. Requires `ffmpeg` in `PATH`; app fails to start if missing. |
+| `DEMO_DATA` | No | `false` | Enables demo bootstrap and signal generation tools: auto-creates `demo_route` (SRT source), `demo_udp_route` (UDP source), and `demo_rtp_route` (RTP source), each with SRT+UDP destinations. Signal generation tabs default to SRT on port 4200, UDP on 4201, and RTP on 4202. Requires `ffmpeg` in `PATH`; app fails to start if missing. |
 
 ---
 
