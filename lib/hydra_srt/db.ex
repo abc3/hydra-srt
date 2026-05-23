@@ -8,7 +8,9 @@ defmodule HydraSrt.Db do
   alias HydraSrt.Api.Endpoint
   alias HydraSrt.Api.Interface
   alias HydraSrt.Api.Tag
+  alias HydraSrt.Api.Token
   alias HydraSrt.Api.Notification
+  alias HydraSrt.Auth
   alias HydraSrt.Stats.EventLogger
 
   @status_stopped "stopped"
@@ -250,6 +252,97 @@ defmodule HydraSrt.Db do
       %Tag{} = tag ->
         Repo.delete(tag)
     end
+  end
+
+  @spec list_tokens() :: list(%Token{})
+  def list_tokens do
+    from(t in Token, order_by: [asc: t.name])
+    |> Repo.all()
+  end
+
+  @create_token_max_attempts 3
+
+  @spec create_token(map()) ::
+          {:ok, %Token{}, String.t()} | {:error, %Ecto.Changeset{}}
+  def create_token(attrs) when is_map(attrs) do
+    name =
+      attrs
+      |> Map.get("name", Map.get(attrs, :name))
+      |> to_string()
+      |> String.trim()
+
+    insert_token_with_generated_secret(name, @create_token_max_attempts)
+  end
+
+  def insert_token_with_generated_secret(name, attempts_left) when attempts_left > 0 do
+    raw_token = generate_mcp_token()
+    hashed_token = Auth.hash_token(raw_token)
+
+    %Token{}
+    |> Token.changeset(%{name: name, hash: hashed_token})
+    |> Repo.insert()
+    |> case do
+      {:ok, token} ->
+        {:ok, token, raw_token}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        if hash_collision?(changeset) and attempts_left > 1 do
+          insert_token_with_generated_secret(name, attempts_left - 1)
+        else
+          {:error, changeset}
+        end
+    end
+  end
+
+  def hash_collision?(%Ecto.Changeset{} = changeset) do
+    Enum.any?(changeset.errors, fn
+      {:hash, {_message, _opts}} -> true
+      _ -> false
+    end)
+  end
+
+  @spec update_token(String.t(), map()) ::
+          {:ok, %Token{}} | {:error, :not_found | %Ecto.Changeset{}}
+  def update_token(id, attrs) when is_binary(id) and is_map(attrs) do
+    name =
+      attrs
+      |> Map.get("name", Map.get(attrs, :name))
+      |> to_string()
+      |> String.trim()
+
+    case Repo.get(Token, id) do
+      nil ->
+        {:error, :not_found}
+
+      %Token{} = token ->
+        token
+        |> Token.changeset(%{name: name, hash: token.hash})
+        |> Repo.update()
+    end
+  end
+
+  @spec delete_token(String.t()) :: {:ok, %Token{}} | {:error, :not_found | %Ecto.Changeset{}}
+  def delete_token(id) when is_binary(id) do
+    case Repo.get(Token, id) do
+      nil ->
+        {:error, :not_found}
+
+      %Token{} = token ->
+        Repo.delete(token)
+    end
+  end
+
+  @spec authenticate_mcp_token(String.t()) :: boolean()
+  def authenticate_mcp_token(token) when is_binary(token) do
+    hashed_token = Auth.hash_token(token)
+
+    Repo.exists?(from(t in Token, where: t.hash == ^hashed_token))
+  end
+
+  @spec generate_mcp_token() :: String.t()
+  def generate_mcp_token do
+    :crypto.strong_rand_bytes(30)
+    |> Base.url_encode64(padding: false)
   end
 
   @spec get_notification_by_type(String.t()) :: %Notification{} | nil

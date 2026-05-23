@@ -23,7 +23,9 @@ config :hydra_srt, HydraSrtWeb.Endpoint,
   debug_errors: true,
   secret_key_base: "9re8gLwrcmLnNcUbxe8xgKSCNfm8gIpgoBBiCXhV0dVfJMB8DVFB3QQJwOye0iIo",
   watchers: [
-    # npm: ["run", "dev", cd: Path.expand("../web_app", __DIR__)]
+    # Run Vite directly instead of through `npm run dev`.
+    # This avoids orphaned node/vite processes that can keep port 5173 busy after Ctrl+C.
+    node: ["./node_modules/vite/bin/vite.js", cd: Path.expand("../web_app", __DIR__)]
   ]
 
 config :hydra_srt,

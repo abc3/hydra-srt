@@ -245,3 +245,91 @@ Notes:
 *   **Endpoint:** `POST /api/restore`
 *   **Description:** Restores system state from a SQLite `.db` backup snapshot.
 *   **Payload:** Raw SQLite DB file bytes.
+
+## MCP Tokens
+
+MCP tokens are long-lived API keys used to authenticate MCP clients against the `/mcp` endpoint. They are separate from login session tokens returned by `POST /api/login`.
+
+Manage tokens in the UI at `/settings/tokens` or via the REST API below. Session authentication is required for token management endpoints.
+
+### List Tokens
+
+*   **Endpoint:** `GET /api/tokens`
+*   **Description:** Returns configured MCP tokens. Raw token values are never included in list responses.
+*   **Response:**
+    ```json
+    {
+      "data": [
+        {
+          "id": "uuid",
+          "name": "cursor",
+          "inserted_at": "2026-05-23T12:00:00.000000Z",
+          "updated_at": "2026-05-23T12:00:00.000000Z"
+        }
+      ]
+    }
+    ```
+
+### Create Token
+
+*   **Endpoint:** `POST /api/tokens`
+*   **Description:** Creates a named MCP token. The raw token value is returned only in this response.
+*   **Payload:**
+    ```json
+    {
+      "token": {
+        "name": "cursor"
+      }
+    }
+    ```
+*   **Response:**
+    ```json
+    {
+      "data": {
+        "id": "uuid",
+        "name": "cursor",
+        "token": "generated_mcp_token",
+        "inserted_at": "2026-05-23T12:00:00.000000Z",
+        "updated_at": "2026-05-23T12:00:00.000000Z"
+      }
+    }
+    ```
+
+### Update Token
+
+*   **Endpoint:** `PUT /api/tokens/:id`
+*   **Description:** Renames an MCP token. Token values cannot be changed; create a new token instead.
+*   **Payload:**
+    ```json
+    {
+      "token": {
+        "name": "new name"
+      }
+    }
+    ```
+
+### Delete Token
+
+*   **Endpoint:** `DELETE /api/tokens/:id`
+*   **Description:** Revokes an MCP token immediately.
+
+## MCP Endpoint
+
+*   **Endpoint:** `/mcp`
+*   **Description:** Streamable HTTP transport for the HydraSRT MCP server.
+*   **Authentication:** Requires an MCP token (not a login session token):
+    `Authorization: Bearer <mcp_token>`
+*   **Unauthorized responses:** `401` with `WWW-Authenticate: Bearer`
+*   **Cursor example config:**
+    ```json
+    {
+      "mcpServers": {
+        "hydrasrt": {
+          "url": "http://localhost:4000/mcp",
+          "headers": {
+            "Authorization": "Bearer YOUR_MCP_TOKEN"
+          }
+        }
+      }
+    }
+    ```

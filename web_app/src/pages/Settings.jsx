@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { Typography, Button, Card, Space, message, Tabs, Modal, Descriptions, Table, Form, Input, Popconfirm, Switch } from 'antd';
 import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { backupApi, tagsApi, signalGenerationApi, notificationsApi } from '../utils/api';
+import McpTokensTab from './settings/McpTokensTab';
 import { ROUTES } from '../utils/constants';
 import { useInit } from '../context/InitContext';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -15,6 +16,7 @@ const Settings = () => {
   const tabPathByKey = {
     about: 'about',
     'route-tags': 'route-tags',
+    tokens: 'tokens',
     notifications: 'notifications',
     backup: 'backup',
     routes: 'routes',
@@ -760,6 +762,11 @@ const Settings = () => {
       key: 'route-tags',
       label: 'Route tags',
       children: <RouteTagsTabContent />,
+    },
+    {
+      key: 'tokens',
+      label: 'MCP tokens',
+      children: <McpTokensTab />,
     },
     {
       key: 'notifications',

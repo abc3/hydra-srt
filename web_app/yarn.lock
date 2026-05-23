@@ -3394,6 +3394,11 @@ typed-array-length@^1.0.7:
     possible-typed-array-names "^1.0.0"
     reflect.getprototypeof "^1.0.6"
 
+typescript@^6.0.3:
+  version "6.0.3"
+  resolved "https://registry.npmjs.org/typescript/-/typescript-6.0.3.tgz"
+  integrity sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==
+
 unbox-primitive@^1.1.0:
   version "1.1.0"
   resolved "https://registry.npmjs.org/unbox-primitive/-/unbox-primitive-1.1.0.tgz"

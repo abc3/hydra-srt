@@ -56,6 +56,8 @@ const requestPublicJson = async (url, options = {}, fallbackMessage = 'Request f
   return response.json();
 };
 
+export { requestJson, requestOptionalJson };
+
 export const initApi = {
   get: async () => requestPublicJson('/api/init', {}, 'Failed to load app init payload'),
 };
@@ -470,7 +472,6 @@ export const backupApi = {
   },
 };
 
-// Tags API
 export const tagsApi = {
   // Get all unique tag names used across routes (compat for existing selectors)
   getAll: async () => {

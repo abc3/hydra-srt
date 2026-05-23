@@ -39,17 +39,21 @@ Three layers:
 1. **Management & control (Elixir)** — `HydraSrt.Application`, `HydraSrt.RouteHandler`, `HydraSrt.RoutesSupervisor`, Ecto/SQLite for config state.
 2. **Streaming (Rust + GStreamer)** — `native/` builds `priv/native/hydra_srt_pipeline`; isolated from the BEAM for stability.
 3. **API & UI** — `HydraSrtWeb` (Phoenix), `web_app/` (Vite + React).
+4. **MCP** — `HydraSrt.Mcp.Server` (Hermes) on `/mcp`; Human guide: [docs/mcp.md](docs/mcp.md).
 
 ```mermaid
 flowchart LR
   UI[web_app React] --> API[HydraSrtWeb REST]
+  MCP[MCP clients] --> McpEndpoint["/mcp"]
   API --> Control[HydraSrt Elixir]
+  McpEndpoint --> Control
   Control --> Native[Rust GStreamer pipeline]
 ```
 
 ## Standards
 
-- Do not delete commented code (see `.cursorrules`).
+- **Language:** Write in **American English (en-US)** — documentation (`docs/`, `README.md`, `CONTRIBUTING.md`, agent/skills), code comments, commit messages, log messages meant for operators, UI copy, and developer-facing API text. Do not mix other languages in the repo unless a file is explicitly scoped to localization.
+- Do not delete commented code.
 - Do not use private functions (`defp`) in Elixir.
 - In tests: use unique ports/IDs; avoid `Process.sleep/1` where a poll condition exists (see `test/AGENTS.md`).
 - Keep human-facing docs separate from agent/machine docs:
@@ -83,6 +87,7 @@ Workflow skills live under [`.agents/skills/`](.agents/skills/):
 | Skill | Path |
 |-------|------|
 | `hydra-dev` | [`.agents/skills/hydra-dev/SKILL.md`](.agents/skills/hydra-dev/SKILL.md) |
+| `frontend` | [`.agents/skills/frontend/SKILL.md`](.agents/skills/frontend/SKILL.md) |
 
 `AGENTS.md` / `test/AGENTS.md` stay the canonical reference; skills add command routing and agent behaviour.
 
@@ -95,8 +100,13 @@ Workflow skills live under [`.agents/skills/`](.agents/skills/):
 | [docs/architecture.md](docs/architecture.md) | System design and technical details |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
 | [docs/api.md](docs/api.md) | REST API documentation |
+| [docs/mcp.md](docs/mcp.md) | MCP server, tokens, client setup |
 | [docs/envs.md](docs/envs.md) | Environment variables reference |
 | [test/AGENTS.md](test/AGENTS.md) | Test suites and helpers |
+
+## MCP (agent notes)
+
+When changing MCP auth, tokens, or tools, read [docs/mcp.md](docs/mcp.md) for product behaviour; keep this section for code locations and tests.
 
 ## References
 
