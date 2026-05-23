@@ -1,6 +1,6 @@
 # MCP in HydraSRT
 
-HydraSRT exposes a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for external clients (Cursor, Claude Desktop, and similar tools). Through MCP, an assistant can read route data without manually copying it from the UI.
+HydraSRT exposes a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for external clients (Cursor, Claude Desktop, and similar tools). Through MCP, an assistant can manage routes, inspect logs and node stats, and perform other curated operations without copying data from the UI.
 
 This document describes what is implemented in the project as of the current version.
 
@@ -14,7 +14,7 @@ This document describes what is implemented in the project as of the current ver
 | Transport | Streamable HTTP at the **`/mcp`** endpoint |
 | Authentication | Bearer tokens from the `tokens` table (separate from the UI session) |
 | Token management | REST API `/api/tokens` + **Settings → MCP tokens** tab (`/settings/tokens`) |
-| Tools | One tool: `list_routes` |
+| Tools | **43 curated tools** (routes, sources, destinations, tags, interfaces, nodes, observability) |
 
 ---
 
@@ -25,13 +25,14 @@ flowchart LR
   Client[MCP client] -->|HTTP Bearer| McpAuth[McpAuth plug]
   McpAuth -->|hash lookup in DB| Hermes[Hermes StreamableHTTP]
   Hermes --> Server[HydraSrt.Mcp.Server]
-  Server --> Db[(SQLite / tokens + routes)]
+  Server --> Registry[HydraSrt.Mcp.ToolRegistry]
+  Registry --> Db[(SQLite / DuckDB analytics)]
 ```
 
 1. **Phoenix** accepts requests at `/mcp`.
 2. **`HydraSrtWeb.Plugs.McpAuth`** validates the `Authorization: Bearer <token>` header.
 3. **`Hermes.Server.Transport.StreamableHTTP.Plug`** handles the MCP protocol (JSON-RPC, SSE).
-4. **`HydraSrt.Mcp.Server`** registers tools and serves tool calls.
+4. **`HydraSrt.Mcp.Server`** delegates to **`HydraSrt.Mcp.ToolRegistry`**, which dispatches to domain modules (`Db`, `HydraSrt`, `Analytics`, `SystemInterfaces`, `NodeStats`) without HTTP self-calls.
 
 The MCP server starts with the application (`HydraSrt.Application`), alongside `Hermes.Server.Registry`.
 
@@ -121,20 +122,136 @@ After changes, restart the MCP client or reconnect the server.
 
 - Without an `Authorization` header — `401`.
 - With an invalid token — `401`.
-- With a valid MCP token — the client completes MCP initialization and sees the `list_routes` tool.
+- With a valid MCP token — the client completes MCP initialization and sees **43 tools** (see catalog below).
 - A UI session token does **not** work for `/mcp`.
 
 ---
 
-## Available tools
+## Response contract
 
-### `list_routes`
+MCP tools return structured JSON via Hermes:
 
-- **Description:** returns the route list (same data as `GET /api/routes`, including destinations).
-- **Parameters:** none (`input_schema: {}`).
-- **Response:** JSON with `data` (array of routes) and `meta` (`page`, `limit`, `total`).
+- **Success:** `{"data": ...}` in most cases. List endpoints may also include `"meta"` (pagination).
+- **Errors:** `{"error": "message"}` or `{"errors": {...}}` for validation failures.
+- **Node tools:** REST returns raw JSON for nodes; MCP normalizes into `{"data": ...}` for consistency.
+- **Unknown tool:** structured error `{"error": "Unknown tool: <name>"}` with `isError: true`.
 
-The implementation reads from `HydraSrt.Db` directly, without a separate HTTP call to the REST API.
+Payload field shapes match [docs/api.md](api.md) where applicable.
+
+---
+
+## Tool contracts
+
+### Scoped endpoints
+
+All **source** and **destination** tools require **`route_id`** in addition to entity IDs. MCP uses `destination_id` (REST paths use `dest_id`).
+
+### Time ranges (analytics / logs)
+
+Supported `window` values: `last_30_min`, `last_hour`, `last_6_hour`, `last_24_hour`, or custom **`from` + `to`** (ISO8601).
+
+**`window: live` is not supported.** The UI converts “live” to rolling `from`/`to` client-side. MCP clients must send explicit `from` and `to` for polling (for example, the last 5 minutes).
+
+### Nodes
+
+- **`get_self_node`** — local node only; no `node_id` parameter.
+- **`get_node_analytics`** — `node_id` must match the `host` field from `list_nodes` / `get_self_node`.
+
+### Probes
+
+**`test_route_source`** and **`test_source`** run an active ffprobe network probe and **may block up to 15 seconds**.
+
+### Out of scope
+
+MCP token CRUD, backup/restore, WebSocket live push, signal generation, pipeline kill, and UI login remain REST/UI only. See [docs/api.md](api.md) for those endpoints.
+
+---
+
+## Available tools (43)
+
+Implementation reads from `HydraSrt.Db` and related modules directly (no internal HTTP calls).
+
+### Routes (10)
+
+| Tool | Description |
+|------|-------------|
+| `list_routes` | List routes (`page`, `limit`, `sort_by` optional) |
+| `get_route` | Route by `route_id` (includes sources and destinations) |
+| `create_route` | Create route (`route` object) |
+| `update_route` | Update route (`route_id`, `route`) |
+| `delete_route` | Delete route (`route_id`) |
+| `start_route` | Start pipeline (`route_id`) |
+| `stop_route` | Stop pipeline (`route_id`) |
+| `restart_route` | Restart pipeline (`route_id`) |
+| `switch_route_source` | Switch active source (`route_id`, `source_id`) |
+| `test_route_source` | Probe route source config (`route` object; up to 15s) |
+
+### Sources (7) — require `route_id`
+
+| Tool | Description |
+|------|-------------|
+| `list_sources` | List sources for a route |
+| `get_source` | Get source (`source_id`) |
+| `create_source` | Create source (`source` object) |
+| `update_source` | Update source (`source_id`, `source`) |
+| `delete_source` | Delete source (`source_id`) |
+| `reorder_sources` | Reorder sources (`source_ids` array) |
+| `test_source` | Probe saved source (`source_id`; up to 15s) |
+
+### Destinations (5) — require `route_id`
+
+| Tool | Description |
+|------|-------------|
+| `list_destinations` | List destinations for a route |
+| `get_destination` | Get destination (`destination_id`) |
+| `create_destination` | Create destination (`destination` object) |
+| `update_destination` | Update destination (`destination_id`, `destination`) |
+| `delete_destination` | Delete destination (`destination_id`) |
+
+### Tags (4)
+
+| Tool | Description |
+|------|-------------|
+| `list_tags` | List route tags |
+| `create_tag` | Create tag (`tag` object with `name`) |
+| `update_tag` | Update tag (`tag_id`, `tag`) |
+| `delete_tag` | Delete tag (`tag_id`) |
+
+### Interfaces (8)
+
+| Tool | Description |
+|------|-------------|
+| `list_interfaces` | Configured interface aliases (SQLite) |
+| `get_interface` | Get configured interface (`interface_id`) |
+| `create_interface` | Create alias (`interface` object) |
+| `update_interface` | Update alias (`interface_id`, `interface`) |
+| `delete_interface` | Delete alias (`interface_id`) |
+| `list_system_interfaces` | OS interfaces from ifconfig (`sys_name`, `ip`, …) |
+| `get_system_interface` | One OS interface by `sys_name` |
+| `get_system_interfaces_raw` | Raw ifconfig text |
+
+The `ip` field is `"-"` when no address was parsed. IPv6-only interfaces may show an IPv6 value per the parser.
+
+### Nodes (3)
+
+| Tool | Description |
+|------|-------------|
+| `list_nodes` | Cluster nodes with CPU/RAM/network (local node today) |
+| `get_self_node` | Local node snapshot (no parameters) |
+| `get_node_analytics` | Node metrics time-series (`node_id`, time range) |
+
+### Observability (6)
+
+| Tool | Description |
+|------|-------------|
+| `get_route_events` | Route event log (`route_id`, time range, filters) |
+| `get_route_pipeline_logs` | GStreamer pipeline logs (`route_id`, time range) |
+| `get_route_pipeline_log_distinct` | Distinct log values (`route_id`, `column`: `level` or `category`) |
+| `get_routes_status_history` | Route status change history (optional `route_id`, `status`) |
+| `get_route_analytics` | Route metrics time-series (`route_id`, time range) |
+| `get_routes_status_analytics` | Fleet status time-series (time range) |
+
+WebSocket live stats from the UI are **not** replicated over MCP; poll analytics/log tools instead.
 
 ---
 
@@ -147,6 +264,7 @@ The implementation reads from `HydraSrt.Db` directly, without a separate HTTP ca
 | UI session vs MCP | Different tables / checks; not interchangeable |
 | Revocation | `DELETE /api/tokens/:id` — immediate |
 | Empty token list | `/mcp` unavailable to everyone (all requests `401`) |
+| Token scope | A valid MCP token grants the same operational power as the REST API for curated tools: route/source/destination CRUD, start/stop/restart, **ffprobe network probes** (may reach internal hosts, up to ~15s), raw ifconfig, and analytics reads. Treat leaked tokens like leaked admin API keys — revoke immediately and issue narrowly scoped tokens per client. |
 | Hermes | Authentication is our Plug before forward; Hermes only passes `conn.assigns` into the frame |
 
 Secrets in SQLite are not encrypted with Cloak (as in Supavisor): a one-way hash is enough for MCP tokens because plaintext is needed only once by the client.
@@ -157,7 +275,11 @@ Secrets in SQLite are not encrypted with Cloak (as in Supavisor): a one-way hash
 
 | Path | Purpose |
 |------|---------|
-| `lib/hydra_srt/mcp/server.ex` | MCP server, `list_routes` tool |
+| `lib/hydra_srt/mcp/server.ex` | Hermes MCP server entrypoint |
+| `lib/hydra_srt/mcp/tool_registry.ex` | Tool registration and dispatch |
+| `lib/hydra_srt/mcp/helpers.ex` | Response envelopes and error mapping |
+| `lib/hydra_srt/mcp/tools/*.ex` | Tool handlers by domain |
+| `lib/hydra_srt/route_control.ex` | Shared route switch/update logic |
 | `lib/hydra_srt_web/plugs/mcp_auth.ex` | Bearer check for `/mcp` |
 | `lib/hydra_srt_web/controllers/token_controller.ex` | REST CRUD for tokens |
 | `lib/hydra_srt/db.ex` | `create_token`, `authenticate_mcp_token`, … |
@@ -183,9 +305,10 @@ Creates the `tokens` table with indexes on `name` and `hash`.
 
 ## Current limitations
 
-- One tool — `list_routes`; no other MCP primitives (resources, prompts) yet.
+- Curated toolset only — not every REST endpoint has an MCP equivalent (see **Out of scope** above).
+- No MCP resources or prompts yet (tools only).
 - No token expiry (`expires_at`) or `last_used_at` — tokens remain valid until deleted.
-- No Playwright E2E tests for `/settings/tokens` yet; the backend is covered by unit tests.
+- No Playwright E2E tests for `/settings/tokens` yet; MCP tools and auth are covered by unit tests.
 
 ---
 

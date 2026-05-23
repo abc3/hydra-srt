@@ -103,4 +103,10 @@ defmodule HydraSrt.SourceProbeTest do
   test "decode_output/1 returns error when json payload is missing" do
     assert {:error, "ffprobe returned invalid JSON"} = SourceProbe.decode_output("no json here")
   end
+
+  test "client_error trims and truncates probe failures" do
+    assert SourceProbe.client_error("  timeout  ") == "timeout"
+    assert SourceProbe.client_error("") == "Failed to test source connection"
+    assert String.length(SourceProbe.client_error(String.duplicate("x", 600))) == 500
+  end
 end

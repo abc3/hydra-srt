@@ -1,19 +1,18 @@
 defmodule HydraSrtWeb.InterfaceController do
   use HydraSrtWeb, :controller
 
-  alias HydraSrt.Db
-  alias HydraSrt.SystemInterfaces
+  alias HydraSrt.Interfaces
 
   action_fallback HydraSrtWeb.FallbackController
 
   def index(conn, _params) do
-    with {:ok, interfaces} <- Db.get_all_interfaces() do
+    with {:ok, interfaces} <- Interfaces.list() do
       data(conn, interfaces)
     end
   end
 
   def create(conn, %{"interface" => interface_params}) do
-    with {:ok, interface} <- Db.create_interface(interface_params) do
+    with {:ok, interface} <- Interfaces.create(interface_params) do
       conn
       |> put_status(:created)
       |> data(interface)
@@ -21,42 +20,44 @@ defmodule HydraSrtWeb.InterfaceController do
   end
 
   def show(conn, %{"id" => id}) do
-    with {:ok, interface} <- Db.get_interface(id) do
+    with {:ok, interface} <- Interfaces.get(id) do
       data(conn, interface)
     end
   end
 
   def update(conn, %{"id" => id, "interface" => interface_params}) do
-    with {:ok, interface} <- Db.update_interface(id, interface_params) do
+    with {:ok, interface} <- Interfaces.update(id, interface_params) do
       data(conn, interface)
     end
   end
 
   def delete(conn, %{"id" => id}) do
-    with :ok <- Db.delete_interface(id) do
+    with :ok <- Interfaces.delete(id) do
       send_resp(conn, :no_content, "")
     end
   end
 
   def system(conn, _params) do
-    with {:ok, interfaces} <- SystemInterfaces.discover() do
-      data(conn, interfaces)
-    else
-      {:error, reason} ->
+    case Interfaces.list_system() do
+      {:ok, interfaces} ->
+        data(conn, interfaces)
+
+      {:error, message} ->
         conn
         |> put_status(:internal_server_error)
-        |> json(%{error: "Failed to read system interfaces: #{inspect(reason)}"})
+        |> json(%{error: message})
     end
   end
 
   def system_raw(conn, _params) do
-    with {:ok, raw_output} <- SystemInterfaces.discover_raw() do
-      data(conn, %{"raw" => raw_output})
-    else
-      {:error, reason} ->
+    case Interfaces.system_raw() do
+      {:ok, raw_output} ->
+        data(conn, %{"raw" => raw_output})
+
+      {:error, message} ->
         conn
         |> put_status(:internal_server_error)
-        |> json(%{error: "Failed to read raw ifconfig output: #{inspect(reason)}"})
+        |> json(%{error: message})
     end
   end
 
