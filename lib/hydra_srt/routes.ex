@@ -67,9 +67,9 @@ defmodule HydraSrt.Routes do
     RouteControl.switch_route_source(route_id, source_id)
   end
 
-  @spec test_source_config(map()) :: {:ok, map()} | {:error, String.t()}
-  def test_source_config(route_params) when is_map(route_params) do
-    case SourceProbe.probe(route_params) do
+  @spec test_source_config(map(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  def test_source_config(route_params, opts \\ []) when is_map(route_params) do
+    case SourceProbe.probe(route_params, opts) do
       {:ok, result} -> {:ok, result}
       {:error, reason} -> {:error, SourceProbe.client_error(reason)}
     end

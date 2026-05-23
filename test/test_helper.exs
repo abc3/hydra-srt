@@ -2,14 +2,24 @@ ExUnit.start()
 
 test_args = System.argv()
 
-e2e_mode_enabled? =
+cli_only_or_include? = fn tag ->
+  Enum.chunk_every(test_args, 2, 1, :discard)
+  |> Enum.any?(fn
+    ["--only", candidate] -> candidate == tag
+    ["--include", candidate] -> candidate == tag
+    _ -> false
+  end)
+end
+
+e2e_mcp_mode_enabled? =
+  System.get_env("E2E_MCP") == "true" or
+    cli_only_or_include?.("e2e_mcp") or cli_only_or_include?.("mcp_probe")
+
+e2e_route_mode_enabled? =
   System.get_env("E2E") == "true" or
-    Enum.chunk_every(test_args, 2, 1, :discard)
-    |> Enum.any?(fn
-      ["--only", tag] -> String.starts_with?(tag, "e2e")
-      ["--include", tag] -> String.starts_with?(tag, "e2e")
-      _ -> false
-    end)
+    cli_only_or_include?.("e2e") or cli_only_or_include?.("encrypted")
+
+shared_http_e2e_mode? = e2e_route_mode_enabled? or e2e_mcp_mode_enabled?
 
 # Opt-in helpers for debugging hangs:
 # - TRACE=true       -> prints every test name as it runs
@@ -43,11 +53,18 @@ end
 ]
 |> Enum.each(&Code.require_file/1)
 
-excludes = []
+excludes = [mcp_probe: true]
 
 excludes =
-  if not e2e_mode_enabled? do
+  if not e2e_route_mode_enabled? do
     [e2e: true] ++ excludes
+  else
+    excludes
+  end
+
+excludes =
+  if not e2e_mcp_mode_enabled? do
+    [e2e_mcp: true] ++ excludes
   else
     excludes
   end
@@ -63,7 +80,7 @@ if excludes != [] do
   ExUnit.configure(exclude: excludes)
 end
 
-if not e2e_mode_enabled? do
+if not shared_http_e2e_mode? do
   # Unit tests use SQL Sandbox.
   if Code.ensure_loaded?(HydraSrt.Repo) and function_exported?(HydraSrt.Repo, :__adapter__, 0) do
     case Process.whereis(HydraSrt.Repo) do
@@ -76,12 +93,14 @@ if not e2e_mode_enabled? do
   end
 end
 
-if e2e_mode_enabled? do
+if shared_http_e2e_mode? do
   # One shared HTTP endpoint + one SQLite file: parallel ExUnit cases contend on DB
   # locks and route lifecycle, causing flaky "database is locked" / pipeline timeouts.
   ExUnit.configure(max_cases: 1)
+end
 
-  # E2E suite needs the real HTTP server + API auth
+if e2e_route_mode_enabled? do
+  # Route E2E suite needs ffmpeg/SRT and pipeline cleanup.
   HydraSrt.TestSupport.E2EHelpers.ensure_e2e_prereqs!()
 
   if not HydraSrt.TestSupport.E2EHelpers.ffmpeg_supports_srt_encryption?() do
@@ -91,6 +110,12 @@ if e2e_mode_enabled? do
 
     ExUnit.configure(exclude: [:encrypted])
   end
+
+  ExUnit.after_suite(fn _ -> HydraSrt.TestSupport.E2EHelpers.kill_all_pipelines!() end)
+end
+
+if e2e_mcp_mode_enabled? do
+  HydraSrt.TestSupport.E2EHelpers.ensure_e2e_mcp_prereqs!()
 
   ExUnit.after_suite(fn _ -> HydraSrt.TestSupport.E2EHelpers.kill_all_pipelines!() end)
 end

@@ -5,14 +5,18 @@ defmodule HydraSrt.SourceProbe do
 
   alias HydraSrt.RouteHandler
 
-  @ffprobe_timeout_ms 15_000
+  @default_ffprobe_timeout_ms 15_000
   @passphrase_mask "[REDACTED]"
 
-  @spec probe(map()) :: {:ok, map()} | {:error, atom() | binary()}
-  def probe(route_params) when is_map(route_params) do
+  @spec probe(map(), keyword()) :: {:ok, map()} | {:error, atom() | binary()}
+  def probe(route_params, opts \\ [])
+
+  def probe(route_params, opts) when is_map(route_params) do
+    timeout_ms = Keyword.get(opts, :timeout_ms, @default_ffprobe_timeout_ms)
+
     with {:ok, probe_uri} <- build_probe_uri(route_params),
          {:ok, ffprobe_path} <- find_ffprobe(),
-         {:ok, raw_output} <- run_ffprobe(ffprobe_path, probe_uri),
+         {:ok, raw_output} <- run_ffprobe(ffprobe_path, probe_uri, timeout_ms),
          {:ok, parsed_output} <- decode_output(raw_output) do
       Logger.info("SourceProbe: ffprobe succeeded uri=#{sanitize_uri(probe_uri)}")
 
@@ -26,7 +30,7 @@ defmodule HydraSrt.SourceProbe do
     end
   end
 
-  def probe(_), do: {:error, :invalid_source}
+  def probe(_route_params, _opts), do: {:error, :invalid_source}
 
   @spec client_error(term()) :: String.t()
   def client_error(reason) do
@@ -89,7 +93,8 @@ defmodule HydraSrt.SourceProbe do
     end
   end
 
-  defp run_ffprobe(:ffprobe, probe_uri) do
+  def run_ffprobe(:ffprobe, probe_uri, timeout_ms)
+      when is_integer(timeout_ms) and timeout_ms > 0 do
     sanitized_uri = sanitize_uri(probe_uri)
 
     Logger.info("SourceProbe: starting ffprobe uri=#{sanitized_uri}")
@@ -101,7 +106,7 @@ defmodule HydraSrt.SourceProbe do
         System.cmd("ffprobe", ffprobe_args(probe_uri), stderr_to_stdout: true)
       end)
 
-    case Task.yield(task, @ffprobe_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, {output, 0}} ->
         Logger.debug("SourceProbe: ffprobe completed successfully uri=#{sanitized_uri}")
         {:ok, output}
@@ -120,10 +125,10 @@ defmodule HydraSrt.SourceProbe do
 
       _ ->
         Logger.warning(
-          "SourceProbe: ffprobe timed out uri=#{sanitized_uri} timeout_ms=#{@ffprobe_timeout_ms}"
+          "SourceProbe: ffprobe timed out uri=#{sanitized_uri} timeout_ms=#{timeout_ms}"
         )
 
-        {:error, "ffprobe timed out after #{@ffprobe_timeout_ms}ms"}
+        {:error, "ffprobe timed out after #{timeout_ms}ms"}
     end
   end
 

@@ -2,6 +2,7 @@ defmodule HydraSrt.Mcp.ToolRegistry do
   @moduledoc false
 
   alias HydraSrt.Mcp.Helpers
+  alias HydraSrt.Mcp.InputSchema
   alias HydraSrt.Mcp.Tools.Destinations
   alias HydraSrt.Mcp.Tools.Interfaces
   alias HydraSrt.Mcp.Tools.Logs
@@ -40,7 +41,7 @@ defmodule HydraSrt.Mcp.ToolRegistry do
     Enum.reduce(definitions(), frame, fn definition, acc_frame ->
       Hermes.Server.Frame.register_tool(acc_frame, definition.name,
         description: definition.description,
-        input_schema: definition.input_schema
+        input_schema: InputSchema.to_hermes(definition.input_schema)
       )
     end)
   end

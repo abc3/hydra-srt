@@ -308,7 +308,7 @@ Creates the `tokens` table with indexes on `name` and `hash`.
 - Curated toolset only — not every REST endpoint has an MCP equivalent (see **Out of scope** above).
 - No MCP resources or prompts yet (tools only).
 - No token expiry (`expires_at`) or `last_used_at` — tokens remain valid until deleted.
-- No Playwright E2E tests for `/settings/tokens` yet; MCP tools and auth are covered by unit tests.
+- No Playwright E2E tests for `/settings/tokens` yet; MCP tools and auth are covered by unit tests and opt-in HTTP E2E tests under `test/e2e_mcp/` (`E2E_MCP=true mix test --only e2e_mcp`).
 
 ---
 

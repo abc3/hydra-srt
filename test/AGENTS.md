@@ -15,6 +15,7 @@ Stable, reusable patterns for unit, integration, and E2E tests across Elixir, th
 |-------|---------|----------|--------|
 | Elixir unit | `mix test` | `make test_backend` | `elixir_test` |
 | Elixir E2E | `E2E=true mix test --only e2e` | `make test_e2e` | `elixir_e2e_test` |
+| Elixir MCP E2E | `E2E_MCP=true mix test --only e2e_mcp` | `make test_e2e_mcp` | `elixir_e2e_mcp_test` |
 | Elixir E2E encrypted | `E2E=true mix test --only encrypted` | `make test_e2e_encrypted` | — |
 | Native unit (Rust) | `cd native && cargo test` | `make test_rs_native_unit` | `rs_native_unit_test` |
 | Native E2E | `NATIVE_E2E=true mix test test/native_e2e` | `make test_rs_native_e2e` | `rs_native_e2e_test` |
@@ -27,6 +28,7 @@ Stable, reusable patterns for unit, integration, and E2E tests across Elixir, th
 
 - **Elixir unit** — `mix deps.get`, native binary built for compile (`mix compile` triggers `compile.rs_native`).
 - **Elixir E2E** — `ffmpeg`, `srt-tools` (or `srt-live-transmit`) in PATH; native pipeline binary; see `HydraSrt.TestSupport.E2EHelpers`.
+- **Elixir MCP E2E** — native pipeline binary and HTTP endpoint only (no ffmpeg/SRT streaming tools); see `HydraSrt.TestSupport.McpE2EClient` and `test/e2e_mcp/`.
 - **Elixir E2E encrypted** — ffmpeg/libsrt build with SRT passphrase support; otherwise `:encrypted` tests are auto-excluded.
 - **Native unit/E2E** — GStreamer and SRT dev libraries (see CI workflow `apt-get` steps).
 - **Web unit** — `cd web_app && npm ci`.
@@ -38,6 +40,9 @@ Stable, reusable patterns for unit, integration, and E2E tests across Elixir, th
 mix test test/hydra_srt/route_handler_test.exs
 mix test test/hydra_srt/route_handler_test.exs:42
 E2E=true mix test test/e2e/srt_pipeline_e2e_test.exs
+E2E_MCP=true mix test --only e2e_mcp
+E2E_MCP=true mix test --only e2e_mcp --include mcp_probe
+mix test test/e2e_mcp/auth_test.exs
 mix test test/hydra_srt/db_tokens_test.exs test/hydra_srt_web/controllers/token_controller_test.exs
 cd web_app && npm run test:unit:watch
 TRACE=true mix test
@@ -55,6 +60,11 @@ E2E_DEBUG_LOGS=true E2E=true mix test --only e2e
 | `HydraSrt.DataCase` | Ecto tests with SQL Sandbox |
 | `HydraSrtWeb.ConnCase` | Phoenix `ConnTest` + sandbox |
 | `HydraSrt.TestSupport.E2EHelpers` | E2E prereqs: app/endpoint start, ffmpeg/SRT probes, CI-aware timeouts, pipeline cleanup |
+| `HydraSrt.TestSupport.McpE2ECase` | MCP E2E ExUnit template (`test/e2e_mcp/`): Hermes client, fixtures, assertions |
+| `HydraSrt.TestSupport.McpE2EProbeCase` | ffprobe probe MCP E2E template (`:mcp_probe` only; opt-in via `--include mcp_probe`) |
+| `HydraSrt.TestSupport.McpE2EClient` | Hermes `Client` over Streamable HTTP for `/mcp` |
+| `HydraSrt.TestSupport.McpE2EFixtures` | Seeded route/source/destination/tag/interface context for tool calls |
+| `HydraSrt.TestSupport.McpE2EAssertions` | Auth rejection and MCP tool response assertions |
 | `HydraSrt.ApiFixtures` | API-level test data (`test/support/fixtures/api_fixtures.ex`) |
 | `HydraSrt.DbFixtures` | DB fixtures (`test/support/fixtures/db_fixtures.ex`) |
 
@@ -76,14 +86,17 @@ Configured in `test/test_helper.exs`:
 | Tag / mode | Default | Enable |
 |------------|---------|--------|
 | `:e2e` | excluded | `E2E=true` or `mix test --only e2e` |
+| `:e2e_mcp` | excluded | `E2E_MCP=true` or `mix test --only e2e_mcp` |
+| `:mcp_probe` | excluded | `E2E_MCP=true mix test --only e2e_mcp --include mcp_probe` (ffprobe probes; ~30s extra) |
 | `:native_e2e` | excluded | `NATIVE_E2E=true` |
 | `:encrypted` | excluded if ffmpeg lacks SRT encryption | `E2E=true mix test --only encrypted` |
 
-**E2E mode behaviour:**
+**E2E mode behaviour (route and MCP):**
 
 - `ExUnit.configure(max_cases: 1)` — shared SQLite + HTTP endpoint; no parallel E2E.
-- `HydraSrt.TestSupport.E2EHelpers.ensure_e2e_prereqs!()` runs before the suite.
-- `ExUnit.after_suite/1` kills leftover pipelines.
+- Route E2E: `HydraSrt.TestSupport.E2EHelpers.ensure_e2e_prereqs!()` (ffmpeg, native, pipeline cleanup).
+- MCP E2E: `HydraSrt.TestSupport.E2EHelpers.ensure_e2e_mcp_prereqs!()` (lighter; no ffmpeg/SRT streaming tools).
+- `ExUnit.after_suite/1` kills leftover pipelines after route E2E.
 
 **Unit mode:** SQL Sandbox in manual mode when Repo is running.
 
@@ -108,7 +121,7 @@ Configured in `test/test_helper.exs`:
 
 - `HydraSrt.RouteHandler` — route lifecycle, failover
 - `HydraSrtWeb` controllers and `RealtimeChannel`
-- MCP tokens and `/mcp` auth — `test/hydra_srt/db_tokens_test.exs`, `test/hydra_srt_web/controllers/token_controller_test.exs`; see [../docs/mcp.md](../docs/mcp.md)
+- MCP tokens and `/mcp` auth — `test/hydra_srt/db_tokens_test.exs`, `test/hydra_srt_web/controllers/token_controller_test.exs`, `test/e2e_mcp/` (HTTP protocol E2E); see [../docs/mcp.md](../docs/mcp.md)
 - E2E SRT/UDP pipelines under `test/e2e/`
 - Native pipeline under `test/native_e2e/`
 - Stats/analytics collectors
