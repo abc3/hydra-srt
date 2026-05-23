@@ -19,15 +19,30 @@
 
 [![GitHub License](https://img.shields.io/github/license/abc3/hydra-srt)](https://github.com/abc3/hydra-srt/blob/main/LICENSE)
 
-| Protocol/Feature | Source | Destination | Status  |
-| ---------------- | ------ | ----------- | ------- |
-| SRT              | ✔      | ✔           | Beta    |
-| UDP              | ✔      | ✔           | Beta    |
-| RTSP             | -      | -           | Planned |
-| RTMP             | -      | -           | Planned |
-| HLS              | -      | -           | Planned |
-| WebRTC           | -      | -           | Planned |
-| MoQ              | -      | -           | Planned |
+### Supported transports
+
+| Transport | Input | Output |
+| --------- | ----- | ------ |
+| SRT       | ✔     | ✔      |
+| UDP       | ✔     | ✔      |
+
+### Planned transports
+
+| Transport | Input | Output |
+| --------- | ----- | ------ |
+| RTMP      | —     | —      |
+| HLS       | —     | —      |
+| WebRTC    | —     | —      |
+| MoQ       | —     | —      |
+
+### Capabilities
+
+| Capability | Notes | Status |
+| ---------- | ----- | ------ |
+| One-to-many distribution | Single source to multiple unicast/multicast outputs | Beta |
+| Reliability | Source failover and reconnection | Beta |
+| Security | SRT passphrase and stream ID | Beta |
+| Observability | Prometheus metrics, route stats, and pipeline logs | Beta |
 
 Missing a feature? [Open an issue](https://github.com/abc3/hydra-srt/issues/new?labels=enhancement).
 
