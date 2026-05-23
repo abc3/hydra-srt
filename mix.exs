@@ -74,6 +74,7 @@ defmodule HydraSrt.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:credence, "~> 0.5.0", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:sobelow, "~> 0.14", only: [:dev, :test], runtime: false, warn_if_outdated: true},
 
       # Benchmarking
       {:benchee, "~> 1.3", only: :dev},
@@ -89,6 +90,18 @@ defmodule HydraSrt.MixProject do
   #     $ mix setup
   #
   # See the documentation for `Mix` for more info on aliases.
+  @sobelow_ignore_files [
+    "config/dev.exs",
+    "config/test.exs",
+    "config/runtime.exs"
+  ]
+
+  defp sobelow_cmd do
+    ignore_files = Enum.join(@sobelow_ignore_files, ",")
+
+    "sobelow --no-config --exit Low --verbose --skip -i Config.HTTPS,Config.Headers --ignore-files #{ignore_files}"
+  end
+
   defp aliases do
     [
       setup: ["deps.get", "ecto.setup"],
@@ -97,11 +110,13 @@ defmodule HydraSrt.MixProject do
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "compile.rs_native": &rs_native_build/1,
       credence: ["credence"],
+      sobelow: [sobelow_cmd()],
       q: ["quality"],
       quality: [
         "format --check-formatted",
         "compile --warnings-as-errors",
         "credo --min-priority higher",
+        "sobelow",
         "dialyzer"
       ]
     ]

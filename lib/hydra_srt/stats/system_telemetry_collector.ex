@@ -236,7 +236,9 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
 
   defp net_rate_measurement_keys do
     NetIfMetrics.rate_metric_keys()
-    |> Enum.into(%{}, fn {key, metric_key} -> {:"#{key}_per_sec", metric_key} end)
+    |> Enum.into(%{}, fn {counter_key, metric_key} ->
+      {NetIfMetrics.rate_counter_key(counter_key), metric_key}
+    end)
   end
 
   defp normalize_metadata(metadata) when is_map(metadata), do: metadata

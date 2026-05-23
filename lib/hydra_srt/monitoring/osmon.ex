@@ -223,7 +223,7 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
   defp merge_network_rates(counters, rate_values) do
     Enum.reduce(NetIfMetrics.counter_keys(), counters, fn key, acc ->
       value = Map.get(rate_values, key)
-      Map.put(acc, :"#{key}_per_sec", value)
+      Map.put(acc, NetIfMetrics.rate_counter_key(key), value)
     end)
   end
 

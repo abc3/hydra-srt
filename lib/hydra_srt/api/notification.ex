@@ -46,7 +46,7 @@ defmodule HydraSrt.Api.Notification do
   end
 
   def validate_config_key(changeset, config, key, label) do
-    value = Map.get(config, key) || Map.get(config, String.to_atom(key))
+    value = HydraSrt.Helpers.get_by_string_key_or(config, key)
 
     if is_binary(value) and String.trim(value) != "" do
       changeset

@@ -55,6 +55,7 @@
   "ranch": {:hex, :ranch, "2.2.0", "25528f82bc8d7c6152c57666ca99ec716510fe0925cb188172f41ce93117b1b0", [:make, :rebar3], [], "hexpm", "fa0b99a1780c80218a4197a59ea8d3bdae32fbff7e88527d7d8a4787eff4f8e7"},
   "recon": {:hex, :recon, "2.5.6", "9052588e83bfedfd9b72e1034532aee2a5369d9d9343b61aeb7fbce761010741", [:mix, :rebar3], [], "hexpm", "96c6799792d735cc0f0fd0f86267e9d351e63339cbe03df9d162010cefc26bb0"},
   "sleeplocks": {:hex, :sleeplocks, "1.1.3", "96a86460cc33b435c7310dbd27ec82ca2c1f24ae38e34f8edde97f756503441a", [:rebar3], [], "hexpm", "d3b3958552e6eb16f463921e70ae7c767519ef8f5be46d7696cc1ed649421321"},
+  "sobelow": {:hex, :sobelow, "0.14.1", "2f81e8632f15574cba2402bcddff5497b413c01e6f094bc0ab94e83c2f74db81", [:mix], [{:jason, "~> 1.0", [hex: :jason, repo: "hexpm", optional: false]}], "hexpm", "8fac9a2bd90fdc4b15d6fca6e1608efb7f7c600fa75800813b794ee9364c87f2"},
   "sourceror": {:hex, :sourceror, "1.12.0", "da354c5f35aad3cc1132f5d5b0d8437d865e2661c263260480bab51b5eedb437", [:mix], [], "hexpm", "755703683bd014ebcd5de9acc24b68fb874a660a568d1d63f8f98cd8a6ef9cd0"},
   "ssl_verify_fun": {:hex, :ssl_verify_fun, "1.1.7", "354c321cf377240c7b8716899e182ce4890c5938111a1296add3ec74cf1715df", [:make, :mix, :rebar3], [], "hexpm", "fe4c190e8f37401d30167c8c405eda19469f34577987c76dde613e838bbc67f8"},
   "statistex": {:hex, :statistex, "1.0.0", "f3dc93f3c0c6c92e5f291704cf62b99b553253d7969e9a5fa713e5481cd858a5", [:mix], [], "hexpm", "ff9d8bee7035028ab4742ff52fc80a2aa35cece833cf5319009b52f1b5a86c27"},

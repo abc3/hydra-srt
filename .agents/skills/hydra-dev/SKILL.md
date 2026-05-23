@@ -35,7 +35,7 @@ Actionable dev and test commands for HydraSRT. Stable reference: `AGENTS.md`, `t
 ```bash
 mix q
 # or: mix quality
-# format --check-formatted, compile --warnings-as-errors, credo, dialyzer
+# format --check-formatted, compile --warnings-as-errors, credo, sobelow, dialyzer
 ```
 
 First-time Dialyzer: `mix dialyzer` (builds PLT).

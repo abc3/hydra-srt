@@ -41,8 +41,8 @@ defmodule HydraSrtWeb.InitController do
       nil ->
         "unavailable"
 
-      rustc_path ->
-        case System.cmd(rustc_path, ["--version"], stderr_to_stdout: true) do
+      _rustc_path ->
+        case System.cmd("rustc", ["--version"], stderr_to_stdout: true) do
           {output, 0} -> String.trim(output)
           _ -> "unavailable"
         end
