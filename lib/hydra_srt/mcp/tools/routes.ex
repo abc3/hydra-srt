@@ -4,8 +4,6 @@ defmodule HydraSrt.Mcp.Tools.Routes do
   alias HydraSrt.Mcp.Helpers
   alias HydraSrt.Routes
 
-  @probe_description_suffix " Active network probe via ffprobe; may block up to 15 seconds."
-
   @spec definitions() :: [map()]
   def definitions do
     [
@@ -77,7 +75,7 @@ defmodule HydraSrt.Mcp.Tools.Routes do
       %{
         name: "test_route_source",
         description:
-          "Test a route source configuration with ffprobe." <> @probe_description_suffix,
+          "Test a route source configuration with ffprobe." <> Helpers.probe_description_suffix(),
         input_schema:
           object_schema(%{"route" => object_prop("Route/source attributes")}, ["route"])
       }
@@ -165,7 +163,8 @@ defmodule HydraSrt.Mcp.Tools.Routes do
 
   def call("test_route_source", args) do
     with {:ok, route} <- map_param(args, "route"),
-         result <- Routes.test_source_config(route) do
+         result <-
+           Routes.test_source_config(route, timeout_ms: Helpers.probe_timeout_ms()) do
       {:ok, Helpers.from_result(result)}
     end
   end

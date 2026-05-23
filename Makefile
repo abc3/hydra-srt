@@ -150,6 +150,10 @@ test_rs_native_e2e:
 test_e2e_encrypted:
 	E2E=true mix test --only encrypted
 
+.PHONY: test_e2e_mcp
+test_e2e_mcp:
+	E2E_MCP=true mix test --only e2e_mcp
+
 .PHONY: test_backend
 test_backend:
 	mix test
@@ -190,27 +194,32 @@ test_all:
 .PHONY: test_ci_local
 test_ci_local:
 	@echo "Running CI-equivalent local suite"
-	@echo "1/6 Native unit tests"
+	@echo "1/7 Native unit tests"
 	cd native && cargo test -- --nocapture
-	@echo "2/6 Native E2E tests"
+	@echo "2/7 Native E2E tests"
 	MIX_ENV=test NATIVE_E2E=true mix deps.get
 	MIX_ENV=test NATIVE_E2E=true mix deps.compile
 	MIX_ENV=test NATIVE_E2E=true $(MAKE) test_rs_native_e2e
-	@echo "3/6 JS unit tests"
+	@echo "3/7 JS unit tests"
 	cd web_app && npm ci && npm run test:unit
-	@echo "4/6 JS E2E tests"
+	@echo "4/7 JS E2E tests"
 	MIX_ENV=test mix deps.get
 	MIX_ENV=test mix deps.compile
 	cd native && cargo build
 	cd web_app && npx playwright install --with-deps && npm run test:e2e
-	@echo "5/6 Elixir unit tests"
+	@echo "5/7 Elixir unit tests"
 	MIX_ENV=test mix deps.get
 	MIX_ENV=test mix deps.compile
 	MIX_ENV=test mix compile --warnings-as-errors
 	MIX_ENV=test mix format --check-formatted
 	MIX_ENV=test mix sobelow
 	MIX_ENV=test mix test
-	@echo "6/6 Elixir E2E tests"
+	@echo "6/7 Elixir MCP E2E tests"
+	cd native && cargo build
+	mkdir -p priv/native/build
+	cp native/target/debug/hydra_srt_pipeline priv/native/build/
+	@$(MAKE) test_e2e_mcp
+	@echo "7/7 Elixir E2E tests"
 	MIX_ENV=test E2E=true mix deps.get
 	cd native && cargo build
 	mkdir -p priv/native/build

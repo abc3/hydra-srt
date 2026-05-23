@@ -96,6 +96,23 @@ defmodule HydraSrt.Mcp.Helpers do
   @spec analytics_params(map()) :: map()
   def analytics_params(args) when is_map(args), do: HydraSrt.AnalyticsParams.normalize(args)
 
+  @spec probe_timeout_ms() :: pos_integer()
+  def probe_timeout_ms do
+    Application.get_env(:hydra_srt, :mcp_probe_timeout_ms, 3_500)
+  end
+
+  @spec probe_timeout_seconds() :: pos_integer()
+  def probe_timeout_seconds do
+    probe_timeout_ms()
+    |> div(1_000)
+    |> max(1)
+  end
+
+  @spec probe_description_suffix() :: String.t()
+  def probe_description_suffix do
+    " Active network probe via ffprobe; may block up to #{probe_timeout_seconds()} seconds."
+  end
+
   @spec map_with_error({:error, term()}, (term() -> Response.t())) :: {:ok, Response.t()}
   def map_with_error({:error, %{type: :tool} = response}, _handler), do: {:ok, response}
 

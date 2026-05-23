@@ -33,10 +33,11 @@ defmodule HydraSrt.Sources do
       when is_binary(route_id) and is_list(source_ids),
       do: Db.reorder_sources(route_id, source_ids)
 
-  @spec test(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def test(route_id, source_id) when is_binary(route_id) and is_binary(source_id) do
+  @spec test(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def test(route_id, source_id, opts \\ [])
+      when is_binary(route_id) and is_binary(source_id) do
     with {:ok, source} <- Db.get_source(route_id, source_id) do
-      Routes.test_source_config(source)
+      Routes.test_source_config(source, opts)
     end
   end
 end

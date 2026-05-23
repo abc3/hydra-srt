@@ -212,3 +212,46 @@ jobs:
         cp native/target/debug/hydra_srt_pipeline priv/native/build/
     - name: Run E2E Tests
       run: mix test --only e2e
+
+  elixir_e2e_mcp_test:
+    name: Elixir MCP E2E Tests
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+      E2E_MCP: true
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install native dependencies (GStreamer / SRT for compile)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y pkg-config \
+          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+          gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+          libsrt-openssl-dev
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: native
+    - name: Set up Elixir
+      uses: erlef/setup-beam@v1
+      with:
+        elixir-version: '1.18.4'
+        otp-version: '27.3'
+    - name: Restore dependencies cache
+      uses: actions/cache@v3
+      with:
+        path: deps
+        key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+        restore-keys: ${{ runner.os }}-mix-
+    - name: Install dependencies
+      run: mix deps.get
+    - name: Build Rust Native App
+      run: cd native && cargo build
+    - name: Prepare Native Binary
+      run: |
+        mkdir -p priv/native/build
+        cp native/target/debug/hydra_srt_pipeline priv/native/build/
+    - name: Run MCP E2E Tests
+      run: mix test --only e2e_mcp

@@ -40,6 +40,10 @@ defmodule HydraSrt.DbFixtures do
     default_position = Map.get(attrs, "position") || Map.get(attrs, :position) || 0
     route_port_seed = abs(:erlang.phash2(route_id || "route")) |> rem(20_000)
 
+    unique_port =
+      10_000 + route_port_seed + default_position * 1000 +
+        rem(System.unique_integer([:positive]), 1000)
+
     attrs =
       attrs
       |> Enum.into(%{
@@ -48,7 +52,7 @@ defmodule HydraSrt.DbFixtures do
         "name" => "primary",
         "schema" => "UDP",
         "host" => "127.0.0.1",
-        "port" => 5000 + default_position + route_port_seed
+        "port" => unique_port
       })
 
     {:ok, source} = HydraSrt.Db.create_source(route_id, attrs)
@@ -60,7 +64,8 @@ defmodule HydraSrt.DbFixtures do
   """
   def destination_fixture(route, attrs \\ %{}) do
     route_id = if is_map(route), do: route["id"] || route.id, else: route
-    unique_port = 10_000 + rem(System.unique_integer([:positive]), 50_000)
+    route_port_seed = abs(:erlang.phash2(route_id || "route")) |> rem(20_000)
+    unique_port = 10_000 + route_port_seed + rem(System.unique_integer([:positive]), 1000)
 
     attrs =
       attrs

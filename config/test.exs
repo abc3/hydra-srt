@@ -2,14 +2,24 @@ import Config
 
 test_args = System.argv()
 
-e2e_mode_enabled? =
+cli_only_or_include? = fn tag ->
+  Enum.chunk_every(test_args, 2, 1, :discard)
+  |> Enum.any?(fn
+    ["--only", candidate] -> candidate == tag
+    ["--include", candidate] -> candidate == tag
+    _ -> false
+  end)
+end
+
+e2e_mcp_mode_enabled? =
+  System.get_env("E2E_MCP") == "true" or
+    cli_only_or_include?.("e2e_mcp") or cli_only_or_include?.("mcp_probe")
+
+e2e_route_mode_enabled? =
   System.get_env("E2E") == "true" or
-    Enum.chunk_every(test_args, 2, 1, :discard)
-    |> Enum.any?(fn
-      ["--only", tag] -> String.starts_with?(tag, "e2e")
-      ["--include", tag] -> String.starts_with?(tag, "e2e")
-      _ -> false
-    end)
+    cli_only_or_include?.("e2e") or cli_only_or_include?.("encrypted")
+
+shared_http_e2e_mode? = e2e_route_mode_enabled? or e2e_mcp_mode_enabled?
 
 # Configure your database
 #
@@ -17,7 +27,7 @@ e2e_mode_enabled? =
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
 test_database_path =
-  if e2e_mode_enabled? do
+  if shared_http_e2e_mode? do
     System.get_env("E2E_DATABASE_PATH") ||
       Path.join(System.tmp_dir!(), "hydra_srt_e2e_#{System.unique_integer([:positive])}.db")
   else
@@ -35,14 +45,15 @@ config :hydra_srt, HydraSrt.Repo,
   # Note: `mix test` alias runs `ecto.create` and `ecto.migrate`, so a fresh DB path
   # per run is safe and keeps the suite deterministic.
   database: test_database_path,
-  pool_size: if(e2e_mode_enabled?, do: 2, else: 5),
-  pool: if(e2e_mode_enabled?, do: DBConnection.ConnectionPool, else: Ecto.Adapters.SQL.Sandbox),
-  queue_target: if(e2e_mode_enabled?, do: 5_000, else: 50),
-  queue_interval: if(e2e_mode_enabled?, do: 5_000, else: 1_000),
+  pool_size: if(shared_http_e2e_mode?, do: 2, else: 5),
+  pool:
+    if(shared_http_e2e_mode?, do: DBConnection.ConnectionPool, else: Ecto.Adapters.SQL.Sandbox),
+  queue_target: if(shared_http_e2e_mode?, do: 5_000, else: 50),
+  queue_interval: if(shared_http_e2e_mode?, do: 5_000, else: 1_000),
   journal_mode: :wal,
   # E2E shares one DB across HTTP + Repo; longer busy wait reduces `database is locked`
   # under load (see test_helper E2E max_cases: 1 as well).
-  busy_timeout: if(e2e_mode_enabled?, do: 15_000, else: 2_000)
+  busy_timeout: if(shared_http_e2e_mode?, do: 15_000, else: 2_000)
 
 config :hydra_srt,
   analytics_database_path:

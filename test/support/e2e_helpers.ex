@@ -38,6 +38,18 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     :ok
   end
 
+  def ensure_e2e_mcp_prereqs! do
+    kill_all_pipelines!()
+    ensure_native_built!()
+    ensure_api_auth_config!()
+    ensure_repo_config_for_e2e!()
+    ensure_app_started!()
+    ensure_cachex_started!()
+    ensure_repo_migrated_for_e2e!()
+    ensure_endpoint_server_started!()
+    :ok
+  end
+
   def ensure_app_started! do
     if is_pid(Process.whereis(HydraSrt.Supervisor)) and not repo_started_with_e2e_config?() do
       :ok = Application.stop(:hydra_srt)

@@ -10,7 +10,9 @@ import Config
 config :hydra_srt,
   env: config_env(),
   ecto_repos: [HydraSrt.Repo],
-  generators: [timestamp_type: :utc_datetime, binary_id: true]
+  generators: [timestamp_type: :utc_datetime, binary_id: true],
+  # Hermes streamable-http transport uses a 5s GenServer.call timeout on tool requests.
+  mcp_probe_timeout_ms: 3_500
 
 config :adbc, :drivers, [:duckdb]
 
