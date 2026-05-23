@@ -5,6 +5,12 @@ defmodule HydraSrt.Application do
 
   @impl true
   def start(_type, _args) do
+    Application.put_env(
+      :hydra_srt,
+      :app_started_at,
+      DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    )
+
     demo_enabled? = Application.get_env(:hydra_srt, :demo_data, false)
     HydraSrt.Demo.ensure_requirements!(demo_enabled?)
 

@@ -8,6 +8,9 @@ import { useInit } from '../context/InitContext';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 const { Title } = Typography;
+const ONE_MINUTE_SECONDS = 60;
+const ONE_HOUR_SECONDS = 60 * ONE_MINUTE_SECONDS;
+const ONE_DAY_SECONDS = 24 * ONE_HOUR_SECONDS;
 
 const Settings = () => {
   const location = useLocation();
@@ -55,6 +58,7 @@ const Settings = () => {
   const [notificationsTesting, setNotificationsTesting] = useState(false);
   const [botTokenConfigured, setBotTokenConfigured] = useState(false);
   const [tokenSuffix, setTokenSuffix] = useState(null);
+  const [uptimeNowMs, setUptimeNowMs] = useState(Date.now());
   const fileInputRef = useRef(null);
   const signalFormHydratedRef = useRef(false);
   const notificationsFormHydratedRef = useRef(false);
@@ -77,6 +81,37 @@ const Settings = () => {
       ]);
     }
   }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setUptimeNowMs(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const formatAppUptime = () => {
+    if (!initData.app_started_at) {
+      return 'unknown';
+    }
+
+    const startedAtMs = new Date(initData.app_started_at).getTime();
+
+    if (Number.isNaN(startedAtMs) || startedAtMs > uptimeNowMs) {
+      return 'unknown';
+    }
+
+    let totalSeconds = Math.floor((uptimeNowMs - startedAtMs) / 1000);
+    const days = Math.floor(totalSeconds / ONE_DAY_SECONDS);
+    totalSeconds -= days * ONE_DAY_SECONDS;
+    const hours = Math.floor(totalSeconds / ONE_HOUR_SECONDS);
+    totalSeconds -= hours * ONE_HOUR_SECONDS;
+    const minutes = Math.floor(totalSeconds / ONE_MINUTE_SECONDS);
+    totalSeconds -= minutes * ONE_MINUTE_SECONDS;
+    const seconds = totalSeconds;
+
+    return `${days}d ${hours}h ${minutes}m ${seconds}s`;
+  };
 
   useEffect(() => {
     const tab = getTabFromPath();
@@ -752,6 +787,12 @@ const Settings = () => {
                 label: 'Rust version',
                 labelStyle: { width: 260, minWidth: 260 },
                 children: initData.rust_version
+              },
+              {
+                key: 'uptime',
+                label: 'App uptime',
+                labelStyle: { width: 260, minWidth: 260 },
+                children: formatAppUptime()
               },
             ]}
           />

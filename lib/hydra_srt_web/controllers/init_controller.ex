@@ -8,6 +8,7 @@ defmodule HydraSrtWeb.InitController do
       elixir_version: System.version(),
       erlang_version: erlang_version(),
       rust_version: rust_version(),
+      app_started_at: app_started_at(),
       demo_data: Application.get_env(:hydra_srt, :demo_data, false)
     })
   end
@@ -46,5 +47,9 @@ defmodule HydraSrtWeb.InitController do
           _ -> "unavailable"
         end
     end
+  end
+
+  def app_started_at do
+    Application.get_env(:hydra_srt, :app_started_at, nil)
   end
 end
