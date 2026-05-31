@@ -96,7 +96,7 @@ make dev             # IEx + Phoenix; see docs/envs.md for env vars
 1. `mix q` — fast quality gate
 2. `mix test` — Elixir unit
 3. If touching routes/SRT/native: `make test_e2e` and/or `cd native && cargo test`
-4. If touching UI: `cd web_app && npm run typecheck && npm run test:unit`
+4. If touching UI: `cd web_app && npm run typecheck && npm run lint && npm run test:unit`
 5. If touching MCP/tokens: `mix test test/hydra_srt/db_tokens_test.exs test/hydra_srt_web/controllers/token_controller_test.exs`
 6. Commit with **Conventional Commits** (see `AGENTS.md` Standards): e.g. `feat: ...`, `fix: ...`, `docs: ...`, `chore: ...`
 

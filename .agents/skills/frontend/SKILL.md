@@ -11,10 +11,12 @@ Use for any task touching `web_app/`, React components, TypeScript, styling, or 
 ## TypeScript policy
 1. **All new frontend code must be TypeScript** — use `.ts` / `.tsx`, not `.js` / `.jsx`.
 2. Existing JavaScript may stay as-is until you touch that file; when you edit it meaningfully, prefer migrating the changed parts to TypeScript (extract to a `.tsx` module if the file is large).
-3. Put shared API/domain types in `web_app/src/types/` (e.g. `types/api.ts`).
+3. Put shared API/domain types in `web_app/src/types/` (`api.ts`, `errors.ts`, `routes.ts`, `interfaces.ts`, `endpoints.ts`).
 4. Put typed API clients in `web_app/src/utils/*.ts` (see `utils/tokensApi.ts`).
 5. New page/tab UI: prefer `web_app/src/pages/**/**/*.tsx`; keep legacy `.jsx` parents as thin wrappers if needed.
-6. Run `npm run typecheck` before considering frontend work done; CI runs `typecheck`, `build`, and unit tests.
+6. Run `npm run typecheck` and `npm run lint` before considering frontend work done; CI runs `typecheck`, `lint`, `build`, and unit tests.
+7. `// @ts-nocheck` is forbidden in frontend source and tests. Do not add it. If encountered, remove it and fix typings (or use narrow, justified `@ts-expect-error` on a specific line only when unavoidable).
+8. Tooling under `web_app/` (Vite, ESLint, Playwright, `scripts/e2e-server.ts`) uses TypeScript; `npm run typecheck` runs both `tsconfig.json` (app) and `tsconfig.node.json` (configs/E2E).
 
 ## Core UI rules
 1. For UI elements, use only Ant Design (`antd`) components.
@@ -33,5 +35,5 @@ Use for any task touching `web_app/`, React components, TypeScript, styling, or 
 - Unit tests: `cd web_app && npm run test:unit`
 - Watch unit tests: `cd web_app && npm run test:unit:watch`
 - E2E tests: `cd web_app && npm run test:e2e`
-- CI-equivalent (web): `cd web_app && npm run typecheck && npm run build && npm run test:unit:ci`
-
+- Lint: `cd web_app && npm run lint`
+- CI-equivalent (web): `cd web_app && npm run typecheck && npm run lint && npm run build && npm run test:unit:ci`

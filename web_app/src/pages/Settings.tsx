@@ -1,23 +1,27 @@
-// @ts-nocheck
 import { useEffect, useState, useRef } from 'react';
 import { Typography, Button, Card, Space, message, Tabs, Modal, Descriptions, Table, Form, Input, Popconfirm, Switch } from 'antd';
 import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { backupApi, tagsApi, signalGenerationApi, notificationsApi } from '../utils/api';
+import type { SignalTransport } from '../utils/api';
 import McpTokensTab from './settings/McpTokensTab';
 import { ROUTES } from '../utils/constants';
 import { useInit } from '../context/InitContext';
 import { useLocation, useNavigate } from 'react-router-dom';
+import type { ChangeEvent } from 'react';
 
 const { Title } = Typography;
 const ONE_MINUTE_SECONDS = 60;
 const ONE_HOUR_SECONDS = 60 * ONE_MINUTE_SECONDS;
 const ONE_DAY_SECONDS = 24 * ONE_HOUR_SECONDS;
+import { getErrorMessage } from '../types/errors';
+
+type TagRecord = { id: string; name: string };
 
 const Settings = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const tabPathByKey = {
+  const tabPathByKey: Record<string, string> = {
     about: 'about',
     'route-tags': 'route-tags',
     tokens: 'tokens',
@@ -27,7 +31,7 @@ const Settings = () => {
     'signal-generation': 'signal-generation',
   };
 
-  const tabKeyByPath = Object.fromEntries(
+  const tabKeyByPath: Record<string, string> = Object.fromEntries(
     Object.entries(tabPathByKey).map(([k, v]) => [v, k])
   );
 
@@ -37,7 +41,7 @@ const Settings = () => {
     return tabKeyByPath[section] || 'about';
   };
 
-  const getSignalTransportFromPath = () => {
+  const getSignalTransportFromPath = (): SignalTransport => {
     const parts = location.pathname.split('/').filter(Boolean);
     const transport = (parts[2] || 'srt').toLowerCase();
     if (transport === 'udp' || transport === 'rtp') {
@@ -50,28 +54,28 @@ const Settings = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [isDownloadingRoutes, setIsDownloadingRoutes] = useState(false);
-  const [tags, setTags] = useState([]);
+  const [tags, setTags] = useState<TagRecord[]>([]);
   const [tagsLoading, setTagsLoading] = useState(false);
   const [tagModalOpen, setTagModalOpen] = useState(false);
   const [savingTag, setSavingTag] = useState(false);
-  const [editingTag, setEditingTag] = useState(null);
+  const [editingTag, setEditingTag] = useState<TagRecord | null>(null);
   const [tagForm] = Form.useForm();
   const [signalForm] = Form.useForm();
   const [signalInitialLoading, setSignalInitialLoading] = useState(false);
   const [signalSaving, setSignalSaving] = useState(false);
   const [signalStarting, setSignalStarting] = useState(false);
   const [signalStopping, setSignalStopping] = useState(false);
-  const [signalStatus, setSignalStatus] = useState({ running: false, running_transport: null, host: '127.0.0.1', port: 4200 });
-  const [signalTransport, setSignalTransport] = useState(getSignalTransportFromPath());
+  const [signalStatus, setSignalStatus] = useState<any>({ running: false, running_transport: null, host: '127.0.0.1', port: 4200 });
+  const [signalTransport, setSignalTransport] = useState<SignalTransport>(getSignalTransportFromPath());
   const [notificationsForm] = Form.useForm();
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationsSaving, setNotificationsSaving] = useState(false);
   const [notificationsTesting, setNotificationsTesting] = useState(false);
   const [botTokenConfigured, setBotTokenConfigured] = useState(false);
-  const [tokenSuffix, setTokenSuffix] = useState(null);
+  const [tokenSuffix, setTokenSuffix] = useState<string | null>(null);
   const [uptimeNowMs, setUptimeNowMs] = useState(Date.now());
-  const fileInputRef = useRef(null);
-  const signalFormHydratedRef = useRef({ srt: false, udp: false, rtp: false });
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const signalFormHydratedRef = useRef<Record<SignalTransport, boolean>>({ srt: false, udp: false, rtp: false });
   const notificationsFormHydratedRef = useRef(false);
   const [modal, modalContextHolder] = Modal.useModal();
   const [messageApi, contextHolder] = message.useMessage();
@@ -128,7 +132,7 @@ const Settings = () => {
     const tab = getTabFromPath();
     setActiveTab(tab);
     const transport = getSignalTransportFromPath();
-    setSignalTransport(transport);
+    setSignalTransport(transport as SignalTransport);
 
     const parts = location.pathname.split('/').filter(Boolean);
     const section = parts[1];
@@ -149,7 +153,7 @@ const Settings = () => {
     try {
       const result = await tagsApi.list();
       setTags(Array.isArray(result?.data) ? result.data : []);
-    } catch (error) {
+    } catch (error: any) {
       messageApi.error(`Failed to load tags: ${error.message}`);
       setTags([]);
     } finally {
@@ -182,7 +186,7 @@ const Settings = () => {
         });
         notificationsFormHydratedRef.current = true;
       }
-    } catch (error) {
+    } catch (error: any) {
       messageApi.error(`Failed to load notification settings: ${error.message}`);
     } finally {
       if (initial) {
@@ -198,7 +202,7 @@ const Settings = () => {
     }
   }, [activeTab]);
 
-  const loadSignalStatus = async ({ initial = false, hydrateForm = false, transport = signalTransport } = {}) => {
+  const loadSignalStatus = async ({ initial = false, hydrateForm = false, transport = signalTransport as SignalTransport } = {}) => {
     if (initial) {
       setSignalInitialLoading(true);
     }
@@ -211,7 +215,7 @@ const Settings = () => {
         signalForm.setFieldsValue({ host: status.host, port: status.port });
         signalFormHydratedRef.current[transport] = true;
       }
-    } catch (error) {
+    } catch (error: any) {
       messageApi.error(`Failed to load signal generation status: ${error.message}`);
     } finally {
       if (initial) {
@@ -254,7 +258,7 @@ const Settings = () => {
         icon: <DownloadOutlined />,
         duration: 3
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error downloading backup:', error);
       messageApi.error({
         content: `Failed to download backup: ${error.message}`,
@@ -275,7 +279,7 @@ const Settings = () => {
         icon: <DownloadOutlined />,
         duration: 3
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error exporting routes:', error);
       messageApi.error({
         content: `Failed to export routes: ${error.message}`,
@@ -287,8 +291,8 @@ const Settings = () => {
     }
   };
 
-  const handleFileChange = async (e) => {
-    const file = e.target.files[0];
+  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
     if (!file) return;
 
     if (!file.name.endsWith('.backup')) {
@@ -348,7 +352,7 @@ const Settings = () => {
               duration: 3
             });
           }
-        } catch (error) {
+        } catch (error: any) {
           console.error('Error restoring backup:', error);
 
           let errorMessage = 'Failed to restore backup';
@@ -392,7 +396,7 @@ const Settings = () => {
     setTagModalOpen(true);
   };
 
-  const openEditTagModal = (tag) => {
+  const openEditTagModal = (tag: TagRecord) => {
     setEditingTag(tag);
     tagForm.setFieldsValue({ name: tag?.name || '' });
     setTagModalOpen(true);
@@ -406,7 +410,7 @@ const Settings = () => {
 
   const handleTagSave = async () => {
     try {
-      const values = await tagForm.validateFields();
+      const values: any = await tagForm.validateFields();
       setSavingTag(true);
 
       if (editingTag?.id) {
@@ -419,7 +423,7 @@ const Settings = () => {
 
       handleTagModalCancel();
       await loadTags();
-    } catch (error) {
+    } catch (error: any) {
       if (error?.errorFields) {
         return;
       }
@@ -429,12 +433,12 @@ const Settings = () => {
     }
   };
 
-  const handleDeleteTag = async (tagId) => {
+  const handleDeleteTag = async (tagId: string) => {
     try {
       await tagsApi.delete(tagId);
       messageApi.success('Tag deleted');
       await loadTags();
-    } catch (error) {
+    } catch (error: any) {
       messageApi.error(`Failed to delete tag: ${error.message}`);
     }
   };
@@ -473,7 +477,7 @@ const Settings = () => {
             />
             <Button
               icon={<UploadOutlined />}
-              onClick={() => fileInputRef.current.click()}
+              onClick={() => fileInputRef.current?.click()}
               loading={isRestoring}
             >
               Select Backup File
@@ -522,7 +526,7 @@ const Settings = () => {
         title: 'Actions',
         key: 'actions',
         width: 180,
-        render: (_, record) => (
+        render: (_: unknown, record: TagRecord) => (
           <Space>
             <Button icon={<EditOutlined />} onClick={() => openEditTagModal(record)}>
               Edit
@@ -567,10 +571,10 @@ const Settings = () => {
   const NotificationsTabContent = () => {
     const handleSave = async () => {
       try {
-        const values = await notificationsForm.validateFields();
+        const values: any = await notificationsForm.validateFields();
         setNotificationsSaving(true);
 
-        const payload = {
+        const payload: any = {
           enabled: values.enabled,
           chat_id: values.chat_id,
         };
@@ -579,14 +583,14 @@ const Settings = () => {
           payload.bot_token = values.bot_token;
         }
 
-        const result = await notificationsApi.updateTelegram(payload);
+        const result: any = await notificationsApi.updateTelegram(payload);
         const data = result?.data || {};
         setBotTokenConfigured(Boolean(data.bot_token_configured));
         setTokenSuffix(data.token_suffix || null);
         notificationsForm.setFieldValue('bot_token', '');
         notificationsFormHydratedRef.current = true;
         messageApi.success('Notification settings saved');
-      } catch (error) {
+      } catch (error: any) {
         if (error?.errorFields) {
           return;
         }
@@ -598,10 +602,10 @@ const Settings = () => {
 
     const handleTest = async () => {
       try {
-        const values = await notificationsForm.validateFields();
+        const values: any = await notificationsForm.validateFields();
         setNotificationsTesting(true);
 
-        const payload = {
+        const payload: any = {
           enabled: values.enabled,
           chat_id: values.chat_id,
         };
@@ -612,7 +616,7 @@ const Settings = () => {
 
         await notificationsApi.testTelegram(payload);
         messageApi.success('Test notification sent');
-      } catch (error) {
+      } catch (error: any) {
         if (error?.errorFields) {
           return;
         }
@@ -689,7 +693,7 @@ const Settings = () => {
   const SignalGenerationTabContent = () => {
     const handleSave = async () => {
       try {
-        const values = await signalForm.validateFields();
+        const values: any = await signalForm.validateFields();
         setSignalSaving(true);
         const status = await signalGenerationApi.configure({
           transport: signalTransport,
@@ -700,7 +704,7 @@ const Settings = () => {
         signalForm.setFieldsValue({ host: status.host, port: status.port });
         signalFormHydratedRef.current[signalTransport] = true;
         messageApi.success('Signal generation settings saved');
-      } catch (error) {
+      } catch (error: any) {
         if (error?.errorFields) {
           return;
         }
@@ -716,7 +720,7 @@ const Settings = () => {
         const status = await signalGenerationApi.start(signalTransport);
         setSignalStatus(status);
         messageApi.success('Signal generation started');
-      } catch (error) {
+      } catch (error: any) {
         messageApi.error(error.message || 'Failed to start signal generation');
       } finally {
         setSignalStarting(false);
@@ -729,7 +733,7 @@ const Settings = () => {
         const status = await signalGenerationApi.stop(signalTransport);
         setSignalStatus(status);
         messageApi.success('Signal generation stopped');
-      } catch (error) {
+      } catch (error: any) {
         messageApi.error(error.message || 'Failed to stop signal generation');
       } finally {
         setSignalStopping(false);
@@ -741,8 +745,9 @@ const Settings = () => {
         <Tabs
           activeKey={signalTransport}
           onChange={(transport) => {
-            setSignalTransport(transport);
-            navigate(`/settings/signal-generation/${transport}`);
+            const nextTransport = transport as SignalTransport;
+            setSignalTransport(nextTransport);
+            navigate(`/settings/signal-generation/${nextTransport}`);
           }}
           items={[
             { key: 'srt', label: 'SRT' },
