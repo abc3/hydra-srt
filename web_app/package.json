@@ -6,13 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json",
     "lint": "eslint .",
     "preview": "vite preview",
     "test:unit": "vitest run",
     "test:unit:ci": "bash ./scripts/run-vitest-ci.sh",
     "test:unit:watch": "vitest",
-    "e2e:server": "node ./scripts/e2e-server.js",
+    "e2e:server": "tsx ./scripts/e2e-server.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -37,7 +37,11 @@
     "eslint-plugin-react": "^7.37.4",
     "eslint-plugin-react-hooks": "^5.0.0",
     "eslint-plugin-react-refresh": "^0.4.18",
+    "@types/node": "^22.13.10",
     "globals": "^15.14.0",
+    "jiti": "^2.4.2",
+    "tsx": "^4.19.3",
+    "typescript-eslint": "^8.26.0",
     "jsdom": "^26.0.0",
     "typescript": "^6.0.3",
     "vite": "^6.4.2",
