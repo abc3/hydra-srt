@@ -57,3 +57,5 @@ hydra_srt_analytics.*
 
 .playwright*
 /priv/static/
+
+.gstack*
