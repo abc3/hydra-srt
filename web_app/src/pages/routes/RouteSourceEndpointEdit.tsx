@@ -17,6 +17,7 @@ import type { EndpointFormValues, RouteSourceEndpointEditProps, RouteSummary } f
 import type { AppError } from '../../types/errors';
 import { getErrorMessage } from '../../types/errors';
 import type { InterfaceOption, InterfaceRecord } from '../../types/interfaces';
+import SrtAccessFields from './SrtAccessFields';
 
 const { Title } = Typography;
 
@@ -512,6 +513,7 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                                                             )
                                                         }
                                                     </Form.Item>
+                                                    <SrtAccessFields />
                                                 </>
                                             )
                                         }

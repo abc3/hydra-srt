@@ -42,6 +42,7 @@ import {
 import { applyBackendEndpointErrors } from './endpointFormErrors';
 import { flattenEndpointPayload, getEndpointOption, normalizeEndpointForForm } from './endpointOptions';
 import type { EndpointRecord } from './endpointOptions';
+import SrtAccessFields from './SrtAccessFields';
 
 const { Title } = Typography;
 
@@ -860,6 +861,8 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                                         )
                                       }
                                     </Form.Item>
+
+                                    <SrtAccessFields sourceName={field.name} />
                                   </>
                                 );
                               }

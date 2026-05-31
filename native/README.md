@@ -89,6 +89,8 @@ Other useful demo targets:
 
 - `make demo_srt_to_srt`
 - `make demo_srt_to_udp_pass`
+- `make demo_srt_access_deny`
+- `make dummy_signal_streamid`
 - `make dummy_signal_with_pass`
 
 You can override ports and route id:
@@ -144,3 +146,22 @@ make dummy_signal SOURCE_PORT=9000
   `{"event":"pipeline_status","status":"failed","reason":"runtime_error"}`
   followed by
   `{"event":"pipeline_status","status":"stopped","reason":"failure"}`
+
+6. Demo-test SRT listener IP access:
+
+- start native with localhost denied:
+
+```bash
+cd native
+make demo_srt_access_deny ROUTE_ID=access_qa SOURCE_PORT=9000 UDP_PORT=9003
+```
+
+- in another terminal, attempt a caller connection with the matching stream id:
+
+```bash
+cd native
+make dummy_signal_streamid SOURCE_PORT=9000 STREAM_ID=test1
+```
+
+- when the local GStreamer SRT plugin invokes `caller-connecting`, stdout should include an `srt_access` event with `allowed=false` and `reason=denied_list`.
+- if no `srt_access` event appears and media still flows, the local GStreamer/SRT build is not invoking `caller-connecting` for this ffmpeg caller path; verify against the deployed GStreamer version before relying on runtime enforcement.

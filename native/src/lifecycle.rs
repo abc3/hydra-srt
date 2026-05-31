@@ -312,7 +312,9 @@ mod tests {
     fn allows_processing_as_startup_fallback() {
         let (emitter, messages) = build_emitter();
 
-        assert!(emitter.emit_processing().expect("processing before starting"));
+        assert!(emitter
+            .emit_processing()
+            .expect("processing before starting"));
         assert!(!emitter.emit_processing().expect("duplicate processing"));
 
         let messages = messages.lock().expect("messages lock");
@@ -328,11 +330,17 @@ mod tests {
 
         assert!(emitter.emit_starting().expect("starting"));
         assert!(emitter.emit_processing().expect("processing"));
-        assert!(!emitter.emit_processing().expect("duplicate processing suppressed by fast path"));
+        assert!(!emitter
+            .emit_processing()
+            .expect("duplicate processing suppressed by fast path"));
 
         assert!(emitter.emit_reconnecting().expect("reconnecting"));
-        assert!(emitter.emit_processing().expect("processing after reconnect — rearmed"));
-        assert!(!emitter.emit_processing().expect("duplicate processing suppressed again"));
+        assert!(emitter
+            .emit_processing()
+            .expect("processing after reconnect — rearmed"));
+        assert!(!emitter
+            .emit_processing()
+            .expect("duplicate processing suppressed again"));
 
         let messages = messages.lock().expect("messages lock");
         assert_eq!(

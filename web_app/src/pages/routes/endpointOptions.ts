@@ -15,6 +15,9 @@ const ENDPOINT_OPTION_KEYS = [
   'keep_listening',
   'multicast_iface',
   'bind_address_option',
+  'allowed_list',
+  'denied_list',
+  'limit_access',
   'auto-reconnect',
   'keep-listening',
 ];
@@ -54,6 +57,18 @@ export const getEndpointOption = <T = unknown>(endpoint: EndpointRecord | null |
     return undefined;
   }
   return endpoint[key] as T | undefined;
+};
+
+const normalizeIpAccessList = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => String(item).trim()).filter(Boolean))];
+  }
+
+  if (typeof value === 'string') {
+    return [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
+  }
+
+  return [];
 };
 
 export const normalizeEndpointForForm = (endpoint: EndpointRecord | null | undefined): EndpointRecord | null | undefined => {
@@ -97,6 +112,9 @@ export const normalizeEndpointForForm = (endpoint: EndpointRecord | null | undef
 
   flat.port = toNumberIfPresent(flat.port);
   flat.localport = toNumberIfPresent(flat.localport);
+  flat.allowed_list = normalizeIpAccessList(flat.allowed_list);
+  flat.denied_list = normalizeIpAccessList(flat.denied_list);
+  flat.limit_access = flat.limit_access ?? false;
 
   return flat;
 };

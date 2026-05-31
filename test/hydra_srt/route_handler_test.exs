@@ -34,7 +34,10 @@ defmodule HydraSrt.RouteHandlerTest do
       "mode" => "listener",
       "latency" => 200,
       "auto_reconnect" => true,
-      "keep_listening" => true
+      "keep_listening" => true,
+      "limit_access" => true,
+      "allowed_list" => ["127.0.0.1", "10.10.0.0/16"],
+      "denied_list" => ["192.0.2.10"]
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
@@ -44,6 +47,26 @@ defmodule HydraSrt.RouteHandlerTest do
     assert source["latency"] == 200
     assert source["auto-reconnect"] == true
     assert source["keep-listening"] == true
+    assert source["hydra_limit_access"] == true
+    assert source["hydra_allowed_list"] == ["127.0.0.1", "10.10.0.0/16"]
+    assert source["hydra_denied_list"] == ["192.0.2.10"]
+  end
+
+  test "source_from_record does not pass access ranges when limit_access is false" do
+    record = %{
+      "schema" => "SRT",
+      "localaddress" => "127.0.0.1",
+      "localport" => 4201,
+      "mode" => "listener",
+      "limit_access" => false,
+      "allowed_list" => ["127.0.0.1"],
+      "denied_list" => ["192.0.2.10"]
+    }
+
+    assert {:ok, source} = RouteHandler.source_from_record(record)
+    refute Map.has_key?(source, "hydra_limit_access")
+    refute Map.has_key?(source, "hydra_allowed_list")
+    refute Map.has_key?(source, "hydra_denied_list")
   end
 
   test "source_from_record with SRT schema and passphrase" do
@@ -625,6 +648,24 @@ defmodule HydraSrt.RouteHandlerTest do
       refute_receive {:pipeline_log, _}, 50
 
       assert_receive {:telemetry_unparsed, _event, %{count: 1}, %{route_id: "route-handler-pl-1"}}
+    end
+
+    test "broadcasts native SRT access events on pipeline_logs pubsub", %{data: data} do
+      RouteHandler.consume_port_output(
+        ~s({"event":"srt_access","ip":"127.0.0.1","stream_id":"test","allowed":false,"reason":"denied_list"}) <>
+          "\n",
+        data
+      )
+
+      assert_receive {:pipeline_log, log}
+      assert log.route_id == "route-handler-pl-1"
+      assert log.level == "WARN"
+      assert log.category == "srt_access"
+      assert log.element == "srtsrc"
+      assert log.message =~ "ip=127.0.0.1"
+      assert log.message =~ "stream_id=test"
+      assert log.message =~ "allowed=false"
+      assert log.message =~ "reason=denied_list"
     end
   end
 end

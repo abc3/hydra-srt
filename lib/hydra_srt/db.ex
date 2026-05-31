@@ -1367,6 +1367,9 @@ defmodule HydraSrt.Db do
       "keep_listening" => endpoint.keep_listening,
       "multicast_iface" => endpoint.multicast_iface,
       "bind_address_option" => endpoint.bind_address_option,
+      "allowed_list" => Endpoint.decode_ip_access_list(endpoint.allowed_list),
+      "denied_list" => Endpoint.decode_ip_access_list(endpoint.denied_list),
+      "limit_access" => endpoint.limit_access || false,
       "status" => endpoint.status,
       "created_at" => endpoint.inserted_at,
       "updated_at" => endpoint.updated_at

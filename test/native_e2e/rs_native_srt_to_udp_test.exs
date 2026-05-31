@@ -14,7 +14,7 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtToUdpTest do
     :ok
   end
 
-  setup do
+  setup context do
     ProcessRegistry.cleanup_all!()
     source_port = Helpers.free_srt_port!()
     udp_port = Helpers.free_udp_port!()
@@ -22,6 +22,7 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtToUdpTest do
     {:ok, udp_listener} = UdpListener.start_link(port: udp_port, test_pid: self())
 
     config = Helpers.srt_to_udp_config(source_port, udp_port)
+    config = maybe_deny_localhost(config, context)
 
     {:ok, harness} =
       Harness.start_link(
@@ -117,4 +118,52 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtToUdpTest do
     assert is_number(total_bytes)
     assert is_binary(sender.tag)
   end
+
+  @tag skip: "local srtsrc does not emit caller-connecting for ffmpeg callers in this environment"
+  @tag deny_localhost: true
+  test "rejects SRT callers denied by source IP access rules", %{
+    source_port: source_port,
+    harness: harness
+  } do
+    assert_receive {:rs_native_route_id, "rs_demo_" <> _}, 5_000
+
+    sender = Helpers.start_ffmpeg_sender!(source_port, duration: 3, streamid: "test1")
+
+    assert_receive {:rs_native_event,
+                    %{
+                      "event" => "srt_access",
+                      "ip" => "127.0.0.1",
+                      "allowed" => false,
+                      "reason" => "denied_list"
+                    }},
+                   10_000
+
+    assert {:error, _latest} =
+             Harness.await_stats(
+               harness,
+               fn
+                 %{"connected-callers" => callers} when callers > 0 -> true
+                 _ -> false
+               end,
+               2_000
+             )
+
+    assert is_binary(sender.tag)
+  end
+
+  def maybe_deny_localhost(config, %{deny_localhost: true}) do
+    put_in(
+      config,
+      ["source"],
+      Map.merge(config["source"], %{
+        "streamid" => "test1",
+        "authentication" => true,
+        "hydra_limit_access" => true,
+        "hydra_allowed_list" => [],
+        "hydra_denied_list" => ["127.0.0.1"]
+      })
+    )
+  end
+
+  def maybe_deny_localhost(config, _context), do: config
 end

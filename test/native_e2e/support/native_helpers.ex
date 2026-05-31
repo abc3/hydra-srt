@@ -74,7 +74,13 @@ defmodule HydraSrt.E2E.Native.Helpers do
       if is_binary(passphrase) do
         "srt://127.0.0.1:#{source_port}?mode=caller&streamid=test1&passphrase=#{passphrase}&pbkeylen=#{pbkeylen}"
       else
-        "srt://127.0.0.1:#{source_port}?mode=caller&pkt_size=1316"
+        stream_id_query =
+          case Keyword.get(opts, :streamid) do
+            value when is_binary(value) and value != "" -> "&streamid=#{value}"
+            _ -> ""
+          end
+
+        "srt://127.0.0.1:#{source_port}?mode=caller&pkt_size=1316#{stream_id_query}"
       end
 
     tag = "ffmpeg_rs_native_#{System.unique_integer([:positive])}"

@@ -126,6 +126,34 @@ describe('Route form validation', () => {
     expect(mockRoutesApi.create).not.toHaveBeenCalled();
   });
 
+  it('shows SRT source IP access controls only for listener mode', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/new/edit']}>
+        <Routes>
+          <Route path="/routes/:id/edit" element={<RouteSourceEdit />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const sourceTitle = await screen.findByText('Primary Source');
+    const sourceCard = sourceTitle.closest('.ant-card');
+    expect(sourceCard).not.toBeNull();
+    if (!(sourceCard instanceof HTMLElement)) {
+      throw new Error('Source card was not found');
+    }
+
+    const sourceScope = within(sourceCard);
+    expect(sourceScope.getByText('Limit Access')).toBeInTheDocument();
+    expect(sourceScope.getByText('Allowed IPs')).toBeInTheDocument();
+    expect(sourceScope.getByText('Denied IPs')).toBeInTheDocument();
+
+    fireEvent.click(sourceScope.getByRole('radio', { name: 'Caller' }));
+
+    await waitFor(() => {
+      expect(sourceScope.queryByText('Limit Access')).not.toBeInTheDocument();
+    });
+  });
+
   it('shows destination SRT authentication fields on new route form', async () => {
     render(
       <MemoryRouter initialEntries={['/routes/new/edit']}>

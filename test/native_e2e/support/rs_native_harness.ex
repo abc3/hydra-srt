@@ -122,6 +122,10 @@ defmodule HydraSrt.E2E.Native.Harness do
 
   defp handle_line("{" <> _ = json, state) do
     case Jason.decode(json) do
+      {:ok, %{"event" => _event} = event} ->
+        send(state.test_pid, {:rs_native_event, event})
+        %{state | lines: [json | Enum.take(state.lines, 99)]}
+
       {:ok, stats} ->
         send(state.test_pid, {:rs_native_stats, stats})
         %{state | latest_stats: stats, lines: [json | Enum.take(state.lines, 99)]}
