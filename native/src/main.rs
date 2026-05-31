@@ -4,6 +4,7 @@ mod output;
 mod pipeline;
 mod properties;
 mod runtime;
+mod srt_access;
 mod stats;
 
 use std::io::{self, BufRead};

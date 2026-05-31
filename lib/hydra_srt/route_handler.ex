@@ -454,6 +454,10 @@ defmodule HydraSrt.RouteHandler do
         |> maybe_handle_zero_bitrate(stats)
         |> maybe_probe_primary_recovery()
 
+      {:srt_access, access_event} ->
+        publish_srt_access_log(data.id, access_event)
+        data
+
       :unknown ->
         Logger.warning("RouteHandler: unknown native json line: #{inspect(json)}")
         data
@@ -792,6 +796,9 @@ defmodule HydraSrt.RouteHandler do
       when is_binary(status) ->
         {:pipeline_status, status, Map.get(payload, "reason")}
 
+      {:ok, %{"event" => "srt_access"} = payload} ->
+        {:srt_access, payload}
+
       {:ok, %{"event" => _event}} ->
         :unknown
 
@@ -823,6 +830,44 @@ defmodule HydraSrt.RouteHandler do
     HydraSrt.Stats.Collector.ingest(route_id, stats, metadata)
 
     :ok
+  end
+
+  @doc false
+  def publish_srt_access_log(route_id, %{} = access_event) when is_binary(route_id) do
+    allowed? = access_event["allowed"] == true
+    reason = access_event["reason"] || "unknown"
+    ip = access_event["ip"] || "unknown"
+    stream_id = access_event["stream_id"]
+
+    log = %{
+      route_id: route_id,
+      gst_ts: nil,
+      pid: nil,
+      thread_id: nil,
+      level: if(allowed?, do: "INFO", else: "WARN"),
+      category: "srt_access",
+      file: nil,
+      line: nil,
+      function: nil,
+      element: "srtsrc",
+      message: srt_access_message(ip, allowed?, reason, stream_id),
+      dropped_count: nil
+    }
+
+    Phoenix.PubSub.broadcast(
+      HydraSrt.PubSub,
+      "pipeline_logs",
+      {:pipeline_log, log}
+    )
+  end
+
+  @doc false
+  def srt_access_message(ip, allowed?, reason, nil) do
+    "SRT caller ip=#{ip} allowed=#{allowed?} reason=#{reason}"
+  end
+
+  def srt_access_message(ip, allowed?, reason, stream_id) do
+    "SRT caller ip=#{ip} stream_id=#{stream_id} allowed=#{allowed?} reason=#{reason}"
   end
 
   @doc false
@@ -1263,6 +1308,7 @@ defmodule HydraSrt.RouteHandler do
     |> put_opt(record, "buffer-size")
     |> put_opt(record, "buffer-size", "buffer_size")
     |> put_opt(record, "mtu")
+    |> put_srt_access_opts(record)
   end
 
   defp put_opt(opts, record, key), do: put_opt(opts, record, key, key)
@@ -1273,6 +1319,35 @@ defmodule HydraSrt.RouteHandler do
       value -> Map.put(opts, key, value)
     end
   end
+
+  @doc false
+  def put_srt_access_opts(opts, record) when is_map(opts) and is_map(record) do
+    if record["limit_access"] == true do
+      opts
+      |> Map.put("hydra_limit_access", true)
+      |> Map.put("hydra_allowed_list", normalize_access_list(record["allowed_list"]))
+      |> Map.put("hydra_denied_list", normalize_access_list(record["denied_list"]))
+    else
+      opts
+    end
+  end
+
+  @doc false
+  def normalize_access_list(value) when is_list(value) do
+    value
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  def normalize_access_list(value) when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, list} when is_list(list) -> normalize_access_list(list)
+      _ -> []
+    end
+  end
+
+  def normalize_access_list(_), do: []
 
   @doc false
   def resolve_interface_bind_ip(sys_name) when is_binary(sys_name) do

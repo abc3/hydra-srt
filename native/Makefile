@@ -6,6 +6,7 @@ SINK_PORT ?= 8002
 UDP_PORT ?= 8003
 PASSPHRASE ?= some_pass_1
 PBKEYLEN ?= 16
+STREAM_ID ?= test1
 
 .PHONY: all
 all: build
@@ -19,7 +20,9 @@ help:
 	@echo "  make demo_srt_to_udp        - Start native with SRT source -> UDP sink config"
 	@echo "  make demo_srt_to_srt        - Start native with SRT source -> SRT sink config"
 	@echo "  make demo_srt_to_udp_pass   - Start native with encrypted SRT source -> UDP sink config"
+	@echo "  make demo_srt_access_deny   - Start SRT listener that denies 127.0.0.1 callers"
 	@echo "  make dummy_signal           - Send ffmpeg SRT test signal to SOURCE_PORT"
+	@echo "  make dummy_signal_streamid  - Send short ffmpeg SRT signal with STREAM_ID"
 	@echo "  make dummy_signal_with_pass - Send encrypted ffmpeg SRT test signal to SOURCE_PORT"
 	@echo "  make play_udp               - Play UDP output from UDP_PORT"
 	@echo "  make clean                  - cargo clean"
@@ -48,6 +51,10 @@ demo_srt_to_srt:
 demo_srt_to_udp_pass:
 	printf '%s\n' '{"source":{"type":"srtsrc","uri":"srt://127.0.0.1:$(SOURCE_PORT)?mode=listener&passphrase=$(PASSPHRASE)&pbkeylen=$(PBKEYLEN)","localaddress":"127.0.0.1","localport":$(SOURCE_PORT),"auto-reconnect":true,"keep-listening":false,"mode":"listener","passphrase":"$(PASSPHRASE)","pbkeylen":$(PBKEYLEN)},"sinks":[{"type":"udpsink","address":"127.0.0.1","host":"127.0.0.1","port":$(UDP_PORT),"hydra_destination_id":"udp_demo","hydra_destination_name":"udp_demo","hydra_destination_schema":"UDP"}]}' | GST_REGISTRY_FORK=no cargo run -- $(ROUTE_ID)
 
+.PHONY: demo_srt_access_deny
+demo_srt_access_deny:
+	printf '%s\n' '{"source":{"type":"srtsrc","uri":"srt://127.0.0.1:$(SOURCE_PORT)?mode=listener","localaddress":"127.0.0.1","localport":$(SOURCE_PORT),"auto-reconnect":true,"keep-listening":true,"mode":"listener","streamid":"$(STREAM_ID)","authentication":true,"hydra_limit_access":true,"hydra_allowed_list":[],"hydra_denied_list":["127.0.0.1"]},"sinks":[{"type":"udpsink","address":"127.0.0.1","host":"127.0.0.1","port":$(UDP_PORT),"hydra_destination_id":"udp_demo","hydra_destination_name":"udp_demo","hydra_destination_schema":"UDP"}]}' | GST_REGISTRY_FORK=no cargo run -- $(ROUTE_ID)
+
 .PHONY: dummy_signal
 dummy_signal:
 	ffmpeg -hide_banner -loglevel error -re \
@@ -57,6 +64,16 @@ dummy_signal:
 		-colorspace bt709 -color_primaries bt709 -color_trc bt709 \
 		-c:a aac -b:a 128k -ar 48000 -ac 2 \
 		-f mpegts "srt://127.0.0.1:$(SOURCE_PORT)?mode=caller&pkt_size=1316"
+
+.PHONY: dummy_signal_streamid
+dummy_signal_streamid:
+	ffmpeg -hide_banner -loglevel error -re \
+		-f lavfi -i "testsrc2=size=1280x720:rate=30" \
+		-f lavfi -i "sine=frequency=440:sample_rate=48000" \
+		-t 3 \
+		-c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -profile:v baseline -g 60 \
+		-c:a aac -b:a 128k -ar 48000 -ac 2 \
+		-f mpegts "srt://127.0.0.1:$(SOURCE_PORT)?mode=caller&pkt_size=1316&streamid=$(STREAM_ID)"
 
 .PHONY: dummy_signal_with_pass
 dummy_signal_with_pass:

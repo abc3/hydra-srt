@@ -119,6 +119,46 @@ Notes:
 *   `stopping` is a UI transitional state shown while a stop request is in flight; it is not a canonical runtime status emitted by the pipeline lifecycle.
 *   `started` may appear in legacy flows and should be treated as an active/running state for compatibility.
 
+## Sources Management
+
+### SRT Listener IP Access Control
+
+SRT source endpoints in `mode=listener` can optionally limit incoming caller connections by IP address. This is a source-level stream access control feature; route control only stores and forwards the source settings to the native pipeline process.
+
+Source fields:
+
+*   `limit_access` - boolean switch. When `false`, saved allow/deny lists are ignored and callers are not filtered by IP.
+*   `allowed_list` - JSON array of IP addresses or CIDR ranges. When non-empty and `limit_access=true`, callers must match at least one entry unless they are denied.
+*   `denied_list` - JSON array of IP addresses or CIDR ranges. Denied entries take priority over allowed entries.
+
+Example source payload:
+
+```json
+{
+  "source": {
+    "schema": "SRT",
+    "mode": "listener",
+    "localaddress": "0.0.0.0",
+    "localport": 4201,
+    "limit_access": true,
+    "allowed_list": ["10.10.0.0/16", "203.0.113.12"],
+    "denied_list": ["10.10.5.20"]
+  }
+}
+```
+
+Accepted list entries are exact IPv4/IPv6 addresses or CIDR ranges, for example `127.0.0.1`, `192.0.2.0/24`, or `2001:db8::/32`.
+
+Runtime logging:
+
+*   Native emits structured `srt_access` events for connection attempts when the GStreamer SRT listener invokes `caller-connecting`.
+*   The backend forwards those events into pipeline logs with category `srt_access`.
+*   Rejected callers are logged with the caller IP and rejection reason, such as `denied_list`, `not_in_allowed_list`, or `invalid_address`.
+
+Current limitation:
+
+*   Enforcement depends on GStreamer's `srtsrc` `caller-connecting` signal. Some local GStreamer/SRT combinations do not emit that signal for ffmpeg callers unless the SRT authentication path is active, so real rejection behavior should be verified against the deployed GStreamer version before relying on it in production.
+
 ## Destinations Management
 
 ### List Destinations

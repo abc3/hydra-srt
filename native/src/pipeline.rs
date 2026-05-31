@@ -5,13 +5,14 @@ use anyhow::{anyhow, Context, Result};
 use glib::value::ToValue;
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::config::{ElementConfig, PipelineConfig};
 use crate::lifecycle::PipelineLifecycleEmitter;
 use crate::output::StatsWriter;
 use crate::properties::apply_element_properties;
 use crate::runtime::{DestMetrics, PipelineRuntime};
+use crate::srt_access::{caller_ip, SrtAccessRules};
 
 pub fn build_pipeline(
     config: PipelineConfig,
@@ -49,8 +50,8 @@ pub fn build_pipeline(
         source.set_property("caps", caps);
     }
 
-    let source_stream_id = Arc::new(Mutex::new(None));
     if config.source.element_type == "srtsrc" {
+        let access_rules = SrtAccessRules::from_props(&config.source.props);
         let has_stream_id = config
             .source
             .props
@@ -58,25 +59,47 @@ pub fn build_pipeline(
             .and_then(Value::as_str)
             .map(|value| !value.is_empty())
             .unwrap_or(false);
+        let authentication_requested = config
+            .source
+            .props
+            .get("authentication")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
-        source.set_property("authentication", has_stream_id);
-
-        let source_stream_id_ref = source_stream_id.clone();
+        // GStreamer only invokes `caller-connecting` on the SRT authentication path.
+        source.set_property(
+            "authentication",
+            access_rules.enabled() || has_stream_id || authentication_requested,
+        );
         let writer_ref = writer.clone();
         source.connect("caller-connecting", false, move |values| {
             let stream_id = values
                 .get(2)
                 .and_then(|value| value.get::<Option<String>>().ok())
                 .flatten();
+            let decision = access_rules.check_ip(caller_ip(values));
 
-            if let Some(stream_id) = stream_id {
-                if let Ok(mut guard) = source_stream_id_ref.lock() {
-                    *guard = Some(stream_id.clone());
-                }
+            if let Ok(mut guard) = writer_ref.lock() {
+                let _ = guard.send_message(
+                    &json!({
+                        "event": "srt_access",
+                        "ip": decision.ip,
+                        "stream_id": stream_id.as_deref(),
+                        "allowed": decision.allowed,
+                        "reason": decision.reason,
+                    })
+                    .to_string(),
+                );
 
-                if let Ok(mut guard) = writer_ref.lock() {
-                    let _ = guard.send_message(&format!("stats_source_stream_id:{stream_id}"));
+                if decision.allowed {
+                    if let Some(stream_id) = stream_id.as_deref() {
+                        let _ = guard.send_message(&format!("stats_source_stream_id:{stream_id}"));
+                    }
                 }
+            }
+
+            if !decision.allowed {
+                return Some(false.to_value());
             }
 
             Some(true.to_value())
@@ -93,7 +116,9 @@ pub fn build_pipeline(
         source
             .link(&depay)
             .context("failed to link source to rtpmp2tdepay")?;
-        depay.link(&tee).context("failed to link rtpmp2tdepay to tee")?;
+        depay
+            .link(&tee)
+            .context("failed to link rtpmp2tdepay to tee")?;
         depay.static_pad("src")
     } else {
         pipeline
@@ -393,6 +418,87 @@ mod tests {
     }
 
     #[test]
+    fn keeps_srtsrc_authentication_false_by_default() {
+        init_gst();
+
+        let config = srtsrc_pipeline_config(BTreeMap::from([
+            (
+                "uri".to_string(),
+                Value::String("srt://127.0.0.1:4201?mode=listener".to_string()),
+            ),
+            (
+                "localaddress".to_string(),
+                Value::String("127.0.0.1".to_string()),
+            ),
+            ("localport".to_string(), Value::Number(4201_u64.into())),
+            ("mode".to_string(), Value::String("listener".to_string())),
+        ]));
+
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(StdoutWriter::new())));
+
+        let runtime = build_pipeline(config, writer).expect("pipeline should build");
+
+        assert!(!runtime.source.property::<bool>("authentication"));
+    }
+
+    #[test]
+    fn preserves_explicit_srtsrc_authentication_from_config() {
+        init_gst();
+
+        let config = srtsrc_pipeline_config(BTreeMap::from([
+            (
+                "uri".to_string(),
+                Value::String("srt://127.0.0.1:4201?mode=listener".to_string()),
+            ),
+            (
+                "localaddress".to_string(),
+                Value::String("127.0.0.1".to_string()),
+            ),
+            ("localport".to_string(), Value::Number(4201_u64.into())),
+            ("mode".to_string(), Value::String("listener".to_string())),
+            ("authentication".to_string(), Value::Bool(true)),
+        ]));
+
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(StdoutWriter::new())));
+
+        let runtime = build_pipeline(config, writer).expect("pipeline should build");
+
+        assert!(runtime.source.property::<bool>("authentication"));
+    }
+
+    #[test]
+    fn enables_srtsrc_authentication_for_ip_access_hook() {
+        init_gst();
+
+        let config = srtsrc_pipeline_config(BTreeMap::from([
+            (
+                "uri".to_string(),
+                Value::String("srt://127.0.0.1:4201?mode=listener".to_string()),
+            ),
+            (
+                "localaddress".to_string(),
+                Value::String("127.0.0.1".to_string()),
+            ),
+            ("localport".to_string(), Value::Number(4201_u64.into())),
+            ("mode".to_string(), Value::String("listener".to_string())),
+            ("hydra_limit_access".to_string(), Value::Bool(true)),
+            (
+                "hydra_denied_list".to_string(),
+                Value::Array(vec![Value::String("127.0.0.1".to_string())]),
+            ),
+        ]));
+
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(StdoutWriter::new())));
+
+        let runtime = build_pipeline(config, writer).expect("pipeline should build");
+
+        assert!(runtime.source.property::<bool>("authentication"));
+    }
+
+    #[test]
     fn makes_srt_branch_queue_leaky() {
         init_gst();
 
@@ -409,6 +515,19 @@ mod tests {
                 .expect("serialized leaky property"),
             "downstream"
         );
+    }
+
+    fn srtsrc_pipeline_config(source_props: BTreeMap<String, Value>) -> PipelineConfig {
+        PipelineConfig {
+            source: ElementConfig {
+                element_type: "srtsrc".to_string(),
+                props: source_props,
+            },
+            sinks: vec![ElementConfig {
+                element_type: "fakesink".to_string(),
+                props: BTreeMap::from([("sync".to_string(), Value::Bool(false))]),
+            }],
+        }
     }
 
     #[test]

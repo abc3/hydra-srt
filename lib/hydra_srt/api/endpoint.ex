@@ -5,6 +5,7 @@ defmodule HydraSrt.Api.Endpoint do
 
   @source_unique_constraint :endpoints_route_id_position_type_index
   @bind_target_unique_constraint :endpoints_bind_interface_bind_address_bind_port_index
+  @ip_access_list_fields [:allowed_list, :denied_list]
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -34,6 +35,9 @@ defmodule HydraSrt.Api.Endpoint do
     field :keep_listening, :boolean
     field :multicast_iface, :string
     field :bind_address_option, :string
+    field :allowed_list, :string, default: "[]"
+    field :denied_list, :string, default: "[]"
+    field :limit_access, :boolean, default: false
 
     # Normalized bind tuple for DB uniqueness.
     field :bind_interface, :string
@@ -65,9 +69,11 @@ defmodule HydraSrt.Api.Endpoint do
 
   def source_changeset(endpoint, attrs) do
     endpoint
-    |> cast_common(attrs)
+    |> cast_common(normalize_ip_access_attrs(attrs))
     |> put_change(:type, "source")
     |> put_default_enabled(true)
+    |> put_default_ip_access_fields()
+    |> validate_ip_access_lists()
     |> validate_required([:route_id, :position, :schema, :type])
     |> validate_inclusion(:schema, ["SRT", "UDP", "RTP"])
     |> validate_number(:position, greater_than_or_equal_to: 0)
@@ -82,7 +88,7 @@ defmodule HydraSrt.Api.Endpoint do
 
   def destination_changeset(endpoint, attrs) do
     endpoint
-    |> cast_common(attrs)
+    |> cast_common(normalize_ip_access_attrs(attrs))
     |> put_change(:type, "destination")
     |> put_default_enabled(false)
     |> validate_required([:route_id, :schema, :type])
@@ -120,6 +126,9 @@ defmodule HydraSrt.Api.Endpoint do
       :keep_listening,
       :multicast_iface,
       :bind_address_option,
+      :allowed_list,
+      :denied_list,
+      :limit_access,
       :bind_interface,
       :bind_address,
       :bind_port,
@@ -213,4 +222,148 @@ defmodule HydraSrt.Api.Endpoint do
 
   defp normalize(value) when is_binary(value), do: value |> String.trim() |> String.downcase()
   defp normalize(_), do: ""
+
+  @doc false
+  @spec normalize_ip_access_attrs(term()) :: term()
+  def normalize_ip_access_attrs(attrs) when is_map(attrs) do
+    Enum.reduce(@ip_access_list_fields, attrs, fn field, acc ->
+      encode_ip_access_attr(acc, field)
+    end)
+  end
+
+  def normalize_ip_access_attrs(attrs), do: attrs
+
+  @doc false
+  @spec decode_ip_access_list(nil | binary() | list()) :: [binary()]
+  def decode_ip_access_list(nil), do: []
+
+  def decode_ip_access_list(value) when is_list(value) do
+    normalize_ip_access_list(value)
+  end
+
+  def decode_ip_access_list(value) when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, list} when is_list(list) -> normalize_ip_access_list(list)
+      _ -> []
+    end
+  end
+
+  @doc false
+  @spec valid_ip_access_entry?(binary()) :: boolean()
+  def valid_ip_access_entry?(entry) when is_binary(entry) do
+    normalized = String.trim(entry)
+
+    case String.split(normalized, "/", parts: 2) do
+      [ip] ->
+        parse_ip(ip) != :error
+
+      [ip, prefix] ->
+        valid_cidr_entry?(ip, prefix)
+    end
+  end
+
+  def valid_ip_access_entry?(_), do: false
+
+  @spec encode_ip_access_attr(map(), atom()) :: map()
+  def encode_ip_access_attr(attrs, field) when is_map(attrs) and is_atom(field) do
+    string_key = Atom.to_string(field)
+
+    cond do
+      Map.has_key?(attrs, field) ->
+        Map.update!(attrs, field, &encode_ip_access_value/1)
+
+      Map.has_key?(attrs, string_key) ->
+        Map.update!(attrs, string_key, &encode_ip_access_value/1)
+
+      true ->
+        attrs
+    end
+  end
+
+  @spec encode_ip_access_value(term()) :: term()
+  def encode_ip_access_value(value) when is_list(value) do
+    value
+    |> normalize_ip_access_list()
+    |> Jason.encode!()
+  end
+
+  def encode_ip_access_value(value) when is_binary(value), do: value
+  def encode_ip_access_value(nil), do: "[]"
+  def encode_ip_access_value(value), do: value
+
+  @spec put_default_ip_access_fields(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def put_default_ip_access_fields(changeset) do
+    changeset
+    |> put_default_ip_access_field(:allowed_list, "[]")
+    |> put_default_ip_access_field(:denied_list, "[]")
+    |> put_default_ip_access_field(:limit_access, false)
+  end
+
+  @spec put_default_ip_access_field(Ecto.Changeset.t(), atom(), term()) :: Ecto.Changeset.t()
+  def put_default_ip_access_field(changeset, field, default) do
+    case fetch_field(changeset, field) do
+      {_, nil} -> put_change(changeset, field, default)
+      _ -> changeset
+    end
+  end
+
+  @spec validate_ip_access_lists(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def validate_ip_access_lists(changeset) do
+    Enum.reduce(@ip_access_list_fields, changeset, fn field, acc ->
+      validate_change(acc, field, &validate_ip_access_list/2)
+    end)
+  end
+
+  @spec validate_ip_access_list(atom(), term()) :: keyword()
+  def validate_ip_access_list(field, value) do
+    case Jason.decode(value || "[]") do
+      {:ok, entries} when is_list(entries) ->
+        invalid_entries =
+          entries
+          |> normalize_ip_access_list()
+          |> Enum.reject(&valid_ip_access_entry?/1)
+
+        if invalid_entries == [] do
+          []
+        else
+          [{field, "must contain only IP addresses or CIDR ranges"}]
+        end
+
+      _ ->
+        [{field, "must be a JSON list"}]
+    end
+  end
+
+  @spec normalize_ip_access_list(list()) :: [binary()]
+  def normalize_ip_access_list(values) when is_list(values) do
+    values
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  @spec valid_cidr_entry?(binary(), binary()) :: boolean()
+  def valid_cidr_entry?(ip, prefix) do
+    with {:ok, tuple} <- parse_ip(ip),
+         {prefix_number, ""} <- Integer.parse(prefix),
+         true <- valid_prefix?(tuple, prefix_number) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  @spec parse_ip(binary()) :: {:ok, tuple()} | :error
+  def parse_ip(value) when is_binary(value) do
+    case :inet.parse_address(String.to_charlist(value)) do
+      {:ok, address} -> {:ok, address}
+      {:error, _reason} -> :error
+    end
+  end
+
+  @spec valid_prefix?(tuple(), integer()) :: boolean()
+  def valid_prefix?({_, _, _, _}, prefix), do: prefix >= 0 and prefix <= 32
+  def valid_prefix?({_, _, _, _, _, _, _, _}, prefix), do: prefix >= 0 and prefix <= 128
+  def valid_prefix?(_, _), do: false
 end
