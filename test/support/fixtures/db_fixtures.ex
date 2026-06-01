@@ -38,11 +38,8 @@ defmodule HydraSrt.DbFixtures do
   def source_fixture(route, attrs \\ %{}) do
     route_id = if is_map(route), do: route["id"] || route.id, else: route
     default_position = Map.get(attrs, "position") || Map.get(attrs, :position) || 0
-    route_port_seed = abs(:erlang.phash2(route_id || "route")) |> rem(20_000)
-
-    unique_port =
-      10_000 + route_port_seed + default_position * 1000 +
-        rem(System.unique_integer([:positive]), 1000)
+    default_schema = Map.get(attrs, "schema") || Map.get(attrs, :schema) || "UDP"
+    unique_port = endpoint_free_port(default_schema, default_position)
 
     attrs =
       attrs
@@ -64,8 +61,8 @@ defmodule HydraSrt.DbFixtures do
   """
   def destination_fixture(route, attrs \\ %{}) do
     route_id = if is_map(route), do: route["id"] || route.id, else: route
-    route_port_seed = abs(:erlang.phash2(route_id || "route")) |> rem(20_000)
-    unique_port = 10_000 + route_port_seed + rem(System.unique_integer([:positive]), 1000)
+    schema = Map.get(attrs, "schema") || Map.get(attrs, :schema) || "UDP"
+    unique_port = endpoint_free_port(schema, 0)
 
     attrs =
       attrs
@@ -81,8 +78,34 @@ defmodule HydraSrt.DbFixtures do
         "stopped_at" => ~U[2025-02-19 16:24:00Z]
       })
 
-    {:ok, destination} = HydraSrt.Db.create_destination(route_id, attrs)
+    create_destination_with_retry(route_id, attrs, 5)
+  end
 
-    destination
+  def endpoint_free_port(schema, _position) when schema in ["SRT"] do
+    HydraSrt.TestSupport.E2EHelpers.tcp_free_port!()
+  end
+
+  def endpoint_free_port(_schema, _position) do
+    HydraSrt.TestSupport.E2EHelpers.udp_free_port!()
+  end
+
+  def create_destination_with_retry(route_id, attrs, attempts_left) do
+    case HydraSrt.Db.create_destination(route_id, attrs) do
+      {:ok, destination} ->
+        destination
+
+      {:error, %Ecto.Changeset{errors: errors}}
+      when attempts_left > 0 and is_list(errors) ->
+        if Keyword.has_key?(errors, :bind_port) do
+          schema = Map.get(attrs, "schema") || Map.get(attrs, :schema) || "UDP"
+          retry_attrs = Map.put(attrs, "port", endpoint_free_port(schema, 0))
+          create_destination_with_retry(route_id, retry_attrs, attempts_left - 1)
+        else
+          raise "destination_fixture failed: #{inspect(errors)}"
+        end
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        raise "destination_fixture failed: #{inspect(changeset.errors)}"
+    end
   end
 end
