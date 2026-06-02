@@ -126,6 +126,9 @@ RUN mkdir -p /app/backup && \
 # Copy the release from the builder stage
 COPY --from=builder /app/_build/prod/rel/hydra_srt ./
 
+# Overlay scripts (bin/server, bin/migrate) may lose +x in build context (e.g. Windows).
+RUN chmod +x bin/server bin/migrate
+
 COPY run.sh run.sh
 RUN chmod +x run.sh
 
