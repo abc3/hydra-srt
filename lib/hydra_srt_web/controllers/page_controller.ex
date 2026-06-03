@@ -1,8 +1,6 @@
 defmodule HydraSrtWeb.PageController do
   use HydraSrtWeb, :controller
 
-  @index_html Application.app_dir(:hydra_srt, "priv/static/index.html")
-
   def index(conn, %{"path" => ["index.html" | _rest]}) do
     conn
     |> redirect(to: "/")
@@ -14,8 +12,10 @@ defmodule HydraSrtWeb.PageController do
   end
 
   defp serve_index_html(conn) do
+    index_html = Path.join(:code.priv_dir(:hydra_srt), "static/index.html")
+
     conn
     |> put_resp_header("content-type", "text/html; charset=utf-8")
-    |> Plug.Conn.send_file(200, @index_html)
+    |> Plug.Conn.send_file(200, index_html)
   end
 end
