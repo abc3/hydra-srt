@@ -31,9 +31,9 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     ensure_native_built!()
     ensure_api_auth_config!()
     ensure_repo_config_for_e2e!()
+    ensure_repo_migrated_for_e2e!()
     ensure_app_started!()
     ensure_cachex_started!()
-    ensure_repo_migrated_for_e2e!()
     ensure_endpoint_server_started!()
     :ok
   end
@@ -43,9 +43,9 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     ensure_native_built!()
     ensure_api_auth_config!()
     ensure_repo_config_for_e2e!()
+    ensure_repo_migrated_for_e2e!()
     ensure_app_started!()
     ensure_cachex_started!()
-    ensure_repo_migrated_for_e2e!()
     ensure_endpoint_server_started!()
     :ok
   end
@@ -203,6 +203,8 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
   def ensure_repo_config_for_e2e! do
     db_path =
       System.get_env("E2E_DATABASE_PATH") ||
+        Application.get_env(:hydra_srt, HydraSrt.Repo, [])
+        |> Keyword.get(:database) ||
         Path.join(System.tmp_dir!(), "hydra_srt_e2e_#{System.unique_integer([:positive])}.db")
 
     System.put_env("E2E_DATABASE_PATH", db_path)
@@ -313,28 +315,34 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     route_id = Jason.decode!(resp) |> get_in(["data", "id"])
 
     if is_binary(schema) and schema != "" do
-      source = %{
-        "enabled" => true,
-        "name" => Map.get(route_params, "source_name", "Primary"),
-        "schema" => schema,
-        "mode" => Map.get(route_params, "mode"),
-        "interface_sys_name" => Map.get(route_params, "interface_sys_name"),
-        "localaddress" => Map.get(route_params, "localaddress"),
-        "localport" => Map.get(route_params, "localport"),
-        "address" => Map.get(route_params, "address"),
-        "port" => Map.get(route_params, "port"),
-        "host" => Map.get(route_params, "host"),
-        "latency" => Map.get(route_params, "latency"),
-        "authentication" => Map.get(route_params, "authentication"),
-        "passphrase" => Map.get(route_params, "passphrase"),
-        "pbkeylen" => Map.get(route_params, "pbkeylen"),
-        "poll_timeout" => Map.get(route_params, "poll_timeout"),
-        "auto_reconnect" => Map.get(route_params, "auto_reconnect"),
-        "keep_listening" => Map.get(route_params, "keep_listening"),
-        "multicast_iface" => Map.get(route_params, "multicast_iface"),
-        "bind_address_option" => Map.get(route_params, "bind_address_option"),
-        "position" => 0
-      }
+      source =
+        %{
+          "enabled" => true,
+          "name" => Map.get(route_params, "source_name", "Primary"),
+          "schema" => schema,
+          "mode" => Map.get(route_params, "mode"),
+          "interface_sys_name" => Map.get(route_params, "interface_sys_name"),
+          "localaddress" => Map.get(route_params, "localaddress"),
+          "localport" => Map.get(route_params, "localport"),
+          "address" => Map.get(route_params, "address"),
+          "port" => Map.get(route_params, "port"),
+          "host" => Map.get(route_params, "host"),
+          "latency" => Map.get(route_params, "latency"),
+          "authentication" => Map.get(route_params, "authentication"),
+          "passphrase" => Map.get(route_params, "passphrase"),
+          "pbkeylen" => Map.get(route_params, "pbkeylen"),
+          "poll_timeout" => Map.get(route_params, "poll_timeout"),
+          "auto_reconnect" => Map.get(route_params, "auto_reconnect"),
+          "keep_listening" => Map.get(route_params, "keep_listening"),
+          "bind_address_option" => Map.get(route_params, "bind_address_option"),
+          "position" => 0
+        }
+        |> Map.merge(
+          route_params
+          |> Map.take(["multicast", "multicast_iface"])
+          |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+          |> Map.new()
+        )
 
       _ = api_create_source!(base_url, token, route_id, source)
     end

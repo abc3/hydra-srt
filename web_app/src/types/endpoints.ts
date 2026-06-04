@@ -13,6 +13,9 @@ export type EndpointFormValues = Record<string, unknown> & {
   host?: string;
   port?: number;
   localport?: number;
+  multicast?: boolean;
+  multicast_iface?: string;
+  bind_address_option?: string;
   latency?: number;
   authentication?: boolean;
   passphrase?: string;

@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use crate::config::{ElementConfig, PipelineConfig};
 use crate::lifecycle::PipelineLifecycleEmitter;
 use crate::output::StatsWriter;
-use crate::properties::apply_element_properties;
+use crate::properties::apply_element_properties_with_logging;
 use crate::runtime::{DestMetrics, PipelineRuntime};
 use crate::srt_access::{caller_ip, SrtAccessRules};
 
@@ -35,7 +35,11 @@ pub fn build_pipeline(
     let is_rtp_source = source_schema == "RTP";
 
     tee.set_property("allow-not-linked", true);
-    apply_element_properties(&source, &strip_internal_props(&config.source))?;
+    apply_element_properties_with_logging(
+        &source,
+        &strip_internal_props(&config.source),
+        Some(&writer),
+    )?;
 
     if source.find_property("do-timestamp").is_some() {
         source.set_property("do-timestamp", true);
@@ -152,7 +156,7 @@ pub fn build_pipeline(
     }
 
     for sink in config.sinks {
-        add_sink_to_pipeline(&pipeline, &tee, sink, dest_metrics.clone())?;
+        add_sink_to_pipeline(&pipeline, &tee, sink, dest_metrics.clone(), writer.clone())?;
     }
 
     Ok(PipelineRuntime {
@@ -174,6 +178,7 @@ fn add_sink_to_pipeline(
     tee: &gst::Element,
     sink_config: ElementConfig,
     dest_metrics: Arc<Mutex<Vec<Arc<DestMetrics>>>>,
+    writer: Arc<Mutex<Box<dyn StatsWriter>>>,
 ) -> Result<()> {
     let queue = gst::ElementFactory::make("queue")
         .build()
@@ -184,7 +189,11 @@ fn add_sink_to_pipeline(
 
     configure_branch_queue(&queue, &sink_config.element_type);
 
-    apply_element_properties(&sink_element, &strip_internal_props(&sink_config))?;
+    apply_element_properties_with_logging(
+        &sink_element,
+        &strip_internal_props(&sink_config),
+        Some(&writer),
+    )?;
 
     if sink_config.element_type == "udpsink" {
         sink_element.set_property("sync", false);
@@ -415,6 +424,42 @@ mod tests {
             .expect("srt metrics present");
         assert_eq!(srt_metrics.kind, "srtsink");
         assert!(srt_metrics.sink_element.is_some());
+    }
+
+    #[test]
+    fn applies_udp_multicast_source_properties() {
+        init_gst();
+
+        let config = PipelineConfig {
+            source: ElementConfig {
+                element_type: "udpsrc".to_string(),
+                props: BTreeMap::from([
+                    (
+                        "address".to_string(),
+                        Value::String("239.1.1.1".to_string()),
+                    ),
+                    ("port".to_string(), Value::Number(0_u64.into())),
+                    ("auto-multicast".to_string(), Value::Bool(true)),
+                    (
+                        "multicast-iface".to_string(),
+                        Value::String("lo".to_string()),
+                    ),
+                ]),
+            },
+            sinks: vec![ElementConfig {
+                element_type: "fakesink".to_string(),
+                props: BTreeMap::from([("sync".to_string(), Value::Bool(false))]),
+            }],
+        };
+
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(StdoutWriter::new())));
+
+        let runtime = build_pipeline(config, writer).expect("pipeline should build");
+
+        assert_eq!(runtime.source.property::<String>("address"), "239.1.1.1");
+        assert!(runtime.source.property::<bool>("auto-multicast"));
+        assert_eq!(runtime.source.property::<String>("multicast-iface"), "lo");
     }
 
     #[test]

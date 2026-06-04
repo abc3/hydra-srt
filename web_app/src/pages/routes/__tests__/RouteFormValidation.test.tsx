@@ -214,4 +214,68 @@ describe('Route form validation', () => {
 
     expect(await screen.findByText('eth0 (eth0 - 10.10.10.1/24)')).toBeInTheDocument();
   });
+
+  it('saves UDP multicast source settings from the route form', async () => {
+    mockInterfacesApi.getAll.mockResolvedValue({ data: [] });
+    mockInterfacesApi.getSystemInterfaces.mockResolvedValue({
+      data: [{ sys_name: 'eth0', ip: '10.10.10.1/24' }],
+    });
+    mockRoutesApi.create.mockResolvedValue({ data: { id: 'route-1' } });
+    mockSourcesApi.create.mockResolvedValue({ data: { id: 'source-1' } });
+    mockDestinationsApi.create.mockResolvedValue({ data: { id: 'dest-1' } });
+    mockSourcesApi.reorder.mockResolvedValue({ data: [] });
+
+    render(
+      <MemoryRouter initialEntries={['/routes/new/edit']}>
+        <Routes>
+          <Route path="/routes/:id/edit" element={<RouteSourceEdit />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('Enter route name'), { target: { value: 'Route 1' } });
+
+    const sourceTitle = await screen.findByText('Primary Source');
+    const sourceCard = sourceTitle.closest('.ant-card');
+    expect(sourceCard).not.toBeNull();
+    if (!(sourceCard instanceof HTMLElement)) {
+      throw new Error('Source card was not found');
+    }
+    const sourceScope = within(sourceCard);
+
+    fireEvent.click(sourceScope.getByRole('radio', { name: 'UDP' }));
+    fireEvent.click(await sourceScope.findByLabelText('Multicast source'));
+    fireEvent.change(sourceScope.getByPlaceholderText('239.1.1.1'), { target: { value: '239.1.1.1' } });
+    fireEvent.change(sourceScope.getByLabelText('Port'), { target: { value: '5000' } });
+    fireEvent.mouseDown(sourceScope.getByLabelText('Interface'));
+    fireEvent.click(await screen.findByText('eth0 (eth0 - 10.10.10.1/24)'));
+
+    const destinationTitle = await screen.findByText('Destination #1');
+    const destinationCard = destinationTitle.closest('.ant-card');
+    expect(destinationCard).not.toBeNull();
+    if (!(destinationCard instanceof HTMLElement)) {
+      throw new Error('Destination card was not found');
+    }
+    const destinationScope = within(destinationCard);
+    fireEvent.change(destinationScope.getByLabelText('Port'), { target: { value: '6000' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    });
+
+    await waitFor(() => {
+      expect(mockSourcesApi.create).toHaveBeenCalled();
+    });
+
+    expect(mockSourcesApi.create).toHaveBeenCalledWith(
+      'route-1',
+      expect.objectContaining({
+        schema: 'UDP',
+        address: '239.1.1.1',
+        port: 5000,
+        multicast: true,
+        interface_sys_name: 'eth0',
+      }),
+    );
+  });
 });

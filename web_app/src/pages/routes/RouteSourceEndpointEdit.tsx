@@ -181,7 +181,7 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
 
     const handleValuesChange = (changedValues: Partial<EndpointFormValues>, allValues: EndpointFormValues) => {
         const changedKeys = Object.keys(changedValues || {});
-        const bindRelevantKeys = ['interface_sys_name', 'address', 'localaddress', 'host', 'port', 'localport'];
+        const bindRelevantKeys = ['interface_sys_name', 'address', 'localaddress', 'host', 'port', 'localport', 'multicast_iface', 'bind_address_option'];
 
         if (changedKeys.some((key) => bindRelevantKeys.includes(key))) {
             clearEndpointBindErrors(form);
@@ -322,7 +322,7 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                                         <Radio.Group buttonStyle="solid">
                                             <Radio.Button value="SRT">SRT</Radio.Button>
                                             <Radio.Button value="UDP">UDP</Radio.Button>
-                                            <Radio.Button value="RTP">RTP (TS)</Radio.Button>
+                                            <Radio.Button value="RTP">RTP</Radio.Button>
                                         </Radio.Group>
                                     </Form.Item>
 
@@ -520,14 +520,19 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                                     </Form.Item>
 
                                     {/* UDP specific options */}
-                                    <Form.Item noStyle dependencies={['schema']}>
+                                    <Form.Item noStyle dependencies={['schema', 'multicast']}>
                                         {({ getFieldValue }) =>
                                             (getFieldValue('schema') === 'UDP' || getFieldValue('schema') === 'RTP') && (
+                                                (() => {
+                                                    const isMulticast = getFieldValue('multicast') === true;
+
+                                                    return (
                                                 <>
                                                     <Form.Item
                                                         label="Interface"
                                                         name="interface_sys_name"
-                                                        extra="Select a local interface for UDP/RTP bind settings."
+                                                        extra={isMulticast ? 'Required for joining the multicast group on the correct interface.' : 'Select a local interface for UDP/RTP bind settings.'}
+                                                        rules={isMulticast ? [{ required: true, message: 'Please select a multicast interface' }] : []}
                                                     >
                                                         <Select
                                                             allowClear
@@ -539,13 +544,22 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                                                     </Form.Item>
 
                                                     <Form.Item
-                                                        label="Address"
-                                                        required
-                                                        name="host"
-                                                        extra="The host/IP (or multicast group) to listen on."
-                                                        rules={[{ required: true, message: 'Please enter a source address' }]}
+                                                        label="Multicast source"
+                                                        name="multicast"
+                                                        valuePropName="checked"
+                                                        extra="Enable when this source receives packets from a UDP multicast group."
                                                     >
-                                                        <Input placeholder="Enter address" />
+                                                        <Switch />
+                                                    </Form.Item>
+
+                                                    <Form.Item
+                                                        label={isMulticast ? 'Multicast Group' : 'Address'}
+                                                        required
+                                                        name="address"
+                                                        extra={isMulticast ? 'The multicast group to join, for example 239.1.1.1.' : 'The local address to listen on.'}
+                                                        rules={[{ required: true, message: isMulticast ? 'Please enter a multicast group' : 'Please enter a source address' }]}
+                                                    >
+                                                        <Input placeholder={isMulticast ? '239.1.1.1' : 'Enter address'} />
                                                     </Form.Item>
 
                                                     <Form.Item
@@ -572,6 +586,8 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                                                         />
                                                     </Form.Item>
                                                 </>
+                                                    );
+                                                })()
                                             )
                                         }
                                     </Form.Item>

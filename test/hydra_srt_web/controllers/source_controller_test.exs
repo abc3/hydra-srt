@@ -61,6 +61,39 @@ defmodule HydraSrtWeb.SourceControllerTest do
     assert json_response(conn, 422)["errors"] != %{}
   end
 
+  test "create UDP multicast source persists multicast fields", %{
+    conn: conn,
+    route: %{id: route_id}
+  } do
+    attrs =
+      Map.merge(@create_attrs, %{
+        "host" => nil,
+        "address" => "239.1.1.1",
+        "multicast" => true,
+        "multicast_iface" => "en0"
+      })
+
+    conn = post(conn, ~p"/api/routes/#{route_id}/sources", source: attrs)
+
+    assert %{
+             "schema" => "UDP",
+             "address" => "239.1.1.1",
+             "multicast" => true,
+             "multicast_iface" => "en0"
+           } = json_response(conn, 201)["data"]
+  end
+
+  test "create source defaults multicast to false when null", %{
+    conn: conn,
+    route: %{id: route_id}
+  } do
+    attrs = Map.put(@create_attrs, "multicast", nil)
+
+    conn = post(conn, ~p"/api/routes/#{route_id}/sources", source: attrs)
+
+    assert %{"multicast" => false} = json_response(conn, 201)["data"]
+  end
+
   test "reorder sources", %{conn: conn, route: route} do
     s1 = source_fixture(route, %{position: 0, name: "p"})
     s2 = source_fixture(route, %{position: 1, name: "b1"})

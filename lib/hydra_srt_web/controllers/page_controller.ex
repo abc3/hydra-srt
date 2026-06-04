@@ -11,6 +11,7 @@ defmodule HydraSrtWeb.PageController do
     serve_index_html(conn)
   end
 
+  # sobelow_skip ["Traversal.SendFile"]
   defp serve_index_html(conn) do
     index_html = Path.join(:code.priv_dir(:hydra_srt), "static/index.html")
 

@@ -397,6 +397,7 @@ defmodule HydraSrt.Api do
     "poll_timeout",
     "auto_reconnect",
     "keep_listening",
+    "multicast",
     "multicast_iface",
     "bind_address_option",
     "node",

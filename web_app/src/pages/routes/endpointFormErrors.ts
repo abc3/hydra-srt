@@ -32,6 +32,9 @@ export const applyBackendEndpointErrors = (
     'authentication',
     'passphrase',
     'pbkeylen',
+    'multicast',
+    'multicast_iface',
+    'bind_address_option',
     'bind_port',
   ];
   const allErrorEntries = Object.entries(errors).filter(([, value]) => isUnknownArray(value) && value.length > 0);
@@ -95,7 +98,7 @@ export const applyBackendEndpointErrors = (
 
 export const clearEndpointBindErrors = (form: FormLike, basePath: FieldPath = []) => {
   const base = Array.isArray(basePath) ? basePath : [];
-  const bindFields = ['interface_sys_name', 'address', 'localaddress', 'host', 'port', 'localport'];
+  const bindFields = ['interface_sys_name', 'address', 'localaddress', 'host', 'port', 'localport', 'multicast_iface', 'bind_address_option'];
 
   form.setFields(
     bindFields.map((field) => ({
