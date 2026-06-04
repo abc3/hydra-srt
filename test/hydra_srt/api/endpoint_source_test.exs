@@ -19,6 +19,52 @@ defmodule HydraSrt.Api.EndpointSourceTest do
       })
 
     assert changeset.valid?
+    assert Ecto.Changeset.get_field(changeset, :thumbnail_enabled) == false
+    assert Ecto.Changeset.get_field(changeset, :thumbnail_interval_ms) == 5000
+    assert Ecto.Changeset.get_field(changeset, :thumbnail_capture_policy) == "running"
+  end
+
+  test "valid thumbnail settings" do
+    route = route_fixture()
+
+    changeset =
+      Endpoint.source_changeset(%Endpoint{}, %{
+        route_id: route.id,
+        position: 0,
+        schema: "UDP",
+        address: "127.0.0.1",
+        port: 5000,
+        thumbnail_enabled: true,
+        thumbnail_interval_ms: 2000,
+        thumbnail_capture_policy: "always"
+      })
+
+    assert changeset.valid?
+    assert Ecto.Changeset.get_field(changeset, :thumbnail_enabled) == true
+    assert Ecto.Changeset.get_field(changeset, :thumbnail_interval_ms) == 2000
+    assert Ecto.Changeset.get_field(changeset, :thumbnail_capture_policy) == "always"
+  end
+
+  test "invalid thumbnail settings" do
+    route = route_fixture()
+
+    changeset =
+      Endpoint.source_changeset(%Endpoint{}, %{
+        route_id: route.id,
+        position: 0,
+        schema: "UDP",
+        address: "127.0.0.1",
+        port: 5000,
+        thumbnail_interval_ms: 999,
+        thumbnail_capture_policy: "never"
+      })
+
+    refute changeset.valid?
+
+    assert {"must be greater than or equal to %{number}", _} =
+             changeset.errors[:thumbnail_interval_ms]
+
+    assert {"is invalid", _} = changeset.errors[:thumbnail_capture_policy]
   end
 
   test "invalid when schema missing" do

@@ -12,6 +12,8 @@ defmodule HydraSrt do
 
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
+    :ok = HydraSrt.ThumbnailManager.stop_route_workers(id)
+
     DynamicSupervisor.start_child(
       {:via, PartitionSupervisor, {HydraSrt.DynamicSupervisor, id}},
       {HydraSrt.RoutesSupervisor, %{id: id}}

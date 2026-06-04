@@ -144,10 +144,14 @@ defmodule HydraSrt.RouteHandlerTest do
   test "source_from_record with valid UDP schema" do
     record = %{
       "schema" => "UDP",
+      "id" => "source-1",
       "address" => "127.0.0.1",
       "port" => 4201,
       "buffer-size" => 65536,
-      "mtu" => 1500
+      "mtu" => 1500,
+      "thumbnail_enabled" => true,
+      "thumbnail_interval_ms" => 2000,
+      "thumbnail_capture_policy" => "always"
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
@@ -156,6 +160,10 @@ defmodule HydraSrt.RouteHandlerTest do
     assert source["port"] == 4201
     assert source["buffer-size"] == 65536
     assert source["mtu"] == 1500
+    assert source["hydra_source_id"] == "source-1"
+    assert source["hydra_thumbnail_enabled"] == true
+    assert source["hydra_thumbnail_interval_ms"] == 2000
+    assert source["hydra_thumbnail_capture_policy"] == "always"
   end
 
   test "source_from_record with UDP schema and minimal options" do
@@ -196,6 +204,38 @@ defmodule HydraSrt.RouteHandlerTest do
   test "source_from_record with missing options" do
     record = %{"schema" => "SRT"}
     assert {:error, :invalid_source} = RouteHandler.source_from_record(record)
+  end
+
+  test "parse_native_json_line handles thumbnail events" do
+    json =
+      Jason.encode!(%{
+        "event" => "thumbnail",
+        "source_id" => "source-1",
+        "content_type" => "image/jpeg",
+        "data_base64" => Base.encode64(<<0xFF, 0xD8, 0xFF, 0xD9>>)
+      })
+
+    assert {:thumbnail, payload} = RouteHandler.parse_native_json_line(json)
+    assert payload["source_id"] == "source-1"
+  end
+
+  test "publish_thumbnail stores decoded image and broadcasts metadata" do
+    Phoenix.PubSub.subscribe(HydraSrt.PubSub, "item:source-1")
+    Phoenix.PubSub.subscribe(HydraSrt.PubSub, "item:route-1")
+
+    payload = %{
+      "source_id" => "source-1",
+      "content_type" => "image/jpeg",
+      "captured_at" => "2026-06-04T12:00:00Z",
+      "data_base64" => Base.encode64(<<0xFF, 0xD8, 0xFF, 0xD9>>)
+    }
+
+    assert :ok = RouteHandler.publish_thumbnail("route-1", nil, payload)
+    assert {:ok, thumbnail} = HydraSrt.Thumbnails.get("route-1", "source-1")
+    assert thumbnail.bytes == <<0xFF, 0xD8, 0xFF, 0xD9>>
+
+    assert_receive {:item_thumbnail, %{item_id: "source-1", route_id: "route-1"}}
+    assert_receive {:item_thumbnail, %{item_id: "source-1", route_id: "route-1"}}
   end
 
   test "source_record_from_route picks active source id when present" do

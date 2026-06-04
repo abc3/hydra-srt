@@ -458,6 +458,10 @@ defmodule HydraSrt.RouteHandler do
         publish_srt_access_log(data.id, access_event)
         data
 
+      {:thumbnail, thumbnail_event} ->
+        publish_thumbnail(data.id, data.active_source_id, thumbnail_event)
+        data
+
       :unknown ->
         Logger.warning("RouteHandler: unknown native json line: #{inspect(json)}")
         data
@@ -799,6 +803,9 @@ defmodule HydraSrt.RouteHandler do
       {:ok, %{"event" => "srt_access"} = payload} ->
         {:srt_access, payload}
 
+      {:ok, %{"event" => "thumbnail"} = payload} ->
+        {:thumbnail, payload}
+
       {:ok, %{"event" => _event}} ->
         :unknown
 
@@ -859,6 +866,61 @@ defmodule HydraSrt.RouteHandler do
       "pipeline_logs",
       {:pipeline_log, log}
     )
+  end
+
+  @doc false
+  def publish_thumbnail(route_id, active_source_id, %{} = thumbnail_event)
+      when is_binary(route_id) do
+    source_id = thumbnail_event["source_id"] || active_source_id
+    data_base64 = thumbnail_event["data_base64"] || thumbnail_event["data"]
+
+    with true <- is_binary(source_id) and source_id != "",
+         true <- is_binary(data_base64) and data_base64 != "",
+         {:ok, metadata} <-
+           HydraSrt.Thumbnails.put_base64(route_id, source_id, data_base64,
+             content_type: thumbnail_event["content_type"] || "image/jpeg",
+             updated_at: thumbnail_updated_at(thumbnail_event["captured_at"])
+           ) do
+      broadcast_thumbnail(route_id, source_id, metadata)
+    else
+      _ ->
+        Logger.warning("RouteHandler: invalid thumbnail event: #{inspect(thumbnail_event)}")
+        :ok
+    end
+  end
+
+  @doc false
+  def thumbnail_updated_at(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      _ -> DateTime.utc_now(:microsecond)
+    end
+  end
+
+  def thumbnail_updated_at(_value), do: DateTime.utc_now(:microsecond)
+
+  @doc false
+  def broadcast_thumbnail(route_id, source_id, metadata)
+      when is_binary(route_id) and is_binary(source_id) and is_map(metadata) do
+    payload =
+      metadata
+      |> Map.put(:item_id, source_id)
+      |> Map.put(:route_id, route_id)
+      |> Map.put(:thumbnail_url, "/api/routes/#{route_id}/sources/#{source_id}/thumbnail")
+
+    Phoenix.PubSub.broadcast(
+      HydraSrt.PubSub,
+      "item:" <> source_id,
+      {:item_thumbnail, payload}
+    )
+
+    Phoenix.PubSub.broadcast(
+      HydraSrt.PubSub,
+      "item:" <> route_id,
+      {:item_thumbnail, payload}
+    )
+
+    :ok
   end
 
   @doc false
@@ -1309,6 +1371,7 @@ defmodule HydraSrt.RouteHandler do
     |> put_opt(record, "buffer-size", "buffer_size")
     |> put_opt(record, "mtu")
     |> put_srt_access_opts(record)
+    |> put_thumbnail_opts(record)
   end
 
   defp put_opt(opts, record, key), do: put_opt(opts, record, key, key)
@@ -1348,6 +1411,34 @@ defmodule HydraSrt.RouteHandler do
   end
 
   def normalize_access_list(_), do: []
+
+  @doc false
+  def put_thumbnail_opts(opts, record) when is_map(opts) and is_map(record) do
+    opts
+    |> maybe_put_hydra_source_id(record)
+    |> maybe_put_thumbnail_config(record)
+  end
+
+  @doc false
+  def maybe_put_hydra_source_id(opts, record) do
+    case Map.get(record, "id") do
+      id when is_binary(id) and id != "" -> Map.put(opts, "hydra_source_id", id)
+      _ -> opts
+    end
+  end
+
+  @doc false
+  def maybe_put_thumbnail_config(opts, %{"thumbnail_enabled" => true} = record) do
+    opts
+    |> Map.put("hydra_thumbnail_enabled", true)
+    |> Map.put("hydra_thumbnail_interval_ms", Map.get(record, "thumbnail_interval_ms") || 5000)
+    |> Map.put(
+      "hydra_thumbnail_capture_policy",
+      Map.get(record, "thumbnail_capture_policy") || "running"
+    )
+  end
+
+  def maybe_put_thumbnail_config(opts, _record), do: opts
 
   @doc false
   def resolve_interface_bind_ip(sys_name) when is_binary(sys_name) do

@@ -5,6 +5,7 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtToUdpTest do
   alias HydraSrt.E2E.Native.Helpers
   alias HydraSrt.E2E.Native.ProcessRegistry
   alias HydraSrt.E2E.Native.UdpListener
+  alias HydraSrt.TestSupport.E2EHelpers
 
   @moduletag :native_e2e
 
@@ -23,6 +24,7 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtToUdpTest do
 
     config = Helpers.srt_to_udp_config(source_port, udp_port)
     config = maybe_deny_localhost(config, context)
+    config = maybe_enable_thumbnail(config, context)
 
     {:ok, harness} =
       Harness.start_link(
@@ -151,6 +153,50 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtToUdpTest do
     assert is_binary(sender.tag)
   end
 
+  @tag enable_thumbnail: true
+  test "emits thumbnail JPEG event when enabled", %{
+    source_port: source_port
+  } do
+    assert_receive {:rs_native_route_id, "rs_demo_" <> _}, 5_000
+
+    sender =
+      E2EHelpers.start_port_logged!(
+        "ffmpeg",
+        [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-re",
+          "-f",
+          "lavfi",
+          "-i",
+          "testsrc2=size=640x360:rate=30",
+          "-t",
+          "8",
+          "-c:v",
+          "mpeg2video",
+          "-pix_fmt",
+          "yuv420p",
+          "-f",
+          "mpegts",
+          "srt://127.0.0.1:#{source_port}?mode=caller&pkt_size=1316"
+        ],
+        "ffmpeg_thumbnail_native"
+      )
+
+    assert_receive {:rs_native_event,
+                    %{
+                      "event" => "thumbnail",
+                      "source_id" => "native_source",
+                      "content_type" => "image/jpeg",
+                      "data_base64" => data_base64
+                    }},
+                   20_000
+
+    assert {:ok, <<0xFF, 0xD8, _rest::binary>>} = Base.decode64(data_base64)
+    assert sender.os_pid
+  end
+
   def maybe_deny_localhost(config, %{deny_localhost: true}) do
     put_in(
       config,
@@ -166,4 +212,19 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtToUdpTest do
   end
 
   def maybe_deny_localhost(config, _context), do: config
+
+  def maybe_enable_thumbnail(config, %{enable_thumbnail: true}) do
+    put_in(
+      config,
+      ["source"],
+      Map.merge(config["source"], %{
+        "hydra_source_id" => "native_source",
+        "hydra_thumbnail_enabled" => true,
+        "hydra_thumbnail_interval_ms" => 1000,
+        "hydra_thumbnail_capture_policy" => "running"
+      })
+    )
+  end
+
+  def maybe_enable_thumbnail(config, _context), do: config
 end

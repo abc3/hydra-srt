@@ -102,6 +102,35 @@ defmodule HydraSrtWeb.RealtimeChannelTest do
     }
   end
 
+  test "subscribes to item topic and pushes item thumbnail event", %{token: token} do
+    assert {:ok, socket} = connect(HydraSrtWeb.UserSocket, %{"token" => token})
+    assert {:ok, _, socket} = subscribe_and_join(socket, HydraSrtWeb.RealtimeChannel, "realtime")
+
+    ref = push(socket, "item:subscribe", %{"item_id" => "source-1"})
+    assert_reply ref, :ok
+
+    Phoenix.PubSub.broadcast(
+      HydraSrt.PubSub,
+      "item:source-1",
+      {:item_thumbnail,
+       %{
+         item_id: "source-1",
+         route_id: "route-1",
+         source_id: "source-1",
+         thumbnail_url: "/api/routes/route-1/sources/source-1/thumbnail",
+         version: 1
+       }}
+    )
+
+    assert_push "item_thumbnail", %{
+      item_id: "source-1",
+      route_id: "route-1",
+      source_id: "source-1",
+      thumbnail_url: "/api/routes/route-1/sources/source-1/thumbnail",
+      version: 1
+    }
+  end
+
   test "item topic subscribe is idempotent and unsubscribe stops pushes", %{token: token} do
     assert {:ok, socket} = connect(HydraSrtWeb.UserSocket, %{"token" => token})
     assert {:ok, _, socket} = subscribe_and_join(socket, HydraSrtWeb.RealtimeChannel, "realtime")

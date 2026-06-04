@@ -71,6 +71,7 @@ defmodule HydraSrtWeb.Router do
     get "/routes/:route_id/sources/:id", SourceController, :show
     patch "/routes/:route_id/sources/:id", SourceController, :update
     delete "/routes/:route_id/sources/:id", SourceController, :delete
+    get "/routes/:route_id/sources/:id/thumbnail", ThumbnailController, :show
     post "/routes/:route_id/sources-reorder", SourceController, :reorder
     post "/routes/:route_id/sources/reorder", SourceController, :reorder
     post "/routes/:route_id/sources/:id/test", SourceController, :test

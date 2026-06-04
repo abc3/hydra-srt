@@ -15,6 +15,7 @@ import {
   Dropdown,
   Tooltip as AntTooltip,
   Badge,
+  Image,
   Select,
   DatePicker,
   Alert,
@@ -42,6 +43,7 @@ import { routesApi, destinationsApi, sourcesApi } from '../../utils/api';
 import {
   subscribeToItemSource,
   subscribeToItemStatus,
+  subscribeToItemThumbnail,
   subscribeToStats,
 } from '../../utils/realtime';
 import { ROUTES } from "../../utils/constants";
@@ -101,6 +103,11 @@ type EndpointRow = RouteEndpoint & {
   endpointId?: string;
   position?: number;
   schema_status?: string;
+};
+
+type SourceThumbnailProps = {
+  routeId?: string;
+  source: EndpointRow;
 };
 
 const { Title, Text } = Typography;
@@ -242,6 +249,89 @@ const alignToSecondIso = (date = new Date()) => {
 };
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const SourceThumbnail = ({ routeId, source }: SourceThumbnailProps) => {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const sourceId = source.endpointId || source.id;
+  const enabled = source.thumbnail_enabled === true;
+  const version = source.thumbnail_version;
+
+  useEffect(() => {
+    if (!routeId || !sourceId || !enabled) {
+      setObjectUrl((prev) => {
+        if (prev) {
+          URL.revokeObjectURL(prev);
+        }
+        return null;
+      });
+      return undefined;
+    }
+
+    let cancelled = false;
+    let createdUrl: string | null = null;
+
+    setLoading(true);
+
+    sourcesApi.getThumbnailBlob(routeId, String(sourceId))
+      .then((blob) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (!blob) {
+          setObjectUrl((prev) => {
+            if (prev) {
+              URL.revokeObjectURL(prev);
+            }
+            return null;
+          });
+          return;
+        }
+
+        createdUrl = URL.createObjectURL(blob);
+        setObjectUrl((prev) => {
+          if (prev) {
+            URL.revokeObjectURL(prev);
+          }
+          return createdUrl;
+        });
+      })
+      .catch((error) => {
+        console.error('Failed to load source thumbnail', error);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (createdUrl) {
+        URL.revokeObjectURL(createdUrl);
+      }
+    };
+  }, [routeId, sourceId, enabled, version]);
+
+  if (!enabled) {
+    return <Text type="secondary">Off</Text>;
+  }
+
+  if (objectUrl) {
+    return (
+      <Image
+        src={objectUrl}
+        alt={`${source.name || 'Source'} thumbnail`}
+        width={96}
+        height={54}
+        style={{ objectFit: 'cover', borderRadius: 4, background: '#111' }}
+      />
+    );
+  }
+
+  return <Text type="secondary">{loading ? 'Loading...' : 'No thumbnail'}</Text>;
+};
 
 const hasRouteReachedActionResult = (route: RouteRecord | null | undefined, action: 'start' | 'stop') => {
   const runtimeStatus = ((route?.schema_status || route?.status) || '').toLowerCase();
@@ -403,6 +493,61 @@ const RouteItem = () => {
       });
     };
   }, [routeData?.id, sourceIdsSignature, destinationIdsSignature]);
+
+  useEffect(() => {
+    if (!routeData?.id) {
+      return undefined;
+    }
+
+    const sourceIds = (routeData.sources || []).map((source) => source.id).filter(Boolean);
+    const uniqueSourceIds = Array.from(new Set(sourceIds));
+
+    const unsubscribers = uniqueSourceIds.map((sourceId) =>
+      subscribeToItemThumbnail(String(sourceId), (payload) => {
+        const sourceIdFromEvent = payload?.source_id || payload?.item_id;
+        const version = payload?.version;
+
+        if (!sourceIdFromEvent) {
+          return;
+        }
+
+        setRouteData((prev) => {
+          if (!prev) {
+            return prev;
+          }
+
+          let sourcesChanged = false;
+          const nextSources = (prev.sources || []).map((source) => {
+            if (source.id !== sourceIdFromEvent) {
+              return source;
+            }
+
+            sourcesChanged = true;
+            return {
+              ...source,
+              thumbnail_version: typeof version === 'number' ? version : Date.now(),
+              thumbnail_url: (payload?.thumbnail_url as string | undefined) || source.thumbnail_url,
+            };
+          });
+
+          if (!sourcesChanged) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            sources: nextSources,
+          };
+        });
+      })
+    );
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => {
+        unsubscribe?.();
+      });
+    };
+  }, [routeData?.id, sourceIdsSignature]);
 
   useEffect(() => {
     if (!routeData?.id) {
@@ -847,6 +992,17 @@ const RouteItem = () => {
   };
 
   const endpointColumns: ColumnsType<EndpointRow> = [
+    {
+      title: 'Thumbnail',
+      key: 'thumbnail',
+      width: 130,
+      render: (_, record) =>
+        record.rowType === 'source' ? (
+          <SourceThumbnail routeId={id} source={record} />
+        ) : (
+          <Text type="secondary">-</Text>
+        ),
+    },
     {
       title: 'Type',
       dataIndex: 'typeLabel',

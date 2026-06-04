@@ -14,6 +14,11 @@ export type RouteEndpoint = Record<string, unknown> & {
   port?: number;
   address?: string;
   localaddress?: string;
+  thumbnail_enabled?: boolean;
+  thumbnail_interval_ms?: number;
+  thumbnail_capture_policy?: 'running' | 'always';
+  thumbnail_url?: string;
+  thumbnail_version?: number;
 };
 
 export type RouteRecord = Record<string, unknown> & {

@@ -54,6 +54,9 @@ defmodule HydraSrt.Application do
       {HydraSrt.Mcp.Server, transport: {:streamable_http, start: true}, request_timeout: 20_000},
       {HydraSrt.Stats.PipelineLogger, %{}},
       {HydraSrt.Notifications.Telegram, %{}},
+      HydraSrt.Thumbnails,
+      {DynamicSupervisor, strategy: :one_for_one, name: HydraSrt.ThumbnailSupervisor},
+      {HydraSrt.ThumbnailManager, []},
       HydraSrtWeb.Endpoint
     ]
 

@@ -35,6 +35,9 @@ export type EndpointRecord = Record<string, unknown> & {
   keep_listening?: EndpointValue;
   'auto-reconnect'?: EndpointValue;
   'keep-listening'?: EndpointValue;
+  thumbnail_enabled?: EndpointValue;
+  thumbnail_interval_ms?: EndpointValue;
+  thumbnail_capture_policy?: EndpointValue;
 };
 
 const toNumberIfPresent = (value: EndpointValue): EndpointValue => {
@@ -115,6 +118,9 @@ export const normalizeEndpointForForm = (endpoint: EndpointRecord | null | undef
   flat.allowed_list = normalizeIpAccessList(flat.allowed_list);
   flat.denied_list = normalizeIpAccessList(flat.denied_list);
   flat.limit_access = flat.limit_access ?? false;
+  flat.thumbnail_enabled = flat.thumbnail_enabled ?? false;
+  flat.thumbnail_interval_ms = toNumberIfPresent(flat.thumbnail_interval_ms as EndpointValue) ?? 5000;
+  flat.thumbnail_capture_policy = flat.thumbnail_capture_policy || 'running';
 
   return flat;
 };

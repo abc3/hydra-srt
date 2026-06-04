@@ -26,6 +26,7 @@ const nodesListeners = new Set<Listener>();
 const itemSubscriptions = new Map<string, ItemSubscription>();
 const itemSubscriptionsOnServer = new Set<string>();
 const itemSourceListeners = new Map<string, Set<Listener>>();
+const itemThumbnailListeners = new Map<string, Set<Listener>>();
 const routeEventsListeners = new Map<string, Set<Listener>>();
 const routeEventsSubscriptionsOnServer = new Set<string>();
 
@@ -376,6 +377,22 @@ export const connectRealtime = () => {
     listeners.forEach((listener) => listener(payload));
   });
 
+  channel.on('item_thumbnail', (payload: Payload) => {
+    const itemId = typeof payload?.item_id === 'string' ? payload.item_id : null;
+
+    if (!itemId) {
+      return;
+    }
+
+    const listeners = itemThumbnailListeners.get(itemId);
+
+    if (!listeners || listeners.size === 0) {
+      return;
+    }
+
+    listeners.forEach((listener) => listener(payload));
+  });
+
   channel.on('event', (payload: Payload) => {
     const routeId = typeof payload?.route_id === 'string' ? payload.route_id : null;
 
@@ -472,6 +489,7 @@ export const disconnectRealtime = () => {
   itemSubscriptions.clear();
   itemSubscriptionsOnServer.clear();
   itemSourceListeners.clear();
+  itemThumbnailListeners.clear();
   routeEventsListeners.clear();
   routeEventsSubscriptionsOnServer.clear();
 };
@@ -590,6 +608,43 @@ export const subscribeToItemSource = (itemId: string, listener: Listener) => {
       }
     } else {
       itemSourceListeners.set(itemId, currentListeners);
+    }
+  };
+};
+
+export const subscribeToItemThumbnail = (itemId: string, listener: Listener) => {
+  if (typeof itemId !== 'string' || itemId.length === 0) {
+    return () => {};
+  }
+
+  const listeners = itemThumbnailListeners.get(itemId) || new Set();
+
+  if (typeof listener === 'function') {
+    listeners.add(listener);
+  }
+
+  itemThumbnailListeners.set(itemId, listeners);
+
+  connectRealtime();
+  addItemListener(itemId);
+  pushItemSubscription(itemId);
+
+  return () => {
+    const currentListeners = itemThumbnailListeners.get(itemId);
+
+    if (currentListeners && typeof listener === 'function') {
+      currentListeners.delete(listener);
+    }
+
+    if (!currentListeners || currentListeners.size === 0) {
+      itemThumbnailListeners.delete(itemId);
+      const remaining = removeItemListener(itemId);
+
+      if (remaining === 0) {
+        pushItemUnsubscription(itemId);
+      }
+    } else {
+      itemThumbnailListeners.set(itemId, currentListeners);
     }
   };
 };

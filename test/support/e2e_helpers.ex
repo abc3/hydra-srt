@@ -157,11 +157,30 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
   end
 
   def ensure_native_built! do
-    binary = Path.join([:code.priv_dir(:hydra_srt), "native", "hydra_srt_pipeline"])
+    debug = native_build_binary_path()
+    priv = native_runtime_binary_path()
 
-    if File.exists?(binary),
-      do: :ok,
-      else: raise("Native binary not found at #{binary} after build")
+    unless File.exists?(debug) do
+      raise("""
+      Native binary not found at #{debug}.
+      Build it with: MIX_ENV=test mix compile
+      """)
+    end
+
+    File.mkdir_p!(Path.dirname(priv))
+    File.cp!(debug, priv)
+    File.chmod!(priv, 0o755)
+    :ok
+  end
+
+  @doc false
+  def native_build_binary_path do
+    Path.join([File.cwd!(), "native", "target", "debug", "hydra_srt_pipeline"])
+  end
+
+  @doc false
+  def native_runtime_binary_path do
+    Path.join([:code.priv_dir(:hydra_srt), "native", "hydra_srt_pipeline"])
   end
 
   def ensure_api_auth_config! do

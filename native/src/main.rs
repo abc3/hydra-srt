@@ -6,6 +6,7 @@ mod properties;
 mod runtime;
 mod srt_access;
 mod stats;
+mod thumbnail_scheduler;
 
 use std::io::{self, BufRead};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -108,6 +109,10 @@ fn main() -> Result<()> {
             err
         })
         .context("failed to set pipeline to playing")?;
+
+    if let Some(scheduler) = runtime.thumbnail_scheduler.as_ref() {
+        scheduler.start();
+    }
 
     runtime.loop_.run();
 

@@ -339,6 +339,16 @@ export const sourcesApi = {
     });
     return response.json();
   },
+
+  getThumbnailBlob: async (routeId: string, id: string): Promise<Blob | null> => {
+    const response = await authFetch(`/api/routes/${routeId}/sources/${id}/thumbnail`);
+    if (response.status === 404) {
+      return null;
+    }
+
+    await throwApiErrorIfNeeded(response, 'Failed to load source thumbnail');
+    return response.blob();
+  },
 };
 
 // Interfaces API

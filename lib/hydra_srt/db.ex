@@ -1342,7 +1342,8 @@ defmodule HydraSrt.Db do
       "lock_version" => source.lock_version,
       "position" => source.position,
       "last_probe_at" => source.last_probe_at,
-      "last_failure_at" => source.last_failure_at
+      "last_failure_at" => source.last_failure_at,
+      "thumbnail_url" => "/api/routes/#{source.route_id}/sources/#{source.id}/thumbnail"
     })
   end
 
@@ -1370,6 +1371,9 @@ defmodule HydraSrt.Db do
       "allowed_list" => Endpoint.decode_ip_access_list(endpoint.allowed_list),
       "denied_list" => Endpoint.decode_ip_access_list(endpoint.denied_list),
       "limit_access" => endpoint.limit_access || false,
+      "thumbnail_enabled" => endpoint.thumbnail_enabled || false,
+      "thumbnail_interval_ms" => endpoint.thumbnail_interval_ms || 5000,
+      "thumbnail_capture_policy" => endpoint.thumbnail_capture_policy || "running",
       "status" => endpoint.status,
       "created_at" => endpoint.inserted_at,
       "updated_at" => endpoint.updated_at

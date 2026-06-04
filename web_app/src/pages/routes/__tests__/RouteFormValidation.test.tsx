@@ -154,6 +154,35 @@ describe('Route form validation', () => {
     });
   });
 
+  it('shows thumbnail interval and policy controls when thumbnails are enabled', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/new/edit']}>
+        <Routes>
+          <Route path="/routes/:id/edit" element={<RouteSourceEdit />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const sourceTitle = await screen.findByText('Primary Source');
+    const sourceCard = sourceTitle.closest('.ant-card');
+    expect(sourceCard).not.toBeNull();
+    if (!(sourceCard instanceof HTMLElement)) {
+      throw new Error('Source card was not found');
+    }
+
+    const sourceScope = within(sourceCard);
+    expect(sourceScope.queryByText('Thumbnail Interval (ms)')).not.toBeInTheDocument();
+
+    const switches = sourceScope.getAllByRole('switch');
+    fireEvent.click(switches[1]);
+
+    await waitFor(() => {
+      expect(sourceScope.getByText('Thumbnail Interval (ms)')).toBeInTheDocument();
+      expect(sourceScope.getByText('Thumbnail Capture')).toBeInTheDocument();
+      expect(sourceScope.getByDisplayValue('5000')).toBeInTheDocument();
+    });
+  });
+
   it('shows destination SRT authentication fields on new route form', async () => {
     render(
       <MemoryRouter initialEntries={['/routes/new/edit']}>

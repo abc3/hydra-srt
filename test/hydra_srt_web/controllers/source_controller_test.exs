@@ -9,7 +9,10 @@ defmodule HydraSrtWeb.SourceControllerTest do
     "name" => "primary",
     "schema" => "UDP",
     "host" => "127.0.0.1",
-    "port" => 5000
+    "port" => 5000,
+    "thumbnail_enabled" => true,
+    "thumbnail_interval_ms" => 2000,
+    "thumbnail_capture_policy" => "always"
   }
 
   @update_attrs %{
@@ -45,7 +48,14 @@ defmodule HydraSrtWeb.SourceControllerTest do
     assert %{"id" => source_id} = json_response(conn, 201)["data"]
 
     conn = get(conn, ~p"/api/routes/#{route_id}/sources/#{source_id}")
-    assert %{"id" => ^source_id, "name" => "primary"} = json_response(conn, 200)["data"]
+
+    assert %{
+             "id" => ^source_id,
+             "name" => "primary",
+             "thumbnail_enabled" => true,
+             "thumbnail_interval_ms" => 2000,
+             "thumbnail_capture_policy" => "always"
+           } = json_response(conn, 200)["data"]
 
     conn = patch(conn, ~p"/api/routes/#{route_id}/sources/#{source_id}", source: @update_attrs)
 
@@ -72,5 +82,21 @@ defmodule HydraSrtWeb.SourceControllerTest do
     assert Enum.at(sources, 0)["position"] == 0
     assert Enum.at(sources, 1)["id"] == s1.id
     assert Enum.at(sources, 1)["position"] == 1
+  end
+
+  test "thumbnail endpoint returns cached JPEG", %{conn: conn, route: route} do
+    source = source_fixture(route, %{position: 0, name: "p"})
+
+    conn = get(conn, ~p"/api/routes/#{route.id}/sources/#{source.id}/thumbnail")
+    assert json_response(conn, 404)["errors"] != %{}
+
+    assert {:ok, _metadata} =
+             HydraSrt.Thumbnails.put(route.id, source.id, <<0xFF, 0xD8, 0xFF, 0xD9>>,
+               content_type: "image/jpeg"
+             )
+
+    conn = get(conn, ~p"/api/routes/#{route.id}/sources/#{source.id}/thumbnail")
+    assert response(conn, 200) == <<0xFF, 0xD8, 0xFF, 0xD9>>
+    assert get_resp_header(conn, "content-type") == ["image/jpeg; charset=utf-8"]
   end
 end

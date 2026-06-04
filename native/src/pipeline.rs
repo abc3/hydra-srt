@@ -1,10 +1,14 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use glib::value::ToValue;
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use gstreamer_app as gst_app;
 use serde_json::{json, Value};
 
 use crate::config::{ElementConfig, PipelineConfig};
@@ -13,6 +17,7 @@ use crate::output::StatsWriter;
 use crate::properties::apply_element_properties;
 use crate::runtime::{DestMetrics, PipelineRuntime};
 use crate::srt_access::{caller_ip, SrtAccessRules};
+use crate::thumbnail_scheduler::ThumbnailScheduler;
 
 pub fn build_pipeline(
     config: PipelineConfig,
@@ -151,6 +156,9 @@ pub fn build_pipeline(
         });
     }
 
+    let thumbnail_scheduler =
+        add_thumbnail_branch_if_enabled(&pipeline, &tee, &config.source, writer.clone())?;
+
     for sink in config.sinks {
         add_sink_to_pipeline(&pipeline, &tee, sink, dest_metrics.clone())?;
     }
@@ -166,6 +174,7 @@ pub fn build_pipeline(
         processing_pending,
         dest_metrics,
         running: Arc::new(AtomicBool::new(true)),
+        thumbnail_scheduler,
     })
 }
 
@@ -246,6 +255,188 @@ fn add_sink_to_pipeline(
         .push(metrics);
 
     Ok(())
+}
+
+fn add_thumbnail_branch_if_enabled(
+    pipeline: &gst::Pipeline,
+    tee: &gst::Element,
+    source_config: &ElementConfig,
+    writer: Arc<Mutex<Box<dyn StatsWriter>>>,
+) -> Result<Option<Arc<ThumbnailScheduler>>> {
+    let Some(config) = thumbnail_config(source_config) else {
+        return Ok(None);
+    };
+
+    let queue = gst::ElementFactory::make("queue")
+        .name("hydra_thumbnail_queue")
+        .build()
+        .context("failed to create thumbnail queue")?;
+    let valve = gst::ElementFactory::make("valve")
+        .name("hydra_thumbnail_valve")
+        .build()
+        .context("failed to create thumbnail valve")?;
+    valve.set_property("drop", true);
+    let decodebin = gst::ElementFactory::make("decodebin")
+        .name("hydra_thumbnail_decodebin")
+        .build()
+        .context("failed to create thumbnail decodebin")?;
+    decodebin.set_property("force-sw-decoders", true);
+    let videoconvert = gst::ElementFactory::make("videoconvert")
+        .name("hydra_thumbnail_videoconvert")
+        .build()
+        .context("failed to create thumbnail videoconvert")?;
+    let videoscale = gst::ElementFactory::make("videoscale")
+        .name("hydra_thumbnail_videoscale")
+        .build()
+        .context("failed to create thumbnail videoscale")?;
+    let jpegenc = gst::ElementFactory::make("jpegenc")
+        .name("hydra_thumbnail_jpegenc")
+        .build()
+        .context("failed to create thumbnail jpegenc")?;
+    let appsink = gst::ElementFactory::make("appsink")
+        .name("hydra_thumbnail_appsink")
+        .build()
+        .context("failed to create thumbnail appsink")?;
+
+    configure_thumbnail_queue(&queue);
+    appsink.set_property("emit-signals", false);
+    appsink.set_property("sync", false);
+    appsink.set_property("async", false);
+    appsink.set_property("max-buffers", 1_u32);
+    appsink.set_property("drop", true);
+
+    let appsink = appsink
+        .dynamic_cast::<gst_app::AppSink>()
+        .map_err(|_| anyhow!("thumbnail sink is not an appsink"))?;
+
+    let scheduler = ThumbnailScheduler::new(valve.clone(), config.interval);
+    configure_thumbnail_appsink(&appsink, config, scheduler.clone(), writer);
+
+    pipeline
+        .add_many([
+            &queue,
+            &valve,
+            &decodebin,
+            &videoconvert,
+            &videoscale,
+            &jpegenc,
+            appsink.upcast_ref(),
+        ])
+        .context("failed to add thumbnail elements to pipeline")?;
+
+    link_tee_branch(tee, &queue).context("failed to link tee to thumbnail queue")?;
+    gst::Element::link_many([&queue, &valve, &decodebin])
+        .context("failed to link thumbnail queue to valve to decodebin")?;
+    gst::Element::link_many([&videoconvert, &videoscale, &jpegenc, appsink.upcast_ref()])
+        .context("failed to link thumbnail encoder branch")?;
+
+    let convert_sink = videoconvert
+        .static_pad("sink")
+        .context("thumbnail videoconvert sink pad missing")?;
+
+    decodebin.connect_pad_added(move |_decodebin, src_pad| {
+        if convert_sink.is_linked() {
+            return;
+        }
+
+        if !thumbnail_pad_is_video(src_pad) {
+            return;
+        }
+
+        if let Err(err) = src_pad.link(&convert_sink) {
+            eprintln!("thumbnail decodebin pad link failed: {err:?}");
+        }
+    });
+
+    Ok(Some(scheduler))
+}
+
+#[derive(Clone, Debug)]
+struct ThumbnailConfig {
+    source_id: String,
+    interval: Duration,
+}
+
+fn thumbnail_config(source_config: &ElementConfig) -> Option<ThumbnailConfig> {
+    if !source_config
+        .props
+        .get("hydra_thumbnail_enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    let source_id = source_config
+        .props
+        .get("hydra_source_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let interval_ms = source_config
+        .props
+        .get("hydra_thumbnail_interval_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(5_000)
+        .max(1_000);
+
+    Some(ThumbnailConfig {
+        source_id,
+        interval: Duration::from_millis(interval_ms),
+    })
+}
+
+fn configure_thumbnail_queue(queue: &gst::Element) {
+    // Keep the thumbnail branch from applying backpressure to the tee fan-out, but retain
+    // enough MPEG-TS data for decodebin to typefind, demux, and decode a frame.
+    queue.set_property_from_str("leaky", "downstream");
+    queue.set_property("max-size-buffers", 0_u32);
+    queue.set_property("max-size-bytes", 0_u32);
+    queue.set_property("max-size-time", 3_000_000_000_u64);
+}
+
+fn thumbnail_pad_is_video(src_pad: &gst::Pad) -> bool {
+    let Some(caps) = src_pad.current_caps() else {
+        return false;
+    };
+
+    caps.structure(0)
+        .map(|structure| structure.name().starts_with("video/"))
+        .unwrap_or(false)
+}
+
+fn configure_thumbnail_appsink(
+    appsink: &gst_app::AppSink,
+    config: ThumbnailConfig,
+    scheduler: Arc<ThumbnailScheduler>,
+    writer: Arc<Mutex<Box<dyn StatsWriter>>>,
+) {
+    appsink.set_caps(Some(&gst::Caps::builder("image/jpeg").build()));
+    appsink.set_callbacks(
+        gst_app::AppSinkCallbacks::builder()
+            .new_sample({
+                move |sink| {
+                    let sample = sink.pull_sample().map_err(|_| gst::FlowError::Error)?;
+                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                    let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+                    let data_base64 = BASE64_STANDARD.encode(map.as_slice());
+                    let payload = json!({
+                        "event": "thumbnail",
+                        "source_id": config.source_id,
+                        "content_type": "image/jpeg",
+                        "data_base64": data_base64,
+                    });
+
+                    if let Ok(mut guard) = writer.lock() {
+                        let _ = guard.send_message(&payload.to_string());
+                    }
+
+                    scheduler.on_frame_captured();
+                    Ok(gst::FlowSuccess::Ok)
+                }
+            })
+            .build(),
+    );
 }
 
 fn record_source_buffer(
@@ -334,6 +525,46 @@ mod tests {
 
         let runtime = build_pipeline(config, writer).expect("pipeline should build");
         assert_eq!(runtime.dest_metrics.lock().expect("metrics lock").len(), 2);
+        assert!(runtime.pipeline.by_name("hydra_thumbnail_queue").is_none());
+    }
+
+    #[test]
+    fn builds_pipeline_with_thumbnail_branch_when_enabled() {
+        init_gst();
+
+        let config = PipelineConfig {
+            source: ElementConfig {
+                element_type: "fakesrc".to_string(),
+                props: BTreeMap::from([
+                    (
+                        "hydra_source_id".to_string(),
+                        Value::String("source-1".to_string()),
+                    ),
+                    ("hydra_thumbnail_enabled".to_string(), Value::Bool(true)),
+                    (
+                        "hydra_thumbnail_interval_ms".to_string(),
+                        Value::Number(2_000_u64.into()),
+                    ),
+                ]),
+            },
+            sinks: vec![ElementConfig {
+                element_type: "fakesink".to_string(),
+                props: BTreeMap::from([("sync".to_string(), Value::Bool(false))]),
+            }],
+        };
+
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(StdoutWriter::new())));
+
+        let runtime = build_pipeline(config, writer).expect("pipeline should build");
+        assert!(runtime.pipeline.by_name("hydra_thumbnail_queue").is_some());
+        assert!(runtime.pipeline.by_name("hydra_thumbnail_valve").is_some());
+        assert!(runtime.thumbnail_scheduler.is_some());
+        assert!(runtime
+            .pipeline
+            .by_name("hydra_thumbnail_appsink")
+            .is_some());
+        assert_eq!(runtime.dest_metrics.lock().expect("metrics lock").len(), 1);
     }
 
     #[test]

@@ -58,6 +58,9 @@ const DEFAULT_SOURCE = {
   mode: 'listener',
   auto_reconnect: true,
   keep_listening: false,
+  thumbnail_enabled: false,
+  thumbnail_interval_ms: 5000,
+  thumbnail_capture_policy: 'running',
 };
 
 const DEFAULT_DESTINATION = {
@@ -731,6 +734,51 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
 
                           <Form.Item label="Enabled" name={[field.name, 'enabled']} valuePropName="checked">
                             <Switch />
+                          </Form.Item>
+
+                          <Form.Item
+                            label="Thumbnails"
+                            name={[field.name, 'thumbnail_enabled']}
+                            valuePropName="checked"
+                            extra="Generate preview frames for this source. Disabled by default."
+                          >
+                            <Switch />
+                          </Form.Item>
+
+                          <Form.Item noStyle dependencies={[['sources', field.name, 'thumbnail_enabled']]}>
+                            {({ getFieldValue }) =>
+                              getFieldValue(['sources', field.name, 'thumbnail_enabled']) ? (
+                                <Row gutter={16}>
+                                  <Col>
+                                    <Form.Item
+                                      label="Thumbnail Interval (ms)"
+                                      name={[field.name, 'thumbnail_interval_ms']}
+                                      rules={[
+                                        { required: true, message: 'Please enter a thumbnail interval' },
+                                        { type: 'number', min: 1000, message: 'Interval must be at least 1000 ms' },
+                                      ]}
+                                    >
+                                      <InputNumber min={1000} step={1000} style={{ width: 180 }} />
+                                    </Form.Item>
+                                  </Col>
+                                  <Col>
+                                    <Form.Item
+                                      label="Thumbnail Capture"
+                                      name={[field.name, 'thumbnail_capture_policy']}
+                                      extra="Running: capture from the route pipeline. Always: keep a thumbnail-only worker for inactive/stopped sources."
+                                    >
+                                      <Select
+                                        style={{ width: 220 }}
+                                        options={[
+                                          { label: 'When route is running', value: 'running' },
+                                          { label: 'Always when possible', value: 'always' },
+                                        ]}
+                                      />
+                                    </Form.Item>
+                                  </Col>
+                                </Row>
+                              ) : null
+                            }
                           </Form.Item>
 
                           <Form.Item label="Schema" name={[field.name, 'schema']} rules={[{ required: true, message: 'Please select a source schema' }]}>

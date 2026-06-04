@@ -163,6 +163,12 @@ defmodule HydraSrtWeb.RealtimeChannel do
   end
 
   @impl true
+  def handle_info({:item_thumbnail, event}, socket) when is_map(event) do
+    push(socket, "item_thumbnail", event)
+    {:noreply, socket}
+  end
+
+  @impl true
   def handle_info({:event, event}, socket) when is_map(event) do
     push(socket, "event", event)
     {:noreply, socket}

@@ -20,6 +20,7 @@ e2e_route_mode_enabled? =
     cli_only_or_include?.("e2e") or cli_only_or_include?.("encrypted")
 
 shared_http_e2e_mode? = e2e_route_mode_enabled? or e2e_mcp_mode_enabled?
+native_e2e_mode_enabled? = System.get_env("NATIVE_E2E") == "true"
 
 # Opt-in helpers for debugging hangs:
 # - TRACE=true       -> prints every test name as it runs
@@ -90,6 +91,28 @@ if not shared_http_e2e_mode? do
       _ ->
         :ok
     end
+  end
+end
+
+if native_e2e_mode_enabled? and not shared_http_e2e_mode? do
+  # Native E2E does not use DataCase, but the app still starts background DB workers.
+  case Process.whereis(HydraSrt.Repo) do
+    pid when is_pid(pid) ->
+      owner = Ecto.Adapters.SQL.Sandbox.start_owner!(HydraSrt.Repo, shared: true)
+
+      for module <- [
+            HydraSrt.ThumbnailManager,
+            HydraSrt.Notifications.Telegram
+          ],
+          pid = Process.whereis(module),
+          is_pid(pid) do
+        Ecto.Adapters.SQL.Sandbox.allow(HydraSrt.Repo, owner, module)
+      end
+
+      ExUnit.after_suite(fn _ -> Ecto.Adapters.SQL.Sandbox.stop_owner(owner) end)
+
+    _ ->
+      :ok
   end
 end
 

@@ -15,12 +15,18 @@ defmodule HydraSrt.DbSourcesTest do
                "name" => "primary",
                "schema" => "UDP",
                "host" => "127.0.0.1",
-               "port" => 5000
+               "port" => 5000,
+               "thumbnail_enabled" => true,
+               "thumbnail_interval_ms" => 2000,
+               "thumbnail_capture_policy" => "always"
              })
 
     assert {:ok, listed} = Db.get_all_sources(route["id"])
     assert length(listed) == 1
     assert hd(listed)["id"] == created["id"]
+    assert hd(listed)["thumbnail_enabled"] == true
+    assert hd(listed)["thumbnail_interval_ms"] == 2000
+    assert hd(listed)["thumbnail_capture_policy"] == "always"
 
     assert {:ok, fetched} = Db.get_source(route["id"], created["id"])
     assert fetched["name"] == "primary"

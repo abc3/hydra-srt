@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use gstreamer as gst;
 
 use crate::lifecycle::PipelineLifecycleEmitter;
+use crate::thumbnail_scheduler::ThumbnailScheduler;
 
 #[derive(Debug)]
 pub struct DestMetrics {
@@ -29,4 +30,5 @@ pub struct PipelineRuntime {
     pub processing_pending: Arc<AtomicBool>,
     pub dest_metrics: Arc<Mutex<Vec<Arc<DestMetrics>>>>,
     pub running: Arc<AtomicBool>,
+    pub thumbnail_scheduler: Option<std::sync::Arc<ThumbnailScheduler>>,
 }

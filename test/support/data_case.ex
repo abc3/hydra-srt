@@ -38,6 +38,11 @@ defmodule HydraSrt.DataCase do
   """
   def setup_sandbox(tags) do
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(HydraSrt.Repo, shared: not tags[:async])
+
+    if Process.whereis(HydraSrt.ThumbnailManager) do
+      Ecto.Adapters.SQL.Sandbox.allow(HydraSrt.Repo, self(), HydraSrt.ThumbnailManager)
+    end
+
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
   end
 

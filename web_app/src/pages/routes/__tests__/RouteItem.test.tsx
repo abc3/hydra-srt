@@ -7,14 +7,16 @@ import { routesApi } from '../../../utils/api';
 
 type RealtimeStatusListener = (payload: { item_id: string; status: string }) => void;
 type RealtimeSourceListener = (payload: { item_id: string; active_source_id: string; last_switch_reason: string }) => void;
+type RealtimeThumbnailListener = (payload: { item_id: string; source_id: string; version: number; thumbnail_url: string }) => void;
 type RealtimeMockExports = typeof realtime & {
   __emitItemSource: (itemId: string, activeSourceId: string, reason?: string) => void;
   __emitItemStatus: (itemId: string, status: string) => void;
+  __emitItemThumbnail: (itemId: string, version?: number) => void;
   __clearRealtimeMockState: () => void;
 };
 
 const realtimeMock = realtime as RealtimeMockExports;
-const { subscribeToItemSource, subscribeToItemStatus } = realtimeMock;
+const { subscribeToItemSource, subscribeToItemStatus, subscribeToItemThumbnail } = realtimeMock;
 
 vi.mock('../../../utils/api', () => {
   return {
@@ -83,6 +85,7 @@ vi.mock('../../../utils/api', () => {
     },
     sourcesApi: {
       test: vi.fn(async () => ({ data: { ok: true } })),
+      getThumbnailBlob: vi.fn(async () => new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], { type: 'image/jpeg' })),
     },
     destinationsApi: {
       delete: async () => ({ data: {} }),
@@ -93,6 +96,7 @@ vi.mock('../../../utils/api', () => {
 vi.mock('../../../utils/realtime', () => {
   const itemListeners = new Map<string, RealtimeStatusListener[]>();
   const itemSourceListeners = new Map<string, RealtimeSourceListener[]>();
+  const itemThumbnailListeners = new Map<string, RealtimeThumbnailListener[]>();
   const statsListeners = new Set<() => void>();
 
   const subscribeToItemStatus = vi.fn((itemId: string, listener: RealtimeStatusListener) => {
@@ -123,6 +127,20 @@ vi.mock('../../../utils/realtime', () => {
     });
   });
 
+  const subscribeToItemThumbnail = vi.fn((itemId: string, listener: RealtimeThumbnailListener) => {
+    const listeners = itemThumbnailListeners.get(itemId) || [];
+    listeners.push(listener);
+    itemThumbnailListeners.set(itemId, listeners);
+
+    return vi.fn(() => {
+      const current = itemThumbnailListeners.get(itemId) || [];
+      itemThumbnailListeners.set(
+        itemId,
+        current.filter((saved: RealtimeThumbnailListener) => saved !== listener),
+      );
+    });
+  });
+
   const emitItemStatus = (itemId: string, status: string) => {
     const listeners = itemListeners.get(itemId) || [];
     listeners.forEach((listener: RealtimeStatusListener) => listener({ item_id: itemId, status }));
@@ -137,20 +155,34 @@ vi.mock('../../../utils/realtime', () => {
     }));
   };
 
+  const emitItemThumbnail = (itemId: string, version = 2) => {
+    const listeners = itemThumbnailListeners.get(itemId) || [];
+    listeners.forEach((listener: RealtimeThumbnailListener) => listener({
+      item_id: itemId,
+      source_id: itemId,
+      version,
+      thumbnail_url: `/api/routes/r1/sources/${itemId}/thumbnail`,
+    }));
+  };
+
   const subscribeToStats = vi.fn(() => vi.fn());
 
   return {
     subscribeToItemSource,
     subscribeToItemStatus,
+    subscribeToItemThumbnail,
     subscribeToStats,
     __emitItemSource: emitItemSource,
     __emitItemStatus: emitItemStatus,
+    __emitItemThumbnail: emitItemThumbnail,
     __clearRealtimeMockState: () => {
       itemListeners.clear();
       itemSourceListeners.clear();
+      itemThumbnailListeners.clear();
       statsListeners.clear();
       subscribeToItemSource.mockClear();
       subscribeToItemStatus.mockClear();
+      subscribeToItemThumbnail.mockClear();
       subscribeToStats.mockClear();
     },
   };
@@ -160,6 +192,11 @@ describe('RouteItem', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     realtimeMock.__clearRealtimeMockState();
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: vi.fn(() => 'blob:thumbnail'),
+      revokeObjectURL: vi.fn(),
+    });
     vi.mocked(routesApi.getById).mockResolvedValue({
       data: {
         id: 'r1',
@@ -170,7 +207,7 @@ describe('RouteItem', () => {
         enabled: true,
         schema: 'SRT',
         sources: [
-          { id: 's1', position: 0, enabled: true, name: 'primary', mode: 'listener', localaddress: '127.0.0.1', localport: 1234 },
+          { id: 's1', position: 0, enabled: true, name: 'primary', mode: 'listener', localaddress: '127.0.0.1', localport: 1234, thumbnail_enabled: true },
           { id: 's2', position: 1, enabled: true, name: 'backup', mode: 'caller', address: '127.0.0.1', port: 8888 },
         ],
         active_source_id: 's1',
@@ -239,6 +276,29 @@ describe('RouteItem', () => {
     expect(subscribeToItemStatus).toHaveBeenCalledWith('d1', expect.any(Function));
     expect(subscribeToItemStatus).toHaveBeenCalledWith('d2', expect.any(Function));
     expect(subscribeToItemSource).toHaveBeenCalledWith('r1', expect.any(Function));
+    expect(subscribeToItemThumbnail).toHaveBeenCalledWith('s1', expect.any(Function));
+    expect(subscribeToItemThumbnail).toHaveBeenCalledWith('s2', expect.any(Function));
+  });
+
+  it('renders source thumbnails and refreshes on thumbnail realtime events', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Endpoints');
+    expect(await screen.findByAltText('primary thumbnail')).toBeInTheDocument();
+
+    await act(async () => {
+      realtimeMock.__emitItemThumbnail('s1', 3);
+    });
+
+    await waitFor(() => {
+      expect(subscribeToItemThumbnail).toHaveBeenCalledWith('s1', expect.any(Function));
+    });
   });
 
   it('updates active source indicator in endpoints table when item source event arrives', async () => {

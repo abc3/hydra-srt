@@ -38,6 +38,9 @@ defmodule HydraSrt.Api.Endpoint do
     field :allowed_list, :string, default: "[]"
     field :denied_list, :string, default: "[]"
     field :limit_access, :boolean, default: false
+    field :thumbnail_enabled, :boolean, default: false
+    field :thumbnail_interval_ms, :integer, default: 5000
+    field :thumbnail_capture_policy, :string, default: "running"
 
     # Normalized bind tuple for DB uniqueness.
     field :bind_interface, :string
@@ -73,7 +76,9 @@ defmodule HydraSrt.Api.Endpoint do
     |> put_change(:type, "source")
     |> put_default_enabled(true)
     |> put_default_ip_access_fields()
+    |> put_default_thumbnail_fields()
     |> validate_ip_access_lists()
+    |> validate_thumbnail_fields()
     |> validate_required([:route_id, :position, :schema, :type])
     |> validate_inclusion(:schema, ["SRT", "UDP", "RTP"])
     |> validate_number(:position, greater_than_or_equal_to: 0)
@@ -129,6 +134,9 @@ defmodule HydraSrt.Api.Endpoint do
       :allowed_list,
       :denied_list,
       :limit_access,
+      :thumbnail_enabled,
+      :thumbnail_interval_ms,
+      :thumbnail_capture_policy,
       :bind_interface,
       :bind_address,
       :bind_port,
@@ -305,6 +313,29 @@ defmodule HydraSrt.Api.Endpoint do
       {_, nil} -> put_change(changeset, field, default)
       _ -> changeset
     end
+  end
+
+  @spec put_default_thumbnail_fields(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def put_default_thumbnail_fields(changeset) do
+    changeset
+    |> put_default_thumbnail_field(:thumbnail_enabled, false)
+    |> put_default_thumbnail_field(:thumbnail_interval_ms, 5000)
+    |> put_default_thumbnail_field(:thumbnail_capture_policy, "running")
+  end
+
+  @spec put_default_thumbnail_field(Ecto.Changeset.t(), atom(), term()) :: Ecto.Changeset.t()
+  def put_default_thumbnail_field(changeset, field, default) do
+    case fetch_field(changeset, field) do
+      {_, nil} -> put_change(changeset, field, default)
+      _ -> changeset
+    end
+  end
+
+  @spec validate_thumbnail_fields(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def validate_thumbnail_fields(changeset) do
+    changeset
+    |> validate_inclusion(:thumbnail_capture_policy, ["running", "always"])
+    |> validate_number(:thumbnail_interval_ms, greater_than_or_equal_to: 1000)
   end
 
   @spec validate_ip_access_lists(Ecto.Changeset.t()) :: Ecto.Changeset.t()

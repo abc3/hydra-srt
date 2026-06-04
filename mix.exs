@@ -137,12 +137,15 @@ defmodule HydraSrt.MixProject do
     Mix.shell().info("Building Rust native application (#{config.profile})...")
     File.mkdir_p!(config.dest_dir)
 
+    cargo_target_dir = Path.join(config.rs_native_dir, "target")
+
     exit_code =
       Mix.shell().cmd({"cargo", config.cargo_args},
         cd: config.rs_native_dir,
         stderr_to_stdout: true,
         env: [
-          {"CARGO_TERM_COLOR", if(IO.ANSI.enabled?(), do: "always", else: "auto")}
+          {"CARGO_TERM_COLOR", if(IO.ANSI.enabled?(), do: "always", else: "auto")},
+          {"CARGO_TARGET_DIR", cargo_target_dir}
         ]
       )
 
