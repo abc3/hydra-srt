@@ -1,15 +1,22 @@
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use glib::prelude::StaticType;
 use glib::value::ToValue;
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use serde_json::json;
 use serde_json::Value;
 
 use crate::config::ElementConfig;
+use crate::output::StatsWriter;
 
-pub fn apply_element_properties(element: &gst::Element, config: &ElementConfig) -> Result<()> {
+pub fn apply_element_properties_with_logging(
+    element: &gst::Element,
+    config: &ElementConfig,
+    writer: Option<&Arc<Mutex<Box<dyn StatsWriter>>>>,
+) -> Result<()> {
     if (config.element_type == "srtsrc" || config.element_type == "srtsink")
         && !config.props.contains_key("uri")
     {
@@ -19,7 +26,17 @@ pub fn apply_element_properties(element: &gst::Element, config: &ElementConfig) 
     }
 
     for (key, value) in &config.props {
+        if config.element_type == "udpsink" && key == "address" {
+            if let Some(host) = value.as_str() {
+                element.set_property("host", host);
+            }
+            continue;
+        }
+
         if key == "type" || !element.has_property(key.as_str(), None) {
+            if key != "type" {
+                emit_unsupported_property_warning(writer, &config.element_type, key);
+            }
             continue;
         }
 
@@ -28,13 +45,6 @@ pub fn apply_element_properties(element: &gst::Element, config: &ElementConfig) 
         };
 
         if (config.element_type == "srtsrc" || config.element_type == "srtsink") && key == "mode" {
-            continue;
-        }
-
-        if config.element_type == "udpsink" && key == "address" {
-            if let Some(host) = value.as_str() {
-                element.set_property("host", host);
-            }
             continue;
         }
 
@@ -98,6 +108,31 @@ pub fn apply_element_properties(element: &gst::Element, config: &ElementConfig) 
     }
 
     Ok(())
+}
+
+fn emit_unsupported_property_warning(
+    writer: Option<&Arc<Mutex<Box<dyn StatsWriter>>>>,
+    element_type: &str,
+    key: &str,
+) {
+    let Some(writer) = writer else {
+        return;
+    };
+
+    let payload = json!({
+        "event": "pipeline_log",
+        "level": "WARN",
+        "category": "native_config",
+        "element": element_type,
+        "file": "native/src/properties.rs",
+        "function": "apply_element_properties",
+        "message": format!("ignored unsupported property {key} on {element_type}"),
+    })
+    .to_string();
+
+    if let Ok(mut guard) = writer.lock() {
+        let _ = guard.send_message(&payload);
+    }
 }
 
 pub fn build_srt_uri(props: &BTreeMap<String, Value>) -> Option<String> {
@@ -164,6 +199,8 @@ pub fn build_srt_uri(props: &BTreeMap<String, Value>) -> Option<String> {
 mod tests {
     use super::*;
     use crate::config::ElementConfig;
+    use crate::output::StatsWriter;
+    use std::sync::{Arc, Mutex};
 
     fn init_gst() {
         let _ = gst::init();
@@ -190,7 +227,8 @@ mod tests {
             ]),
         };
 
-        apply_element_properties(&element, &config).expect("setting srtsrc properties should work");
+        apply_element_properties_with_logging(&element, &config, None)
+            .expect("setting srtsrc properties should work");
 
         let value = element.property_value("pbkeylen");
         let (_, enum_value) =
@@ -220,7 +258,7 @@ mod tests {
             ]),
         };
 
-        apply_element_properties(&element, &config)
+        apply_element_properties_with_logging(&element, &config, None)
             .expect("setting srtsink properties should work");
 
         let value = element.property_value("pbkeylen");
@@ -250,5 +288,57 @@ mod tests {
         let uri = build_srt_uri(&props).expect("uri should be built");
 
         assert_eq!(uri, "srt://127.0.0.1:4201?mode=listener");
+    }
+
+    #[test]
+    fn emits_pipeline_log_for_unsupported_property() {
+        init_gst();
+
+        #[derive(Debug, Default)]
+        struct MemoryWriter {
+            messages: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl StatsWriter for MemoryWriter {
+            fn send_message(&mut self, message: &str) -> Result<()> {
+                self.messages
+                    .lock()
+                    .expect("messages lock")
+                    .push(message.to_string());
+                Ok(())
+            }
+        }
+
+        let element = gst::ElementFactory::make("fakesrc")
+            .build()
+            .expect("fakesrc element should be available for tests");
+        let config = ElementConfig {
+            element_type: "fakesrc".to_string(),
+            props: BTreeMap::from([(
+                "definitely-not-a-property".to_string(),
+                Value::String("ignored".to_string()),
+            )]),
+        };
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(MemoryWriter {
+                messages: messages.clone(),
+            })));
+
+        apply_element_properties_with_logging(&element, &config, Some(&writer))
+            .expect("property application should not fail");
+
+        let messages = messages.lock().expect("messages lock");
+        assert_eq!(messages.len(), 1);
+
+        let payload: Value = serde_json::from_str(&messages[0]).expect("warning should be JSON");
+        assert_eq!(payload["event"], "pipeline_log");
+        assert_eq!(payload["level"], "WARN");
+        assert_eq!(payload["category"], "native_config");
+        assert_eq!(payload["element"], "fakesrc");
+        assert_eq!(
+            payload["message"],
+            "ignored unsupported property definitely-not-a-property on fakesrc"
+        );
     }
 }

@@ -33,6 +33,7 @@ defmodule HydraSrt.Api.Endpoint do
     field :poll_timeout, :integer
     field :auto_reconnect, :boolean
     field :keep_listening, :boolean
+    field :multicast, :boolean, default: false
     field :multicast_iface, :string
     field :bind_address_option, :string
     field :allowed_list, :string, default: "[]"
@@ -73,6 +74,7 @@ defmodule HydraSrt.Api.Endpoint do
     |> put_change(:type, "source")
     |> put_default_enabled(true)
     |> put_default_ip_access_fields()
+    |> put_default_ip_access_field(:multicast, false)
     |> validate_ip_access_lists()
     |> validate_required([:route_id, :position, :schema, :type])
     |> validate_inclusion(:schema, ["SRT", "UDP", "RTP"])
@@ -91,6 +93,7 @@ defmodule HydraSrt.Api.Endpoint do
     |> cast_common(normalize_ip_access_attrs(attrs))
     |> put_change(:type, "destination")
     |> put_default_enabled(false)
+    |> put_default_ip_access_field(:multicast, false)
     |> validate_required([:route_id, :schema, :type])
     |> put_bind_target_fields()
     |> unique_constraint([:route_id, :position, :type], name: @source_unique_constraint)
@@ -124,6 +127,7 @@ defmodule HydraSrt.Api.Endpoint do
       :poll_timeout,
       :auto_reconnect,
       :keep_listening,
+      :multicast,
       :multicast_iface,
       :bind_address_option,
       :allowed_list,

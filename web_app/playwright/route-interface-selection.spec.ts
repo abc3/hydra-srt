@@ -161,3 +161,56 @@ test('route and destination edit pages keep selected interfaces and endpoint val
   await expect(page.locator('input[value="239.1.1.1"]').first()).toBeVisible();
   await expectInterfaceSelection(page, aliasName, systemInterface.sys_name);
 });
+
+test('route edit page persists UDP multicast source settings', async ({ page, request }) => {
+  const auth = await loginByApi(page, request);
+  const headers = authHeaders(auth.token);
+  const systemInterface = await getFirstIpv4SystemInterface(request, auth.token);
+  const aliasName = `PW Multicast ${systemInterface.sys_name}`;
+
+  await ensureSavedInterface(request, headers, systemInterface, aliasName);
+  const sourcePort = 41_000 + Math.floor(Math.random() * 10_000);
+
+  const createRouteResponse = await request.post('/api/routes', {
+    headers,
+    data: {
+      route: {
+        name: 'playwright-udp-multicast-source-persistence',
+        enabled: true,
+        node: 'self',
+      },
+    },
+  });
+
+  expect(createRouteResponse.ok()).toBeTruthy();
+  const routePayload = (await createRouteResponse.json()) as { data: { id: string } };
+  const routeId = routePayload.data.id;
+
+  const createSourceResponse = await request.post(`/api/routes/${routeId}/sources`, {
+    headers,
+    data: {
+      source: {
+        enabled: true,
+        name: 'Primary',
+        schema: 'UDP',
+        position: 0,
+        address: '239.1.1.1',
+        port: sourcePort,
+        multicast: true,
+        interface_sys_name: systemInterface.sys_name,
+      },
+    },
+  });
+
+  expect(createSourceResponse.ok()).toBeTruthy();
+
+  await page.goto(`/#/routes/${routeId}/edit`);
+  await expect(page.getByRole('heading', { name: 'Edit Route' })).toBeVisible();
+
+  const sourceCard = page.locator('.ant-card').filter({ hasText: 'Primary Source' }).first();
+  await expect(sourceCard).toBeVisible();
+  await expect(sourceCard.getByRole('radio', { name: 'UDP' })).toBeChecked();
+  await expect(sourceCard.getByLabel('Multicast source')).toBeChecked();
+  await expect(sourceCard.locator('input[value="239.1.1.1"]').first()).toBeVisible();
+  await expectInterfaceSelection(page, aliasName, systemInterface.sys_name);
+});

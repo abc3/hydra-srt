@@ -38,6 +38,10 @@ test_database_path =
       )
   end
 
+if shared_http_e2e_mode? do
+  System.put_env("E2E_DATABASE_PATH", test_database_path)
+end
+
 config :hydra_srt, HydraSrt.Repo,
   # Use an isolated per-run SQLite DB file to prevent leaked state from previous runs
   # (including E2E runs) from breaking unit tests.

@@ -458,6 +458,10 @@ defmodule HydraSrt.RouteHandler do
         publish_srt_access_log(data.id, access_event)
         data
 
+      {:pipeline_log, log} ->
+        publish_native_pipeline_log(data.id, log)
+        data
+
       :unknown ->
         Logger.warning("RouteHandler: unknown native json line: #{inspect(json)}")
         data
@@ -799,6 +803,9 @@ defmodule HydraSrt.RouteHandler do
       {:ok, %{"event" => "srt_access"} = payload} ->
         {:srt_access, payload}
 
+      {:ok, %{"event" => "pipeline_log"} = payload} ->
+        {:pipeline_log, payload}
+
       {:ok, %{"event" => _event}} ->
         :unknown
 
@@ -851,6 +858,30 @@ defmodule HydraSrt.RouteHandler do
       function: nil,
       element: "srtsrc",
       message: srt_access_message(ip, allowed?, reason, stream_id),
+      dropped_count: nil
+    }
+
+    Phoenix.PubSub.broadcast(
+      HydraSrt.PubSub,
+      "pipeline_logs",
+      {:pipeline_log, log}
+    )
+  end
+
+  @doc false
+  def publish_native_pipeline_log(route_id, %{} = payload) when is_binary(route_id) do
+    log = %{
+      route_id: route_id,
+      gst_ts: nil,
+      pid: nil,
+      thread_id: nil,
+      level: Map.get(payload, "level", "WARN"),
+      category: Map.get(payload, "category", "native"),
+      file: Map.get(payload, "file"),
+      line: Map.get(payload, "line"),
+      function: Map.get(payload, "function"),
+      element: Map.get(payload, "element"),
+      message: Map.get(payload, "message", "native pipeline warning"),
       dropped_count: nil
     }
 
@@ -1171,8 +1202,7 @@ defmodule HydraSrt.RouteHandler do
     opts = endpoint_options_from_record(source)
 
     with {:ok, resolved_opts} <- resolve_interface_options(opts) do
-      # Native pipeline expects `address` and `port` for udpsrc.
-      {:ok, %{"type" => "udpsrc"} |> Map.merge(resolved_opts)}
+      {:ok, udp_source_config(resolved_opts)}
     end
   end
 
@@ -1182,12 +1212,71 @@ defmodule HydraSrt.RouteHandler do
     with {:ok, resolved_opts} <- resolve_interface_options(opts) do
       # TS over RTP source uses udpsrc + rtpmp2tdepay in native pipeline.
       {:ok,
-       %{"type" => "udpsrc", "hydra_source_schema" => "RTP"}
-       |> Map.merge(resolved_opts)}
+       resolved_opts
+       |> udp_source_config()
+       |> Map.put("hydra_source_schema", "RTP")}
     end
   end
 
   def source_from_record(_), do: {:error, :invalid_source}
+
+  @doc false
+  def udp_source_config(opts) when is_map(opts) do
+    address = Map.get(opts, "address") || Map.get(opts, "host") || Map.get(opts, "localaddress")
+    port = Map.get(opts, "port") || Map.get(opts, "localport")
+    multicast? = multicast_source?(opts, address)
+
+    multicast_iface =
+      Map.get(opts, "multicast-iface") ||
+        Map.get(opts, "multicast_iface") ||
+        Map.get(opts, "interface_sys_name")
+
+    opts
+    |> Map.drop([
+      "host",
+      "multicast",
+      "interface_sys_name",
+      "multicast_iface",
+      "localaddress",
+      "localport",
+      "bind-address"
+    ])
+    |> Map.put("type", "udpsrc")
+    |> Map.put("address", address)
+    |> Map.put("port", port)
+    |> maybe_put_multicast_options(multicast?, multicast_iface)
+    |> drop_nil_values()
+  end
+
+  @doc false
+  def maybe_put_multicast_options(opts, true, multicast_iface) when is_map(opts) do
+    opts
+    |> Map.put("auto-multicast", true)
+    |> Map.put("multicast-iface", multicast_iface)
+  end
+
+  def maybe_put_multicast_options(opts, _, _), do: opts
+
+  @doc false
+  def multicast_source?(opts, address) when is_map(opts) do
+    Map.get(opts, "multicast") == true or multicast_address?(address)
+  end
+
+  @doc false
+  def multicast_address?(address) when is_binary(address) do
+    cond do
+      String.starts_with?(address, "ff") ->
+        true
+
+      true ->
+        case :inet.parse_ipv4_address(String.to_charlist(address)) do
+          {:ok, {first, _, _, _}} -> first >= 224 and first <= 239
+          _ -> false
+        end
+    end
+  end
+
+  def multicast_address?(_), do: false
 
   @doc false
   def next_enabled_source(sources, current_id, mode)
@@ -1303,6 +1392,7 @@ defmodule HydraSrt.RouteHandler do
     |> put_opt(record, "poll-timeout", "poll_timeout")
     |> put_opt(record, "auto-reconnect", "auto_reconnect")
     |> put_opt(record, "keep-listening", "keep_listening")
+    |> put_opt(record, "multicast")
     |> put_opt(record, "multicast-iface", "multicast_iface")
     |> put_opt(record, "bind-address", "bind_address_option")
     |> put_opt(record, "buffer-size")

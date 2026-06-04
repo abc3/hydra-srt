@@ -1365,6 +1365,7 @@ defmodule HydraSrt.Db do
       "poll_timeout" => endpoint.poll_timeout,
       "auto_reconnect" => endpoint.auto_reconnect,
       "keep_listening" => endpoint.keep_listening,
+      "multicast" => endpoint.multicast || false,
       "multicast_iface" => endpoint.multicast_iface,
       "bind_address_option" => endpoint.bind_address_option,
       "allowed_list" => Endpoint.decode_ip_access_list(endpoint.allowed_list),

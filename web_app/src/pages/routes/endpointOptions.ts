@@ -1,27 +1,3 @@
-const ENDPOINT_OPTION_KEYS = [
-  'mode',
-  'interface_sys_name',
-  'localaddress',
-  'localport',
-  'address',
-  'port',
-  'host',
-  'latency',
-  'authentication',
-  'passphrase',
-  'pbkeylen',
-  'poll_timeout',
-  'auto_reconnect',
-  'keep_listening',
-  'multicast_iface',
-  'bind_address_option',
-  'allowed_list',
-  'denied_list',
-  'limit_access',
-  'auto-reconnect',
-  'keep-listening',
-];
-
 type EndpointValue = string | number | boolean | null | undefined;
 export type EndpointRecord = Record<string, unknown> & {
   schema?: string;
@@ -33,6 +9,9 @@ export type EndpointRecord = Record<string, unknown> & {
   localport?: EndpointValue;
   auto_reconnect?: EndpointValue;
   keep_listening?: EndpointValue;
+  multicast?: EndpointValue;
+  multicast_iface?: EndpointValue;
+  bind_address_option?: EndpointValue;
   'auto-reconnect'?: EndpointValue;
   'keep-listening'?: EndpointValue;
 };
@@ -90,6 +69,15 @@ export const normalizeEndpointForForm = (endpoint: EndpointRecord | null | undef
   }
 
   if (
+    (flat.schema === 'UDP' || flat.schema === 'RTP') &&
+    (flat.address === undefined || flat.address === null || flat.address === '') &&
+    typeof flat.host === 'string' &&
+    flat.host !== ''
+  ) {
+    flat.address = flat.host;
+  }
+
+  if (
     flat.schema === 'SRT' &&
     flat.mode === 'caller' &&
     (flat.address === undefined || flat.address === null || flat.address === '') &&
@@ -112,6 +100,7 @@ export const normalizeEndpointForForm = (endpoint: EndpointRecord | null | undef
 
   flat.port = toNumberIfPresent(flat.port);
   flat.localport = toNumberIfPresent(flat.localport);
+  flat.multicast = flat.multicast ?? false;
   flat.allowed_list = normalizeIpAccessList(flat.allowed_list);
   flat.denied_list = normalizeIpAccessList(flat.denied_list);
   flat.limit_access = flat.limit_access ?? false;

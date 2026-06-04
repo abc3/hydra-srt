@@ -26,6 +26,10 @@ defmodule HydraSrt.RouteHandlerTest do
     def get_interface_by_sys_name(_), do: {:error, :not_found}
   end
 
+  defmodule MissingTestDb do
+    def get_interface_by_sys_name(_), do: {:error, :not_found}
+  end
+
   test "source_from_record with valid SRT schema" do
     record = %{
       "schema" => "SRT",
@@ -171,6 +175,37 @@ defmodule HydraSrt.RouteHandlerTest do
     assert source["port"] == 4201
   end
 
+  test "source_from_record normalizes UDP host to udpsrc address" do
+    record = %{
+      "schema" => "UDP",
+      "host" => "127.0.0.1",
+      "port" => 4201
+    }
+
+    assert {:ok, source} = RouteHandler.source_from_record(record)
+    assert source["type"] == "udpsrc"
+    assert source["address"] == "127.0.0.1"
+    refute Map.has_key?(source, "host")
+  end
+
+  test "source_from_record emits explicit UDP multicast options" do
+    record = %{
+      "schema" => "UDP",
+      "address" => "239.1.1.1",
+      "port" => 5000,
+      "multicast" => true,
+      "multicast_iface" => "eno2"
+    }
+
+    assert {:ok, source} = RouteHandler.source_from_record(record)
+    assert source["type"] == "udpsrc"
+    assert source["address"] == "239.1.1.1"
+    assert source["port"] == 5000
+    assert source["auto-multicast"] == true
+    assert source["multicast-iface"] == "eno2"
+    refute Map.has_key?(source, "multicast")
+  end
+
   test "source_from_record with RTP schema" do
     record = %{
       "schema" => "RTP",
@@ -185,6 +220,34 @@ defmodule HydraSrt.RouteHandlerTest do
     assert source["hydra_source_schema"] == "RTP"
   end
 
+  test "source_from_record keeps RTP depay marker with multicast options" do
+    Application.put_env(:hydra_srt, :system_interfaces_module, EmptySystemInterfaces)
+    Application.put_env(:hydra_srt, :db_module, MissingTestDb)
+
+    on_exit(fn ->
+      Application.delete_env(:hydra_srt, :system_interfaces_module)
+      Application.delete_env(:hydra_srt, :db_module)
+    end)
+
+    record = %{
+      "schema" => "RTP",
+      "host" => "239.1.1.2",
+      "port" => 5004,
+      "multicast" => true,
+      "interface_sys_name" => "en0"
+    }
+
+    assert {:ok, source} = RouteHandler.source_from_record(record)
+    assert source["type"] == "udpsrc"
+    assert source["address"] == "239.1.1.2"
+    assert source["port"] == 5004
+    assert source["auto-multicast"] == true
+    assert source["multicast-iface"] == "en0"
+    assert source["hydra_source_schema"] == "RTP"
+    refute Map.has_key?(source, "host")
+    refute Map.has_key?(source, "interface_sys_name")
+  end
+
   test "source_from_record with invalid schema" do
     record = %{
       "schema" => "INVALID"
@@ -196,6 +259,22 @@ defmodule HydraSrt.RouteHandlerTest do
   test "source_from_record with missing options" do
     record = %{"schema" => "SRT"}
     assert {:error, :invalid_source} = RouteHandler.source_from_record(record)
+  end
+
+  test "parse_native_json_line accepts structured pipeline log events" do
+    line =
+      Jason.encode!(%{
+        "event" => "pipeline_log",
+        "level" => "WARN",
+        "category" => "native_config",
+        "element" => "udpsrc",
+        "message" => "ignored unsupported property host on udpsrc"
+      })
+
+    assert {:pipeline_log, log} = RouteHandler.parse_native_json_line(line)
+    assert log["level"] == "WARN"
+    assert log["category"] == "native_config"
+    assert log["element"] == "udpsrc"
   end
 
   test "source_record_from_route picks active source id when present" do

@@ -539,6 +539,10 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
 
       if (schema === 'UDP' || schema === 'RTP') {
         pathsToValidate.push(['sources', sourceIndex, 'port']);
+        if (getEndpointOption(source, 'multicast')) {
+          pathsToValidate.push(['sources', sourceIndex, 'address']);
+          pathsToValidate.push(['sources', sourceIndex, 'interface_sys_name']);
+        }
       }
 
       await form.validateFields(pathsToValidate);
@@ -737,14 +741,15 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                             <Radio.Group buttonStyle="solid">
                               <Radio.Button value="SRT">SRT</Radio.Button>
                               <Radio.Button value="UDP">UDP</Radio.Button>
-                              <Radio.Button value="RTP">RTP (TS)</Radio.Button>
+                              <Radio.Button value="RTP">RTP</Radio.Button>
                             </Radio.Group>
                           </Form.Item>
 
-                          <Form.Item noStyle dependencies={[['sources', field.name, 'schema'], ['sources', field.name, 'mode']]}>
+                          <Form.Item noStyle dependencies={[['sources', field.name, 'schema'], ['sources', field.name, 'mode'], ['sources', field.name, 'multicast']]}>
                             {({ getFieldValue }) => {
                               const schema = getFieldValue(['sources', field.name, 'schema']);
                               const mode = getFieldValue(['sources', field.name, 'mode']);
+                              const isMulticast = getFieldValue(['sources', field.name, 'multicast']) === true;
 
                               if (schema === 'SRT') {
                                 const isCaller = mode === 'caller';
@@ -870,11 +875,29 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                               if (schema === 'UDP' || schema === 'RTP') {
                                 return (
                                   <>
-                                    <Form.Item label="Interface" name={[field.name, 'interface_sys_name']}>
+                                    <Form.Item
+                                      label="Interface"
+                                      name={[field.name, 'interface_sys_name']}
+                                      extra={isMulticast ? 'Required for joining the multicast group on the correct interface.' : 'Optional local interface for UDP/RTP bind settings.'}
+                                      rules={isMulticast ? [{ required: true, message: 'Please select a multicast interface' }] : []}
+                                    >
                                       <Select allowClear loading={interfacesLoading} options={interfaceOptions} placeholder="Select interface" />
                                     </Form.Item>
-                                    <Form.Item label="Address" name={[field.name, 'address']}>
-                                      <Input placeholder="0.0.0.0" />
+                                    <Form.Item
+                                      label="Multicast source"
+                                      name={[field.name, 'multicast']}
+                                      valuePropName="checked"
+                                      extra="Enable when this source receives packets from a UDP multicast group."
+                                    >
+                                      <Switch />
+                                    </Form.Item>
+                                    <Form.Item
+                                      label={isMulticast ? 'Multicast Group' : 'Address'}
+                                      name={[field.name, 'address']}
+                                      rules={isMulticast ? [{ required: true, message: 'Please enter a multicast group' }] : []}
+                                      extra={isMulticast ? 'The multicast group to join, for example 239.1.1.1.' : 'Local address to listen on. Leave empty to listen on all interfaces.'}
+                                    >
+                                      <Input placeholder={isMulticast ? '239.1.1.1' : '0.0.0.0'} />
                                     </Form.Item>
                                     <Form.Item
                                       label="Port"
