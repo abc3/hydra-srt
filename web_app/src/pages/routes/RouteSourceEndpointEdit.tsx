@@ -323,6 +323,7 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                                             <Radio.Button value="SRT">SRT</Radio.Button>
                                             <Radio.Button value="UDP">UDP</Radio.Button>
                                             <Radio.Button value="RTP">RTP</Radio.Button>
+                                            <Radio.Button value="RTMP">RTMP</Radio.Button>
                                         </Radio.Group>
                                     </Form.Item>
 
@@ -515,6 +516,23 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                                                     </Form.Item>
                                                     <SrtAccessFields />
                                                 </>
+                                            )
+                                        }
+                                    </Form.Item>
+
+                                    {/* RTMP specific options */}
+                                    <Form.Item noStyle dependencies={['schema']}>
+                                        {({ getFieldValue }) =>
+                                            getFieldValue('schema') === 'RTMP' && (
+                                                <Form.Item
+                                                    label="Path"
+                                                    name="path"
+                                                    required
+                                                    extra="Publish to rtmp://YOUR_ADDR:1935/live/test"
+                                                    rules={[{ required: true, message: 'Please enter an RTMP path' }]}
+                                                >
+                                                    <Input placeholder="/test/channel" />
+                                                </Form.Item>
                                             )
                                         }
                                     </Form.Item>

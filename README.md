@@ -25,18 +25,20 @@
 | --------- | ----- | ------ |
 | SRT       | ✔     | ✔      |
 | UDP       | ✔     | ✔      |
-| RTP (TS)  | ✔     | —      |
+| RTP       | ✔     | —      |
+| RTMP      | ✔     | -      |
 
 ### Planned transports
 
 | Transport | Input | Output |
 | --------- | ----- | ------ |
-| RTMP      | —     | —      |
 | HLS       | —     | —      |
 | WebRTC    | —     | —      |
 | MoQ       | —     | —      |
 
 ### Capabilities
+
+RTMP output remuxes the route MPEG-TS stream to FLV without decoding. It supports codecs accepted by GStreamer's FLV muxer, such as H.264 video and AAC/MP3 audio.
 
 | Capability | Notes | Status |
 | ---------- | ----- | ------ |

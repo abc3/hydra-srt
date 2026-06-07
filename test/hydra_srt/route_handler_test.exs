@@ -666,6 +666,9 @@ defmodule HydraSrt.RouteHandlerTest do
     assert :ignore = RouteHandler.normalize_runtime_status("stopped", "failure")
     assert {:update, "failed"} = RouteHandler.normalize_runtime_status("failed", "runtime_error")
     assert {:update, "processing"} = RouteHandler.normalize_runtime_status("processing", nil)
+
+    assert {:update, "processing"} =
+             RouteHandler.normalize_runtime_status("processing", nil, %{recovering?: true})
   end
 
   test "failed runtime status is preserved when binary exits with non-zero code" do

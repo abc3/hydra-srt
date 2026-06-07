@@ -400,6 +400,8 @@ defmodule HydraSrt.Api do
     "multicast",
     "multicast_iface",
     "bind_address_option",
+    "path",
+    "location",
     "node",
     "started_at",
     "stopped_at",

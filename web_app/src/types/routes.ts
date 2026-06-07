@@ -17,6 +17,8 @@ export type RouteEndpoint = Record<string, unknown> & {
   multicast?: boolean;
   multicast_iface?: string;
   bind_address_option?: string;
+  path?: string;
+  location?: string;
 };
 
 export type RouteRecord = Record<string, unknown> & {

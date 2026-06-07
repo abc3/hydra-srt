@@ -33,6 +33,7 @@ pub fn build_pipeline(
         .and_then(Value::as_str)
         .unwrap_or("");
     let is_rtp_source = source_schema == "RTP";
+    let is_rtmp_source = source_schema == "RTMP" || config.source.element_type == "rtmpsrc";
 
     tee.set_property("allow-not-linked", true);
     apply_element_properties_with_logging(
@@ -124,6 +125,8 @@ pub fn build_pipeline(
             .link(&tee)
             .context("failed to link rtpmp2tdepay to tee")?;
         depay.static_pad("src")
+    } else if is_rtmp_source {
+        add_rtmp_remux_source_to_tee(&pipeline, &source, &tee)?
     } else {
         pipeline
             .add_many([&source, &tee])
@@ -142,17 +145,20 @@ pub fn build_pipeline(
         let bytes_counter = source_bytes_total.clone();
         let lifecycle_ref = lifecycle.clone();
         let processing_pending_ref = processing_pending.clone();
-        src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
-            if let Some(buffer) = info.buffer() {
-                record_source_buffer(
-                    &bytes_counter,
-                    &processing_pending_ref,
-                    &lifecycle_ref,
-                    buffer.size() as u64,
-                );
-            }
-            gst::PadProbeReturn::Ok
-        });
+        src_pad.add_probe(
+            gst::PadProbeType::BUFFER | gst::PadProbeType::BUFFER_LIST,
+            move |_pad, info| {
+                if let Some(buffer_size) = probe_buffer_size(info) {
+                    record_source_buffer(
+                        &bytes_counter,
+                        &processing_pending_ref,
+                        &lifecycle_ref,
+                        buffer_size,
+                    );
+                }
+                gst::PadProbeReturn::Ok
+            },
+        );
     }
 
     for sink in config.sinks {
@@ -203,6 +209,9 @@ fn add_sink_to_pipeline(
     if sink_config.element_type == "srtsink" {
         sink_element.set_property("sync", false);
         sink_element.set_property("async", false);
+    }
+
+    if sink_config.element_type == "srtsink" {
         sink_element.set_property("wait-for-connection", true);
     }
 
@@ -214,7 +223,28 @@ fn add_sink_to_pipeline(
         .link(&sink_element)
         .context("failed to link queue to sink")?;
 
-    let metrics = Arc::new(DestMetrics {
+    let metrics = destination_metrics_from_config(
+        &sink_config,
+        (sink_config.element_type == "srtsink").then_some(sink_element.clone()),
+    );
+
+    if let Some(src_pad) = queue.static_pad("src") {
+        add_destination_metrics_probe(&src_pad, metrics.clone());
+    }
+
+    dest_metrics
+        .lock()
+        .map_err(|_| anyhow!("destination metrics mutex poisoned"))?
+        .push(metrics);
+
+    Ok(())
+}
+
+fn destination_metrics_from_config(
+    sink_config: &ElementConfig,
+    sink_element: Option<gst::Element>,
+) -> Arc<DestMetrics> {
+    Arc::new(DestMetrics {
         id: sink_config
             .props
             .get("hydra_destination_id")
@@ -234,27 +264,189 @@ fn add_sink_to_pipeline(
         bytes_total: AtomicU64::new(0),
         bytes_last_interval: AtomicU64::new(0),
         bytes_per_sec: AtomicU64::new(0),
-        sink_element: (sink_config.element_type == "srtsink").then_some(sink_element.clone()),
-    });
+        sink_element,
+    })
+}
 
-    if let Some(src_pad) = queue.static_pad("src") {
-        let metrics_ref = metrics.clone();
-        src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
-            if let Some(buffer) = info.buffer() {
-                metrics_ref
+fn add_destination_metrics_probe(src_pad: &gst::Pad, metrics: Arc<DestMetrics>) {
+    src_pad.add_probe(
+        gst::PadProbeType::BUFFER | gst::PadProbeType::BUFFER_LIST,
+        move |_pad, info| {
+            if let Some(buffer_size) = probe_buffer_size(info) {
+                metrics
                     .bytes_total
-                    .fetch_add(buffer.size() as u64, Ordering::Relaxed);
+                    .fetch_add(buffer_size, Ordering::Relaxed);
             }
             gst::PadProbeReturn::Ok
-        });
+        },
+    );
+}
+
+fn add_rtmp_remux_source_to_tee(
+    pipeline: &gst::Pipeline,
+    source: &gst::Element,
+    tee: &gst::Element,
+) -> Result<Option<gst::Pad>> {
+    let parsebin = gst::ElementFactory::make("parsebin")
+        .name("rtmp_parsebin")
+        .build()
+        .context("failed to create parsebin")?;
+    let mux = gst::ElementFactory::make("mpegtsmux")
+        .name("rtmp_mpegtsmux")
+        .build()
+        .context("failed to create mpegtsmux")?;
+
+    pipeline
+        .add_many([source, &parsebin, &mux, tee])
+        .context("failed to add rtmp source/parsebin/mpegtsmux/tee to pipeline")?;
+    source
+        .link(&parsebin)
+        .context("failed to link rtmp source to parsebin")?;
+    mux.link(tee)
+        .context("failed to link rtmp mpegtsmux to tee")?;
+
+    let pipeline_weak = pipeline.downgrade();
+    let mux_weak = mux.downgrade();
+    parsebin.connect_pad_added(move |_parsebin, src_pad| {
+        let Some(pipeline) = pipeline_weak.upgrade() else {
+            return;
+        };
+        let Some(mux) = mux_weak.upgrade() else {
+            return;
+        };
+
+        if let Err(err) = link_rtmp_parsebin_pad_to_mux(&pipeline, &mux, src_pad) {
+            eprintln!("failed to link RTMP parsed stream to MPEG-TS muxer: {err:#}");
+        }
+    });
+
+    Ok(mux.static_pad("src"))
+}
+
+fn link_rtmp_parsebin_pad_to_mux(
+    pipeline: &gst::Pipeline,
+    mux: &gst::Element,
+    src_pad: &gst::Pad,
+) -> Result<()> {
+    if src_pad.is_linked() {
+        return Ok(());
     }
 
-    dest_metrics
-        .lock()
-        .map_err(|_| anyhow!("destination metrics mutex poisoned"))?
-        .push(metrics);
+    let queue = gst::ElementFactory::make("queue")
+        .build()
+        .context("failed to create rtmp remux queue")?;
+    queue.set_property("max-size-buffers", 200_u32);
+    queue.set_property("max-size-time", 0_u64);
+
+    let parser = parser_for_caps(src_pad.current_caps().as_ref());
+
+    pipeline
+        .add(&queue)
+        .context("failed to add rtmp remux queue to pipeline")?;
+
+    if let Some(parser) = parser.as_ref() {
+        pipeline
+            .add(parser)
+            .context("failed to add rtmp remux parser to pipeline")?;
+        configure_parser(parser);
+    }
+
+    let queue_sink_pad = queue
+        .static_pad("sink")
+        .ok_or_else(|| anyhow!("rtmp remux queue has no sink pad"))?;
+    let queue_src_pad = queue
+        .static_pad("src")
+        .ok_or_else(|| anyhow!("rtmp remux queue has no src pad"))?;
+    let mux_sink_pad = mux
+        .request_pad_simple("sink_%d")
+        .ok_or_else(|| anyhow!("failed to request mpegtsmux sink pad"))?;
+
+    if let Err(err) = src_pad.link(&queue_sink_pad) {
+        mux.release_request_pad(&mux_sink_pad);
+        if let Some(parser) = parser.as_ref() {
+            let _ = pipeline.remove(parser);
+        }
+        let _ = pipeline.remove(&queue);
+        return Err(anyhow!("failed to link parsebin pad to queue: {err:?}"));
+    }
+
+    if let Some(parser) = parser.as_ref() {
+        let parser_sink_pad = parser
+            .static_pad("sink")
+            .ok_or_else(|| anyhow!("rtmp remux parser has no sink pad"))?;
+        let parser_src_pad = parser
+            .static_pad("src")
+            .ok_or_else(|| anyhow!("rtmp remux parser has no src pad"))?;
+
+        if let Err(err) = queue_src_pad.link(&parser_sink_pad) {
+            let _ = src_pad.unlink(&queue_sink_pad);
+            mux.release_request_pad(&mux_sink_pad);
+            let _ = pipeline.remove(parser);
+            let _ = pipeline.remove(&queue);
+            return Err(anyhow!(
+                "failed to link queue to rtmp remux parser: {err:?}"
+            ));
+        }
+
+        if let Err(err) = parser_src_pad.link(&mux_sink_pad) {
+            let _ = queue_src_pad.unlink(&parser_sink_pad);
+            let _ = src_pad.unlink(&queue_sink_pad);
+            mux.release_request_pad(&mux_sink_pad);
+            let _ = pipeline.remove(parser);
+            let _ = pipeline.remove(&queue);
+            return Err(anyhow!(
+                "failed to link rtmp remux parser to mpegtsmux: {err:?}"
+            ));
+        }
+    }
+
+    if parser.is_none() {
+        if let Err(err) = queue_src_pad.link(&mux_sink_pad) {
+            let _ = src_pad.unlink(&queue_sink_pad);
+            mux.release_request_pad(&mux_sink_pad);
+            let _ = pipeline.remove(&queue);
+            return Err(anyhow!("failed to link queue to mpegtsmux: {err:?}"));
+        }
+    }
+
+    queue
+        .sync_state_with_parent()
+        .context("failed to sync rtmp remux queue state")?;
+
+    if let Some(parser) = parser.as_ref() {
+        parser
+            .sync_state_with_parent()
+            .context("failed to sync rtmp remux parser state")?;
+    }
 
     Ok(())
+}
+
+fn parser_for_caps(caps: Option<&gst::Caps>) -> Option<gst::Element> {
+    let caps = caps?;
+    let structure = caps.structure(0)?;
+    let parser_name = match structure.name().as_str() {
+        "video/x-h264" => "h264parse",
+        "video/x-h265" => "h265parse",
+        "video/x-h266" => "h266parse",
+        "video/mpeg" => "mpegvideoparse",
+        "audio/mpeg" => match structure.get::<i32>("mpegversion").ok() {
+            Some(1) => "mpegaudioparse",
+            Some(2) | Some(4) => "aacparse",
+            _ => return None,
+        },
+        "audio/x-ac3" => "ac3parse",
+        "audio/x-dts" => "dtsparse",
+        _ => return None,
+    };
+
+    gst::ElementFactory::make(parser_name).build().ok()
+}
+
+fn configure_parser(parser: &gst::Element) {
+    if parser.has_property("config-interval", None) {
+        parser.set_property("config-interval", -1_i32);
+    }
 }
 
 fn record_source_buffer(
@@ -268,6 +460,15 @@ fn record_source_buffer(
     if processing_pending.swap(false, Ordering::AcqRel) {
         let _ = lifecycle.emit_processing();
     }
+}
+
+fn probe_buffer_size(info: &gst::PadProbeInfo) -> Option<u64> {
+    if let Some(buffer) = info.buffer() {
+        return Some(buffer.size() as u64);
+    }
+
+    info.buffer_list()
+        .map(|buffer_list| buffer_list.iter().map(|buffer| buffer.size() as u64).sum())
 }
 
 fn configure_branch_queue(queue: &gst::Element, sink_type: &str) {
@@ -424,6 +625,33 @@ mod tests {
             .expect("srt metrics present");
         assert_eq!(srt_metrics.kind, "srtsink");
         assert!(srt_metrics.sink_element.is_some());
+    }
+
+    #[test]
+    fn builds_rtmp_sources_with_mpegts_remux_path() {
+        init_gst();
+
+        let config = PipelineConfig {
+            source: ElementConfig {
+                element_type: "fakesrc".to_string(),
+                props: BTreeMap::from([(
+                    "hydra_source_schema".to_string(),
+                    Value::String("RTMP".to_string()),
+                )]),
+            },
+            sinks: vec![ElementConfig {
+                element_type: "fakesink".to_string(),
+                props: BTreeMap::from([("sync".to_string(), Value::Bool(false))]),
+            }],
+        };
+
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(StdoutWriter::new())));
+
+        let runtime = build_pipeline(config, writer).expect("pipeline should build");
+
+        assert!(runtime.pipeline.by_name("rtmp_parsebin").is_some());
+        assert!(runtime.pipeline.by_name("rtmp_mpegtsmux").is_some());
     }
 
     #[test]

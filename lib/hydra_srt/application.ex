@@ -22,7 +22,22 @@ defmodule HydraSrt.Application do
       )
 
     :syn.add_node_to_scopes([:routes])
+    :ok = HydraSrt.Rtmp.StreamCache.init()
     runtime_schedulers = System.schedulers_online()
+    rtmp_port = Application.fetch_env!(:hydra_srt, :rtmp_port)
+
+    rtmp_server_listener =
+      :ranch.child_spec(
+        :rtmp_server,
+        :ranch_tcp,
+        %{
+          max_connections: 1_000,
+          num_acceptors: 10,
+          socket_opts: [port: rtmp_port, keepalive: true]
+        },
+        HydraSrt.RtmpServer,
+        []
+      )
 
     children = [
       HydraSrtWeb.Telemetry,
@@ -54,6 +69,7 @@ defmodule HydraSrt.Application do
       {HydraSrt.Mcp.Server, transport: {:streamable_http, start: true}, request_timeout: 20_000},
       {HydraSrt.Stats.PipelineLogger, %{}},
       {HydraSrt.Notifications.Telegram, %{}},
+      rtmp_server_listener,
       HydraSrtWeb.Endpoint
     ]
 

@@ -36,6 +36,8 @@ defmodule HydraSrt.Api.Endpoint do
     field :multicast, :boolean, default: false
     field :multicast_iface, :string
     field :bind_address_option, :string
+    field :path, :string
+    field :location, :string
     field :allowed_list, :string, default: "[]"
     field :denied_list, :string, default: "[]"
     field :limit_access, :boolean, default: false
@@ -75,9 +77,12 @@ defmodule HydraSrt.Api.Endpoint do
     |> put_default_enabled(true)
     |> put_default_ip_access_fields()
     |> put_default_ip_access_field(:multicast, false)
+    |> normalize_rtmp_path_change()
+    |> normalize_rtmp_location_change()
     |> validate_ip_access_lists()
     |> validate_required([:route_id, :position, :schema, :type])
-    |> validate_inclusion(:schema, ["SRT", "UDP", "RTP"])
+    |> validate_inclusion(:schema, ["SRT", "UDP", "RTP", "RTMP"])
+    |> validate_rtmp_required_fields()
     |> validate_number(:position, greater_than_or_equal_to: 0)
     |> put_bind_target_fields()
     |> unique_constraint([:route_id, :position, :type], name: @source_unique_constraint)
@@ -95,6 +100,7 @@ defmodule HydraSrt.Api.Endpoint do
     |> put_default_enabled(false)
     |> put_default_ip_access_field(:multicast, false)
     |> validate_required([:route_id, :schema, :type])
+    |> validate_inclusion(:schema, ["SRT", "UDP"])
     |> put_bind_target_fields()
     |> unique_constraint([:route_id, :position, :type], name: @source_unique_constraint)
     |> unique_constraint(:bind_port,
@@ -130,6 +136,8 @@ defmodule HydraSrt.Api.Endpoint do
       :multicast,
       :multicast_iface,
       :bind_address_option,
+      :path,
+      :location,
       :allowed_list,
       :denied_list,
       :limit_access,
@@ -147,6 +155,42 @@ defmodule HydraSrt.Api.Endpoint do
   defp put_default_enabled(changeset, default) do
     case fetch_field(changeset, :enabled) do
       {_, nil} -> put_change(changeset, :enabled, default)
+      _ -> changeset
+    end
+  end
+
+  def normalize_rtmp_path_change(changeset) do
+    update_change(changeset, :path, &normalize_rtmp_path/1)
+  end
+
+  def normalize_rtmp_path(path) when is_binary(path) do
+    path = String.trim(path)
+
+    cond do
+      path == "" -> nil
+      String.starts_with?(path, "/") -> path
+      true -> "/" <> path
+    end
+  end
+
+  def normalize_rtmp_path(path), do: path
+
+  def normalize_rtmp_location_change(changeset) do
+    update_change(changeset, :location, &normalize_optional_string/1)
+  end
+
+  def normalize_optional_string(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  def normalize_optional_string(value), do: value
+
+  def validate_rtmp_required_fields(changeset) do
+    case {get_field(changeset, :schema), get_field(changeset, :type)} do
+      {"RTMP", "source"} -> validate_required(changeset, [:path])
       _ -> changeset
     end
   end

@@ -60,6 +60,20 @@ dev_udp:
 	-c:a aac -b:a 128k \
 	-f mpegts "srt://127.0.0.1:4200?mode=listener"
 
+.PHONY: dev_rtmp dev_rtmp_play
+dev_rtmp:
+	ffmpeg -hide_banner -loglevel error -re \
+	-f lavfi -i "testsrc=size=1280x720:rate=30" \
+	-f lavfi -i "sine=frequency=440:sample_rate=48000" \
+	-c:v libx264 -preset veryfast -tune zerolatency -b:v 2000k \
+	-c:a aac -b:a 128k \
+	-f flv "rtmp://localhost:1935/live/test"
+
+dev_rtmp_play:
+	ffmpeg -hide_banner -loglevel error -rw_timeout 5000000 \
+	-i "rtmp://localhost:1935/demo/routetest" \
+	-c copy -f mpegts "udp://127.0.0.1:1234?pkt_size=1316"
+
 dev_play:
 	ffplay -hide_banner "udp://127.0.0.1:1234"
 

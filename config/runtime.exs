@@ -14,6 +14,7 @@ alias HydraSrt.Env
 # - ANALYTICS_DATABASE_PATH: required in prod and dev
 # - POOL_SIZE: Ecto pool size (prod default 5)
 # - PORT / PHX_HOST: HTTP listen port and URL host
+# - RTMP_PORT: RTMP ingest server listen port (default 1935)
 # - PHX_CHECK_ORIGIN: WebSocket origin checks (prod default: disabled)
 
 if System.get_env("PHX_SERVER") do
@@ -21,6 +22,7 @@ if System.get_env("PHX_SERVER") do
 end
 
 config :hydra_srt, demo_data: Env.get_boolean("DEMO_DATA", false)
+config :hydra_srt, rtmp_port: Env.get_integer("RTMP_PORT", 1935)
 
 secret_key_base =
   cond do

@@ -5,7 +5,7 @@ export type EndpointFormValues = Record<string, unknown> & {
   name?: string;
   enabled?: boolean;
   node?: string;
-  schema?: 'SRT' | 'UDP' | 'RTP' | string;
+  schema?: 'SRT' | 'UDP' | 'RTP' | 'RTMP' | string;
   mode?: 'caller' | 'listener' | 'rendezvous' | string;
   interface_sys_name?: string;
   address?: string;
@@ -16,6 +16,8 @@ export type EndpointFormValues = Record<string, unknown> & {
   multicast?: boolean;
   multicast_iface?: string;
   bind_address_option?: string;
+  path?: string;
+  location?: string;
   latency?: number;
   authentication?: boolean;
   passphrase?: string;

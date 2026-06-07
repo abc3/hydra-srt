@@ -24,6 +24,8 @@ export const getEndpointAddressString = (endpoint: RouteEndpoint | null | undefi
     }
     case 'UDP':
       return `${getEndpointOption(endpoint, 'host') || getEndpointOption(endpoint, 'address') || 'N/A'}:${getEndpointOption(endpoint, 'port') || 'N/A'}`;
+    case 'RTMP':
+      return String(getEndpointOption(endpoint, 'path') || getEndpointOption(endpoint, 'location') || 'N/A');
     default:
       return 'N/A';
   }
@@ -48,6 +50,8 @@ export const renderProtocolTag = (schema: string | null | undefined): ReactNode 
       return <Tag color="blue">SRT</Tag>;
     case 'UDP':
       return <Tag color="cyan">UDP</Tag>;
+    case 'RTMP':
+      return <Tag color="purple">RTMP</Tag>;
     default:
       return null;
   }

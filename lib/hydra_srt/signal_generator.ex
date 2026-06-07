@@ -6,8 +6,10 @@ defmodule HydraSrt.SignalGenerator do
   @default_srt_port 4200
   @default_udp_port 4201
   @default_rtp_port 4202
+  @default_rtmp_port 1935
+  @default_rtmp_path "/live/test"
   @stale_signature "HYDRA_SIGNAL_GENERATOR"
-  @supported_transports ["srt", "udp", "rtp"]
+  @supported_transports ["srt", "udp", "rtp", "rtmp"]
 
   @ffmpeg_common_args [
     "-hide_banner",
@@ -28,6 +30,12 @@ defmodule HydraSrt.SignalGenerator do
     "veryfast",
     "-tune",
     "zerolatency",
+    "-pix_fmt",
+    "yuv420p",
+    "-profile:v",
+    "baseline",
+    "-g",
+    "60",
     "-b:v",
     "2000k",
     "-c:a",
@@ -46,9 +54,9 @@ defmodule HydraSrt.SignalGenerator do
     GenServer.call(__MODULE__, {:status, transport})
   end
 
-  def configure(transport, host, port)
+  def configure(transport, host, port, path \\ nil)
       when is_binary(transport) and is_binary(host) and is_integer(port) do
-    GenServer.call(__MODULE__, {:configure, transport, host, port})
+    GenServer.call(__MODULE__, {:configure, transport, host, port, path})
   end
 
   def start_generation(transport \\ "srt") do
@@ -69,7 +77,8 @@ defmodule HydraSrt.SignalGenerator do
        configs: %{
          "srt" => %{host: @default_host, port: @default_srt_port},
          "udp" => %{host: @default_host, port: @default_udp_port},
-         "rtp" => %{host: @default_host, port: @default_rtp_port}
+         "rtp" => %{host: @default_host, port: @default_rtp_port},
+         "rtmp" => %{host: @default_host, port: @default_rtmp_port, path: @default_rtmp_path}
        },
        running_transport: nil,
        ffmpeg_port: nil,
@@ -88,10 +97,11 @@ defmodule HydraSrt.SignalGenerator do
     end
   end
 
-  def handle_call({:configure, transport, host, port}, _from, state) do
+  def handle_call({:configure, transport, host, port, path}, _from, state) do
     host = String.trim(host)
 
-    with {:ok, transport} <- normalize_transport(transport) do
+    with {:ok, transport} <- normalize_transport(transport),
+         {:ok, path} <- resolve_rtmp_path(transport, path, state) do
       cond do
         host == "" ->
           {:reply, {:error, :invalid_host}, state}
@@ -99,11 +109,15 @@ defmodule HydraSrt.SignalGenerator do
         port < 1 or port > 65_535 ->
           {:reply, {:error, :invalid_port}, state}
 
+        transport == "rtmp" and is_nil(path) ->
+          {:reply, {:error, :invalid_path}, state}
+
         is_port(state.ffmpeg_port) ->
           {:reply, {:error, :running}, state}
 
         true ->
-          new_configs = put_in(state.configs, [transport], %{host: host, port: port})
+          cfg = %{host: host, port: port} |> maybe_put_path(transport, path)
+          new_configs = put_in(state.configs, [transport], cfg)
           new_state = %{state | configs: new_configs}
           {:reply, {:ok, status_map(new_state, transport)}, new_state}
       end
@@ -124,7 +138,7 @@ defmodule HydraSrt.SignalGenerator do
 
         true ->
           cfg = Map.fetch!(state.configs, transport)
-          output = output_url(transport, cfg.host, cfg.port)
+          output = output_url(transport, cfg.host, cfg.port, Map.get(cfg, :path))
 
           ffmpeg_port =
             Port.open({:spawn_executable, state.ffmpeg_path}, [
@@ -212,9 +226,15 @@ defmodule HydraSrt.SignalGenerator do
         "rtp" => %{
           "host" => state.configs["rtp"].host,
           "port" => state.configs["rtp"].port
+        },
+        "rtmp" => %{
+          "host" => state.configs["rtmp"].host,
+          "port" => state.configs["rtmp"].port,
+          "path" => state.configs["rtmp"].path
         }
       }
     }
+    |> Map.put("path", Map.get(cfg, :path))
   end
 
   defp normalize_transport(transport) when is_binary(transport) do
@@ -234,13 +254,34 @@ defmodule HydraSrt.SignalGenerator do
     end
   end
 
+  defp resolve_rtmp_path("rtmp", nil, state) do
+    case get_in(state.configs, ["rtmp", :path]) do
+      path when is_binary(path) and path != "" -> {:ok, path}
+      _ -> {:error, :invalid_path}
+    end
+  end
+
+  defp resolve_rtmp_path("rtmp", path, _state) when is_binary(path) do
+    case HydraSrt.Api.Endpoint.normalize_rtmp_path(path) do
+      normalized when is_binary(normalized) and normalized != "" -> {:ok, normalized}
+      _ -> {:error, :invalid_path}
+    end
+  end
+
+  defp resolve_rtmp_path(_transport, _path, _state), do: {:ok, nil}
+
+  defp maybe_put_path(cfg, "rtmp", path), do: Map.put(cfg, :path, path)
+  defp maybe_put_path(cfg, _transport, _path), do: cfg
+
   defp format_args("srt"), do: ["-f", "mpegts"]
   defp format_args("udp"), do: ["-f", "mpegts"]
   defp format_args("rtp"), do: ["-f", "rtp_mpegts"]
+  defp format_args("rtmp"), do: ["-f", "flv"]
 
-  defp output_url("srt", host, port), do: "srt://#{host}:#{port}?mode=listener"
-  defp output_url("udp", host, port), do: "udp://#{host}:#{port}?pkt_size=1316"
-  defp output_url("rtp", host, port), do: "rtp://#{host}:#{port}"
+  defp output_url("srt", host, port, _path), do: "srt://#{host}:#{port}?mode=listener"
+  defp output_url("udp", host, port, _path), do: "udp://#{host}:#{port}?pkt_size=1316"
+  defp output_url("rtp", host, port, _path), do: "rtp://#{host}:#{port}"
+  defp output_url("rtmp", host, port, path), do: "rtmp://#{host}:#{port}#{path}"
 
   defp safe_close_port(port) when is_port(port) do
     try do

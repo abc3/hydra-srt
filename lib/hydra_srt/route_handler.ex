@@ -418,7 +418,7 @@ defmodule HydraSrt.RouteHandler do
               maybe_failover(data, :reconnecting)
 
             "processing" ->
-              %{data | reconnecting_since_ms: nil}
+              %{data | reconnecting_since_ms: nil, recovering?: false}
 
             "failed" ->
               EventLogger.log_pipeline_failed(
@@ -821,7 +821,6 @@ defmodule HydraSrt.RouteHandler do
   def normalize_runtime_status(status, reason), do: normalize_runtime_status(status, reason, %{})
   def normalize_runtime_status("stopped", "failure", _data), do: :ignore
   def normalize_runtime_status("starting", _reason, _data), do: :ignore
-  def normalize_runtime_status("processing", _reason, %{recovering?: true}), do: :ignore
 
   def normalize_runtime_status(status, _reason, _data) when is_binary(status),
     do: {:update, status}
@@ -1218,7 +1217,31 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
+  def source_from_record(%{"schema" => "RTMP"} = source) do
+    opts = endpoint_options_from_record(source)
+
+    case HydraSrt.Api.Endpoint.normalize_rtmp_path(Map.get(opts, "path")) do
+      path when is_binary(path) and path != "" ->
+        {:ok,
+         %{
+           "type" => "rtmpsrc",
+           "location" => build_rtmp_proxy_uri(path),
+           "hydra_source_schema" => "RTMP"
+         }}
+
+      _ ->
+        {:error, :invalid_source}
+    end
+  end
+
   def source_from_record(_), do: {:error, :invalid_source}
+
+  @doc false
+  def build_rtmp_proxy_uri(path) when is_binary(path) do
+    normalized_path = HydraSrt.Api.Endpoint.normalize_rtmp_path(path)
+    rtmp_port = Application.fetch_env!(:hydra_srt, :rtmp_port)
+    "rtmp://127.0.0.1:#{rtmp_port}#{normalized_path}"
+  end
 
   @doc false
   def udp_source_config(opts) when is_map(opts) do
@@ -1395,6 +1418,8 @@ defmodule HydraSrt.RouteHandler do
     |> put_opt(record, "multicast")
     |> put_opt(record, "multicast-iface", "multicast_iface")
     |> put_opt(record, "bind-address", "bind_address_option")
+    |> put_opt(record, "path")
+    |> put_opt(record, "location")
     |> put_opt(record, "buffer-size")
     |> put_opt(record, "buffer-size", "buffer_size")
     |> put_opt(record, "mtu")
