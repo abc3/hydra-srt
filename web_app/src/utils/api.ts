@@ -108,11 +108,12 @@ export const systemPipelinesApi = {
 };
 
 
-export type SignalTransport = 'srt' | 'udp' | 'rtp';
+export type SignalTransport = 'srt' | 'udp' | 'rtp' | 'rtmp';
 
 export type SignalGenerationTransportConfig = {
   host: string;
   port: number;
+  path?: string;
 };
 
 export type SignalGenerationStatus = {
@@ -121,6 +122,7 @@ export type SignalGenerationStatus = {
   running_transport: SignalTransport | null;
   host: string;
   port: number;
+  path?: string;
   transports: Record<SignalTransport, SignalGenerationTransportConfig>;
 };
 
@@ -132,12 +134,22 @@ export const signalGenerationApi = {
       'Failed to load signal generation status'
     ),
 
-  configure: async ({ transport = 'srt', host, port }: { transport?: SignalTransport; host: string; port: number }): Promise<SignalGenerationStatus> =>
+  configure: async ({
+    transport = 'srt',
+    host,
+    port,
+    path,
+  }: {
+    transport?: SignalTransport;
+    host: string;
+    port: number;
+    path?: string;
+  }): Promise<SignalGenerationStatus> =>
     requestJson(
       '/api/system/signal-generation',
       {
         method: 'PUT',
-        body: JSON.stringify({ transport, host, port }),
+        body: JSON.stringify({ transport, host, port, ...(path !== undefined ? { path } : {}) }),
       },
       'Failed to save signal generation settings'
     ),

@@ -39,7 +39,7 @@ defmodule HydraSrtWeb.SystemController do
       {:error, :invalid_transport} ->
         conn
         |> put_status(400)
-        |> json(%{error: "Invalid transport. Use srt, udp, or rtp"})
+        |> json(%{error: "Invalid transport. Use srt, udp, rtp, or rtmp"})
 
       status ->
         json(conn, status)
@@ -48,15 +48,16 @@ defmodule HydraSrtWeb.SystemController do
 
   def signal_generation_configure(conn, %{"host" => host, "port" => port} = params) do
     transport = Map.get(params, "transport", "srt")
+    path = Map.get(params, "path")
 
     with {:ok, port_i} <- parse_port(port),
-         {:ok, status} <- SignalGenerator.configure(transport, host, port_i) do
+         {:ok, status} <- SignalGenerator.configure(transport, host, port_i, path) do
       json(conn, status)
     else
       {:error, :invalid_transport} ->
         conn
         |> put_status(400)
-        |> json(%{error: "Invalid transport. Use srt, udp, or rtp"})
+        |> json(%{error: "Invalid transport. Use srt, udp, rtp, or rtmp"})
 
       {:error, :invalid_port} ->
         conn
@@ -67,6 +68,11 @@ defmodule HydraSrtWeb.SystemController do
         conn
         |> put_status(400)
         |> json(%{error: "Invalid host"})
+
+      {:error, :invalid_path} ->
+        conn
+        |> put_status(400)
+        |> json(%{error: "Invalid RTMP path"})
 
       {:error, :running} ->
         conn
@@ -85,7 +91,7 @@ defmodule HydraSrtWeb.SystemController do
       {:error, :invalid_transport} ->
         conn
         |> put_status(400)
-        |> json(%{error: "Invalid transport. Use srt, udp, or rtp"})
+        |> json(%{error: "Invalid transport. Use srt, udp, rtp, or rtmp"})
 
       {:error, :already_running} ->
         conn

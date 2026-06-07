@@ -1368,6 +1368,8 @@ defmodule HydraSrt.Db do
       "multicast" => endpoint.multicast || false,
       "multicast_iface" => endpoint.multicast_iface,
       "bind_address_option" => endpoint.bind_address_option,
+      "path" => endpoint.path,
+      "location" => endpoint.location,
       "allowed_list" => Endpoint.decode_ip_access_list(endpoint.allowed_list),
       "denied_list" => Endpoint.decode_ip_access_list(endpoint.denied_list),
       "limit_access" => endpoint.limit_access || false,

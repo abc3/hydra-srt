@@ -44,7 +44,7 @@ const Settings = () => {
   const getSignalTransportFromPath = (): SignalTransport => {
     const parts = location.pathname.split('/').filter(Boolean);
     const transport = (parts[2] || 'srt').toLowerCase();
-    if (transport === 'udp' || transport === 'rtp') {
+    if (transport === 'udp' || transport === 'rtp' || transport === 'rtmp') {
       return transport;
     }
     return 'srt';
@@ -75,7 +75,7 @@ const Settings = () => {
   const [tokenSuffix, setTokenSuffix] = useState<string | null>(null);
   const [uptimeNowMs, setUptimeNowMs] = useState(Date.now());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const signalFormHydratedRef = useRef<Record<SignalTransport, boolean>>({ srt: false, udp: false, rtp: false });
+  const signalFormHydratedRef = useRef<Record<SignalTransport, boolean>>({ srt: false, udp: false, rtp: false, rtmp: false });
   const notificationsFormHydratedRef = useRef(false);
   const [modal, modalContextHolder] = Modal.useModal();
   const [messageApi, contextHolder] = message.useMessage();
@@ -139,7 +139,7 @@ const Settings = () => {
     const isUnknownSection = parts.length < 2 || !tabKeyByPath[section];
     const isSignalGenerationWithoutDemo = section === 'signal-generation' && !initData.demo_data;
     const isInvalidSignalTransport =
-      section === 'signal-generation' && initData.demo_data && !['srt', 'udp', 'rtp'].includes((parts[2] || 'srt').toLowerCase());
+      section === 'signal-generation' && initData.demo_data && !['srt', 'udp', 'rtp', 'rtmp'].includes((parts[2] || 'srt').toLowerCase());
 
     if (isUnknownSection || isSignalGenerationWithoutDemo) {
       navigate('/settings/about', { replace: true });
@@ -212,7 +212,11 @@ const Settings = () => {
       setSignalStatus(status);
 
       if (hydrateForm && !signalForm.isFieldsTouched()) {
-        signalForm.setFieldsValue({ host: status.host, port: status.port });
+        signalForm.setFieldsValue({
+          host: status.host,
+          port: status.port,
+          ...(transport === 'rtmp' ? { path: status.path || '/live/test' } : {}),
+        });
         signalFormHydratedRef.current[transport] = true;
       }
     } catch (error: any) {
@@ -699,9 +703,14 @@ const Settings = () => {
           transport: signalTransport,
           host: values.host,
           port: Number(values.port),
+          ...(signalTransport === 'rtmp' ? { path: values.path } : {}),
         });
         setSignalStatus(status);
-        signalForm.setFieldsValue({ host: status.host, port: status.port });
+        signalForm.setFieldsValue({
+          host: status.host,
+          port: status.port,
+          ...(signalTransport === 'rtmp' ? { path: status.path || '/live/test' } : {}),
+        });
         signalFormHydratedRef.current[signalTransport] = true;
         messageApi.success('Signal generation settings saved');
       } catch (error: any) {
@@ -753,9 +762,22 @@ const Settings = () => {
             { key: 'srt', label: 'SRT' },
             { key: 'udp', label: 'UDP' },
             { key: 'rtp', label: 'RTP' },
+            { key: 'rtmp', label: 'RTMP' },
           ]}
         />
         <Form form={signalForm} layout="vertical">
+          {signalTransport === 'rtmp' && (
+            <Form.Item
+              label="Path"
+              name="path"
+              rules={[
+                { required: true, message: 'Please enter RTMP path' },
+                { whitespace: true, message: 'Path cannot be empty' },
+              ]}
+            >
+              <Input placeholder="/live/test" disabled={Boolean(signalStatus.running_transport)} />
+            </Form.Item>
+          )}
           <Form.Item
             label="Host"
             name="host"

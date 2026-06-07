@@ -58,6 +58,8 @@ defmodule HydraSrt.MixProject do
       {:observer_cli, "~> 1.7"},
 
       # Runtime
+      {:ex_rtmp, "~> 0.4.1"},
+      {:ranch, "~> 2.0", override: true},
       {:syn, "~> 3.3"},
       {:cachex, "~> 3.6"},
       {:hermes_mcp, "~> 0.14.1"},

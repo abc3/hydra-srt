@@ -519,10 +519,10 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
       const needsBind = mode === 'listener' || mode === 'rendezvous';
       const pathsToValidate = [
         ['sources', sourceIndex, 'schema'],
-        ['sources', sourceIndex, 'mode'],
       ];
 
       if (schema === 'SRT') {
+        pathsToValidate.push(['sources', sourceIndex, 'mode']);
         if (needsRemote) {
           pathsToValidate.push(['sources', sourceIndex, 'address']);
           pathsToValidate.push(['sources', sourceIndex, 'port']);
@@ -543,6 +543,10 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
           pathsToValidate.push(['sources', sourceIndex, 'address']);
           pathsToValidate.push(['sources', sourceIndex, 'interface_sys_name']);
         }
+      }
+
+      if (schema === 'RTMP') {
+        pathsToValidate.push(['sources', sourceIndex, 'path']);
       }
 
       await form.validateFields(pathsToValidate);
@@ -742,6 +746,7 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                               <Radio.Button value="SRT">SRT</Radio.Button>
                               <Radio.Button value="UDP">UDP</Radio.Button>
                               <Radio.Button value="RTP">RTP</Radio.Button>
+                              <Radio.Button value="RTMP">RTMP</Radio.Button>
                             </Radio.Group>
                           </Form.Item>
 
@@ -910,6 +915,19 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                                       <InputNumber style={{ width: 180 }} />
                                     </Form.Item>
                                   </>
+                                );
+                              }
+
+                              if (schema === 'RTMP') {
+                                return (
+                                  <Form.Item
+                                    label="Path"
+                                    name={[field.name, 'path']}
+                                    rules={[{ required: true, message: 'Please enter an RTMP path' }]}
+                                    extra="Publish to rtmp://YOUR_ADDR:1935/live/test"
+                                  >
+                                    <Input placeholder="/test/channel" />
+                                  </Form.Item>
                                 );
                               }
 

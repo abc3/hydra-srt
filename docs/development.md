@@ -109,16 +109,22 @@ When demo mode is enabled:
     - destinations:
       - `srt://127.0.0.1:4205?mode=listener`
       - `udp://127.0.0.1:4206` (for local playback)
+  - `demo_rtmp_route` (RTMP source):
+    - source: `/live/test`
+    - destinations:
+      - `srt://127.0.0.1:4215?mode=listener`
+      - `rtmp://127.0.0.1:1935/demo/routetest`
 - routes are created with `enabled: false` (not auto-started)
 
 After startup:
 
-1. Open [http://localhost:5173/#/settings/signal-generation/srt](http://localhost:5173/#/settings/signal-generation/srt) (or `/udp`, `/rtp`)
+1. Open [http://localhost:5173/#/settings/signal-generation/srt](http://localhost:5173/#/settings/signal-generation/srt) (or `/udp`, `/rtp`, `/rtmp`)
 2. Click `Start` in the `Signal generation` section for the active tab
 3. Start the matching demo route from the Routes UI:
    - SRT tab → `demo_route`
    - UDP tab → `demo_udp_route`
    - RTP tab → `demo_rtp_route`
+   - RTMP tab → `demo_rtmp_route`
 
 Verify playback:
 
@@ -134,6 +140,12 @@ ffplay -fflags nobuffer -flags low_delay -i "udp://@:4214"
 
 # demo_rtp_route UDP destination
 ffplay -fflags nobuffer -flags low_delay -i "udp://@:4206"
+
+# demo_rtmp_route SRT destination
+ffplay -fflags nobuffer -flags low_delay -i "srt://127.0.0.1:4215?mode=caller"
+
+# demo_rtmp_route RTMP destination
+ffplay -fflags nobuffer -flags low_delay -i "rtmp://127.0.0.1:1935/demo/routetest"
 ```
 
 ### Environment Variables

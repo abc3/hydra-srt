@@ -12,6 +12,8 @@ export type EndpointRecord = Record<string, unknown> & {
   multicast?: EndpointValue;
   multicast_iface?: EndpointValue;
   bind_address_option?: EndpointValue;
+  path?: EndpointValue;
+  location?: EndpointValue;
   'auto-reconnect'?: EndpointValue;
   'keep-listening'?: EndpointValue;
 };

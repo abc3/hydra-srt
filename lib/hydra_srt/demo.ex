@@ -8,15 +8,18 @@ defmodule HydraSrt.Demo do
   @demo_route_name "demo_route"
   @demo_udp_route_name "demo_udp_route"
   @demo_rtp_route_name "demo_rtp_route"
+  @demo_rtmp_route_name "demo_rtmp_route"
   @demo_source_name "demo_source"
   @demo_udp_source_name "demo_udp_source"
   @demo_rtp_source_name "demo_rtp_source"
+  @demo_rtmp_source_name "demo_rtmp_source"
   @demo_srt_destination_name "demo_srt_destination"
   @demo_udp_destination_name "demo_udp_destination"
   @demo_udp_srt_destination_name "demo_udp_srt_destination"
   @demo_udp_udp_destination_name "demo_udp_udp_destination"
   @demo_rtp_srt_destination_name "demo_rtp_srt_destination"
   @demo_rtp_udp_destination_name "demo_rtp_udp_destination"
+  @demo_rtmp_srt_destination_name "demo_rtmp_srt_destination"
 
   @spec ensure_requirements!(boolean()) :: :ok
   def ensure_requirements!(false), do: :ok
@@ -52,6 +55,10 @@ defmodule HydraSrt.Demo do
     _rtp_source = ensure_demo_rtp_source!(rtp_route.id)
     _rtp_srt_dest = ensure_demo_rtp_srt_destination!(rtp_route.id)
     _rtp_udp_dest = ensure_demo_rtp_udp_destination!(rtp_route.id)
+
+    rtmp_route = ensure_demo_rtmp_route!()
+    _rtmp_source = ensure_demo_rtmp_source!(rtmp_route.id)
+    _rtmp_srt_dest = ensure_demo_rtmp_srt_destination!(rtmp_route.id)
     :ok
   end
 
@@ -96,6 +103,22 @@ defmodule HydraSrt.Demo do
         {:ok, route} =
           Api.create_route(%{
             name: @demo_rtp_route_name,
+            enabled: false
+          })
+
+        route
+    end
+  end
+
+  defp ensure_demo_rtmp_route! do
+    case find_route_by_name(@demo_rtmp_route_name) do
+      %{} = route ->
+        route
+
+      nil ->
+        {:ok, route} =
+          Api.create_route(%{
+            name: @demo_rtmp_route_name,
             enabled: false
           })
 
@@ -161,6 +184,22 @@ defmodule HydraSrt.Demo do
           schema: "RTP",
           address: "127.0.0.1",
           port: 4202,
+          enabled: true,
+          position: 0
+        })
+    end
+  end
+
+  defp ensure_demo_rtmp_source!(route_id) do
+    case find_source_by_name(route_id, @demo_rtmp_source_name) do
+      %{} = source ->
+        maybe_update_endpoint!(source, %{schema: "RTMP", path: "/live/test"})
+
+      nil ->
+        create_source!(route_id, %{
+          name: @demo_rtmp_source_name,
+          schema: "RTMP",
+          path: "/live/test",
           enabled: true,
           position: 0
         })
@@ -264,6 +303,28 @@ defmodule HydraSrt.Demo do
         port: 4206,
         enabled: true
       })
+  end
+
+  defp ensure_demo_rtmp_srt_destination!(route_id) do
+    case find_destination_by_name(route_id, @demo_rtmp_srt_destination_name) do
+      %{} = destination ->
+        maybe_update_endpoint!(destination, %{
+          schema: "SRT",
+          mode: "listener",
+          localaddress: "127.0.0.1",
+          localport: 4215
+        })
+
+      nil ->
+        create_destination!(route_id, %{
+          name: @demo_rtmp_srt_destination_name,
+          schema: "SRT",
+          mode: "listener",
+          localaddress: "127.0.0.1",
+          localport: 4215,
+          enabled: true
+        })
+    end
   end
 
   defp maybe_update_endpoint!(endpoint, expected_attrs) do
