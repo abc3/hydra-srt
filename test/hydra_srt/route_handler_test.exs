@@ -458,6 +458,37 @@ defmodule HydraSrt.RouteHandlerTest do
     assert sink["hydra_destination_schema"] == "UDP"
   end
 
+  test "sink_from_record returns error for RTMP destination without location" do
+    record = %{
+      "id" => "dest-rtmp",
+      "enabled" => true,
+      "name" => "RTMP destination",
+      "schema" => "RTMP"
+    }
+
+    assert {:error, :invalid_destination} = RouteHandler.sink_from_record(record)
+  end
+
+  test "sink_from_record includes hydra destination metadata for RTMP" do
+    record = %{
+      "id" => "dest-rtmp",
+      "enabled" => true,
+      "name" => "RTMP destination",
+      "schema" => "RTMP",
+      "location" => "rtmp://127.0.0.1:1935/live/stream"
+    }
+
+    assert {:ok, sink} = RouteHandler.sink_from_record(record)
+
+    assert sink == %{
+             "type" => "rtmpsink",
+             "location" => "rtmp://127.0.0.1:1935/live/stream",
+             "hydra_destination_id" => "dest-rtmp",
+             "hydra_destination_name" => "RTMP destination",
+             "hydra_destination_schema" => "RTMP"
+           }
+  end
+
   test "sink_from_record keeps udp bind and multicast interface properties" do
     record = %{
       "id" => "dest3",

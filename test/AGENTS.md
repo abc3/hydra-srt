@@ -122,7 +122,7 @@ Configured in `test/test_helper.exs`:
 - `HydraSrt.RouteHandler` — route lifecycle, failover
 - `HydraSrtWeb` controllers and `RealtimeChannel`
 - MCP tokens and `/mcp` auth — `test/hydra_srt/db_tokens_test.exs`, `test/hydra_srt_web/controllers/token_controller_test.exs`, `test/e2e_mcp/` (HTTP protocol E2E); see [../docs/mcp.md](../docs/mcp.md)
-- E2E SRT/UDP pipelines under `test/e2e/`
+- E2E SRT/UDP/RTP/RTMP pipelines under `test/e2e/` (RTMP client: `test/e2e/rtmp_client_pipeline_e2e_test.exs`)
 - Native pipeline under `test/native_e2e/`
 - Stats/analytics collectors
 

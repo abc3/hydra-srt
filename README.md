@@ -15,7 +15,7 @@
 
 ## Status
 
-> **Project Status**: Beta. APIs and behavior may change.
+> **Project Status**: Beta.
 
 [![GitHub License](https://img.shields.io/github/license/abc3/hydra-srt)](https://github.com/abc3/hydra-srt/blob/main/LICENSE)
 
@@ -25,8 +25,8 @@
 | --------- | ----- | ------ |
 | SRT       | ✔     | ✔      |
 | UDP       | ✔     | ✔      |
+| RTMP      | ✔     | ✔      |
 | RTP       | ✔     | —      |
-| RTMP      | ✔     | -      |
 
 ### Planned transports
 

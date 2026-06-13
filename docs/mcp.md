@@ -118,6 +118,55 @@ Replace:
 
 After changes, restart the MCP client or reconnect the server.
 
+### Google Antigravity
+
+Antigravity uses **`serverUrl`**, not `url` (Cursor-style configs will fail with a JSON-RPC decode error on `tools/list` because the Bearer token is never sent).
+
+Shared config file: `~/.gemini/config/mcp_config.json` (or `~/.gemini/antigravity/mcp_config.json` on some installs).
+
+```json
+{
+  "mcpServers": {
+    "hydrasrt": {
+      "type": "streamable-http",
+      "serverUrl": "http://localhost:4000/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_TOKEN"
+      }
+    }
+  }
+}
+```
+
+Do **not** use `"url"` or Cursor-style `"transport": "streamable_http"` — Antigravity expects `serverUrl` and optionally `"type": "streamable-http"`.
+
+If the server still shows a red error but lists tools, that is a [known Antigravity quirk](https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-antigravity.md) — try calling a tool anyway. If `tools/list` keeps failing, use the **`mcp-remote` stdio bridge** (proven workaround for HTTP MCP servers in Antigravity):
+
+```json
+{
+  "mcpServers": {
+    "hydrasrt": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://localhost:4000/mcp",
+        "--header",
+        "Authorization:${HYDRA_MCP_AUTH}",
+        "--allow-http",
+        "--transport",
+        "http-only"
+      ],
+      "env": {
+        "HYDRA_MCP_AUTH": "Bearer YOUR_MCP_TOKEN"
+      }
+    }
+  }
+}
+```
+
+After editing, open **Settings → Customizations → Installed MCP Servers → Refresh**, or restart Antigravity.
+
 ### Verification
 
 - Without an `Authorization` header — `401`.

@@ -20,6 +20,32 @@ defmodule HydraSrt.Api.EndpointDestinationTest do
     assert changeset.valid?
   end
 
+  test "invalid RTMP destination changeset when location is missing" do
+    route = route_fixture()
+
+    changeset =
+      Endpoint.destination_changeset(%Endpoint{}, %{
+        route_id: route.id,
+        schema: "RTMP"
+      })
+
+    refute changeset.valid?
+    assert {"can't be blank", _} = changeset.errors[:location]
+  end
+
+  test "valid RTMP destination changeset with location" do
+    route = route_fixture()
+
+    changeset =
+      Endpoint.destination_changeset(%Endpoint{}, %{
+        route_id: route.id,
+        schema: "RTMP",
+        location: "rtmp://127.0.0.1:1935/live/stream"
+      })
+
+    assert changeset.valid?
+  end
+
   test "invalid destination changeset when schema is missing" do
     route = route_fixture()
     changeset = Endpoint.destination_changeset(%Endpoint{}, %{route_id: route.id})

@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
@@ -209,19 +209,32 @@ fn add_sink_to_pipeline(
     if sink_config.element_type == "srtsink" {
         sink_element.set_property("sync", false);
         sink_element.set_property("async", false);
+        sink_element.set_property("wait-for-connection", true);
     }
 
-    if sink_config.element_type == "srtsink" {
-        sink_element.set_property("wait-for-connection", true);
+    if sink_config.element_type == "rtmpsink" {
+        sink_element.set_property("sync", false);
+        sink_element.set_property("async", false);
     }
 
     pipeline
         .add_many([&queue, &sink_element])
         .context("failed to add sink elements to pipeline")?;
     link_tee_branch(tee, &queue).context("failed to link tee to queue")?;
-    queue
-        .link(&sink_element)
-        .context("failed to link queue to sink")?;
+
+    if sink_config.element_type == "rtmpsink" {
+        add_rtmp_sink_remux_path(
+            pipeline,
+            &sink_config,
+            &queue,
+            &sink_element,
+            writer.clone(),
+        )?;
+    } else {
+        queue
+            .link(&sink_element)
+            .context("failed to link queue to sink")?;
+    }
 
     let metrics = destination_metrics_from_config(
         &sink_config,
@@ -238,6 +251,324 @@ fn add_sink_to_pipeline(
         .push(metrics);
 
     Ok(())
+}
+
+static RTMP_REMUX_BRANCH_SEQ: AtomicU64 = AtomicU64::new(0);
+const RTMP_REMUX_DEFERRED_LINK_MAX_ATTEMPTS: u32 = 8;
+
+fn rtmp_sink_branch_suffix(sink_config: &ElementConfig) -> String {
+    if let Some(id) = sink_config
+        .props
+        .get("hydra_destination_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+    {
+        return sanitize_gst_element_suffix(id);
+    }
+
+    format!(
+        "branch{}",
+        RTMP_REMUX_BRANCH_SEQ.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+fn sanitize_gst_element_suffix(raw: &str) -> String {
+    let sanitized: String = raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    if sanitized
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic())
+    {
+        sanitized
+    } else {
+        format!("d_{sanitized}")
+    }
+}
+
+fn rtmp_remux_element_name(suffix: &str, element: &str) -> String {
+    format!("rtmp_out_{element}_{suffix}")
+}
+
+fn add_rtmp_sink_remux_path(
+    pipeline: &gst::Pipeline,
+    sink_config: &ElementConfig,
+    queue: &gst::Element,
+    sink: &gst::Element,
+    writer: Arc<Mutex<Box<dyn StatsWriter>>>,
+) -> Result<()> {
+    let branch_suffix = rtmp_sink_branch_suffix(sink_config);
+    let parsebin = gst::ElementFactory::make("parsebin")
+        .name(&rtmp_remux_element_name(&branch_suffix, "parsebin"))
+        .build()
+        .context("failed to create parsebin for rtmp sink")?;
+    let flvmux = gst::ElementFactory::make("flvmux")
+        .name(&rtmp_remux_element_name(&branch_suffix, "flvmux"))
+        .build()
+        .context("failed to create flvmux for rtmp sink")?;
+    flvmux.set_property("streamable", true);
+
+    pipeline
+        .add_many([&parsebin, &flvmux])
+        .context("failed to add parsebin/flvmux to pipeline")?;
+
+    queue
+        .link(&parsebin)
+        .context("failed to link queue to parsebin")?;
+    flvmux.link(sink).context("failed to link flvmux to rtmpsink")?;
+
+    let pipeline_weak = pipeline.downgrade();
+    let flvmux_weak = flvmux.downgrade();
+    let writer_for_cb = writer.clone();
+
+    parsebin.connect_pad_added(move |_parsebin, src_pad| {
+        let Some(pipeline) = pipeline_weak.upgrade() else {
+            return;
+        };
+        let Some(flvmux) = flvmux_weak.upgrade() else {
+            return;
+        };
+
+        handle_rtmp_parsebin_pad_added(&pipeline, &flvmux, &src_pad, writer_for_cb.clone());
+    });
+
+    parsebin.sync_state_with_parent()
+        .context("failed to sync parsebin")?;
+    flvmux.sync_state_with_parent().context("failed to sync flvmux")?;
+
+    Ok(())
+}
+
+fn handle_rtmp_parsebin_pad_added(
+    pipeline: &gst::Pipeline,
+    flvmux: &gst::Element,
+    src_pad: &gst::Pad,
+    writer: Arc<Mutex<Box<dyn StatsWriter>>>,
+) {
+    if src_pad.is_linked() {
+        return;
+    }
+
+    match try_link_rtmp_parsebin_pad(pipeline, flvmux, src_pad) {
+        Ok(()) => {
+            emit_native_pipeline_log(
+                &writer,
+                "INFO",
+                &format!("rtmp remux linked parsebin pad {}", src_pad.name()),
+            );
+        }
+        Err(err) if err.to_string().contains("skipping non A/V parsebin pad") => {}
+        Err(err) if err.to_string().contains("no caps on parsebin pad") => {
+            schedule_rtmp_parsebin_pad_link(pipeline, flvmux, src_pad, writer);
+        }
+        Err(err) if rtmp_pad_link_error_is_retryable(&err) => {
+            emit_native_pipeline_log(
+                &writer,
+                "WARN",
+                &format!("rtmp remux link failed, will retry: {err:#}"),
+            );
+            schedule_rtmp_parsebin_pad_link(pipeline, flvmux, src_pad, writer);
+        }
+        Err(err) => {
+            emit_native_pipeline_log(
+                &writer,
+                "WARN",
+                &format!("rtmp remux link failed: {err:#}"),
+            );
+        }
+    }
+}
+
+fn schedule_rtmp_parsebin_pad_link(
+    pipeline: &gst::Pipeline,
+    flvmux: &gst::Element,
+    src_pad: &gst::Pad,
+    writer: Arc<Mutex<Box<dyn StatsWriter>>>,
+) {
+    let pipeline = pipeline.clone();
+    let flvmux = flvmux.clone();
+    let src_pad = src_pad.clone();
+    let attempts = Arc::new(AtomicU32::new(0));
+
+    let _ = src_pad.add_probe(
+        gst::PadProbeType::EVENT_DOWNSTREAM | gst::PadProbeType::BUFFER,
+        move |pad, info| {
+            if pad.is_linked() {
+                return gst::PadProbeReturn::Remove;
+            }
+
+            let ready = pad.current_caps().is_some_and(|caps| !caps.is_empty())
+                || info
+                    .event()
+                    .is_some_and(|event| event.type_() == gst::EventType::Caps)
+                || info.buffer().is_some();
+
+            if !ready {
+                return gst::PadProbeReturn::Ok;
+            }
+
+            match try_link_rtmp_parsebin_pad(&pipeline, &flvmux, pad) {
+                Ok(()) => gst::PadProbeReturn::Remove,
+                Err(err) if !rtmp_pad_link_error_is_retryable(&err) => {
+                    emit_native_pipeline_log(
+                        &writer,
+                        "WARN",
+                        &format!(
+                            "rtmp remux deferred link gave up on pad {}: {err:#}",
+                            pad.name()
+                        ),
+                    );
+                    gst::PadProbeReturn::Remove
+                }
+                Err(err) => {
+                    let attempt = attempts.fetch_add(1, Ordering::Relaxed) + 1;
+
+                    if rtmp_deferred_link_attempt_exhausted(attempt) {
+                        emit_native_pipeline_log(
+                            &writer,
+                            "WARN",
+                            &format!(
+                                "rtmp remux deferred link gave up on pad {} after {attempt} attempts: {err:#}",
+                                pad.name()
+                            ),
+                        );
+                        return gst::PadProbeReturn::Remove;
+                    }
+
+                    emit_native_pipeline_log(
+                        &writer,
+                        "WARN",
+                        &format!(
+                            "rtmp remux deferred link failed on pad {} (attempt {attempt}/{}), will retry: {err:#}",
+                            pad.name(),
+                            RTMP_REMUX_DEFERRED_LINK_MAX_ATTEMPTS
+                        ),
+                    );
+                    gst::PadProbeReturn::Ok
+                }
+            }
+        },
+    );
+}
+
+fn rtmp_deferred_link_attempt_exhausted(attempt: u32) -> bool {
+    attempt >= RTMP_REMUX_DEFERRED_LINK_MAX_ATTEMPTS
+}
+
+fn rtmp_pad_link_error_is_retryable(err: &anyhow::Error) -> bool {
+    let message = err.to_string();
+    !message.contains("skipping non A/V parsebin pad")
+        && !message.contains("failed to request pad")
+        && !message.contains("NotNegotiated")
+        && !message.contains("not-negotiated")
+}
+
+fn try_link_rtmp_parsebin_pad(
+    pipeline: &gst::Pipeline,
+    flvmux: &gst::Element,
+    src_pad: &gst::Pad,
+) -> Result<()> {
+    if src_pad.is_linked() {
+        return Ok(());
+    }
+
+    let caps = caps_for_pad(src_pad).ok_or_else(|| anyhow!("no caps on parsebin pad"))?;
+    let structure = caps
+        .structure(0)
+        .ok_or_else(|| anyhow!("parsebin pad has no caps structure"))?;
+    let media_name = structure.name();
+
+    if !media_name.starts_with("video/") && !media_name.starts_with("audio/") {
+        return Err(anyhow!("skipping non A/V parsebin pad caps: {media_name}"));
+    }
+
+    let is_video = media_name.starts_with("video/");
+    let flvmux_pad_name = if is_video { "video" } else { "audio" };
+    let flvmux_sink_pad = flvmux
+        .request_pad_simple(flvmux_pad_name)
+        .ok_or_else(|| anyhow!("failed to request pad {flvmux_pad_name} from flvmux"))?;
+
+    if let Some(parser) = parser_for_caps(Some(&caps)) {
+        if let Err(err) = pipeline.add(&parser) {
+            flvmux.release_request_pad(&flvmux_sink_pad);
+            return Err(anyhow!("failed to add parser to pipeline: {err:?}"));
+        }
+        configure_parser(&parser);
+
+        let parser_sink_pad = parser
+            .static_pad("sink")
+            .ok_or_else(|| anyhow!("parser has no sink pad"))?;
+        let parser_src_pad = parser
+            .static_pad("src")
+            .ok_or_else(|| anyhow!("parser has no src pad"))?;
+
+        if let Err(err) = src_pad.link(&parser_sink_pad) {
+            flvmux.release_request_pad(&flvmux_sink_pad);
+            let _ = pipeline.remove(&parser);
+            return Err(anyhow!("failed to link parsebin to parser: {err:?}"));
+        }
+
+        if let Err(err) = parser_src_pad.link(&flvmux_sink_pad) {
+            let _ = src_pad.unlink(&parser_sink_pad);
+            flvmux.release_request_pad(&flvmux_sink_pad);
+            let _ = pipeline.remove(&parser);
+            return Err(anyhow!("failed to link parser to flvmux: {err:?}"));
+        }
+
+        if let Err(err) = parser.sync_state_with_parent() {
+            let _ = parser_src_pad.unlink(&flvmux_sink_pad);
+            let _ = src_pad.unlink(&parser_sink_pad);
+            flvmux.release_request_pad(&flvmux_sink_pad);
+            let _ = pipeline.remove(&parser);
+            return Err(anyhow!("failed to sync parser state: {err:?}"));
+        }
+    } else if let Err(err) = src_pad.link(&flvmux_sink_pad) {
+        flvmux.release_request_pad(&flvmux_sink_pad);
+        return Err(anyhow!("failed to link parsebin to flvmux: {err:?}"));
+    }
+
+    Ok(())
+}
+
+fn caps_for_pad(pad: &gst::Pad) -> Option<gst::Caps> {
+    if let Some(caps) = pad.current_caps() {
+        if !caps.is_empty() {
+            return Some(caps);
+        }
+    }
+
+    let query_caps = pad.query_caps(None);
+    if !query_caps.is_empty() {
+        return Some(query_caps);
+    }
+
+    None
+}
+
+fn emit_native_pipeline_log(writer: &Arc<Mutex<Box<dyn StatsWriter>>>, level: &str, message: &str) {
+    let payload = json!({
+        "event": "pipeline_log",
+        "level": level,
+        "category": "rtmp_remux",
+        "element": "parsebin",
+        "file": "native/src/pipeline.rs",
+        "function": "add_rtmp_sink_remux_path",
+        "message": message,
+    })
+    .to_string();
+
+    if let Ok(mut guard) = writer.lock() {
+        let _ = guard.send_message(&payload);
+    }
 }
 
 fn destination_metrics_from_config(
@@ -435,6 +766,7 @@ fn parser_for_caps(caps: Option<&gst::Caps>) -> Option<gst::Element> {
             Some(2) | Some(4) => "aacparse",
             _ => return None,
         },
+        "audio/x-adts" => "aacparse",
         "audio/x-ac3" => "ac3parse",
         "audio/x-dts" => "dtsparse",
         _ => return None,
@@ -475,8 +807,8 @@ fn configure_branch_queue(queue: &gst::Element, sink_type: &str) {
     queue.set_property("max-size-buffers", 200_u32);
     queue.set_property("max-size-time", 0_u64);
 
-    if sink_type == "srtsink" {
-        // Keep one blocked SRT destination from applying backpressure to the whole tee fan-out.
+    if sink_type == "srtsink" || sink_type == "rtmpsink" {
+        // Keep one blocked destination from applying backpressure to the whole tee fan-out.
         queue.set_property_from_str("leaky", "downstream");
     }
 }
@@ -652,6 +984,114 @@ mod tests {
 
         assert!(runtime.pipeline.by_name("rtmp_parsebin").is_some());
         assert!(runtime.pipeline.by_name("rtmp_mpegtsmux").is_some());
+    }
+
+    #[test]
+    fn builds_pipeline_with_multiple_rtmp_sink_remux_paths() {
+        init_gst();
+
+        let config = PipelineConfig {
+            source: ElementConfig {
+                element_type: "fakesrc".to_string(),
+                props: BTreeMap::new(),
+            },
+            sinks: vec![
+                rtmpsink_fixture(
+                    "dest-a",
+                    "rtmp://127.0.0.1:1935/live/a",
+                    "RTMP Dest A",
+                ),
+                rtmpsink_fixture(
+                    "336d5e01-855f-4cd4-a4fd-1ff912ece3ee",
+                    "rtmp://127.0.0.1:1935/live/b",
+                    "RTMP Dest B",
+                ),
+            ],
+        };
+
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(StdoutWriter::new())));
+
+        let runtime = build_pipeline(config, writer).expect("pipeline should build");
+        let metrics = runtime.dest_metrics.lock().expect("metrics lock");
+
+        assert_eq!(metrics.len(), 2);
+        assert!(runtime
+            .pipeline
+            .by_name("rtmp_out_parsebin_dest_a")
+            .is_some());
+        assert!(runtime
+            .pipeline
+            .by_name("rtmp_out_flvmux_dest_a")
+            .is_some());
+        assert!(runtime
+            .pipeline
+            .by_name("rtmp_out_parsebin_d_336d5e01_855f_4cd4_a4fd_1ff912ece3ee")
+            .is_some());
+        assert!(runtime
+            .pipeline
+            .by_name("rtmp_out_flvmux_d_336d5e01_855f_4cd4_a4fd_1ff912ece3ee")
+            .is_some());
+    }
+
+    #[test]
+    fn sanitize_gst_element_suffix_ensures_valid_gstreamer_names() {
+        assert_eq!(sanitize_gst_element_suffix("dest-a"), "dest_a");
+        assert_eq!(
+            sanitize_gst_element_suffix("336d5e01-855f-4cd4-a4fd-1ff912ece3ee"),
+            "d_336d5e01_855f_4cd4_a4fd_1ff912ece3ee"
+        );
+    }
+
+    #[test]
+    fn rtmp_pad_link_error_retryability_classifies_permanent_failures() {
+        assert!(!rtmp_pad_link_error_is_retryable(&anyhow!(
+            "skipping non A/V parsebin pad caps: application/x-subtitle"
+        )));
+        assert!(!rtmp_pad_link_error_is_retryable(&anyhow!(
+            "failed to request pad video from flvmux"
+        )));
+        assert!(!rtmp_pad_link_error_is_retryable(&anyhow!(
+            "failed to link parsebin to parser: NotNegotiated"
+        )));
+        assert!(rtmp_pad_link_error_is_retryable(&anyhow!(
+            "failed to link parsebin to parser: WrongState"
+        )));
+        assert!(rtmp_pad_link_error_is_retryable(&anyhow!("no caps on parsebin pad")));
+    }
+
+    #[test]
+    fn rtmp_deferred_link_attempt_exhaustion_caps_retries() {
+        assert!(!rtmp_deferred_link_attempt_exhausted(
+            RTMP_REMUX_DEFERRED_LINK_MAX_ATTEMPTS - 1
+        ));
+        assert!(rtmp_deferred_link_attempt_exhausted(
+            RTMP_REMUX_DEFERRED_LINK_MAX_ATTEMPTS
+        ));
+    }
+
+    fn rtmpsink_fixture(id: &str, location: &str, name: &str) -> ElementConfig {
+        ElementConfig {
+            element_type: "rtmpsink".to_string(),
+            props: BTreeMap::from([
+                (
+                    "location".to_string(),
+                    Value::String(location.to_string()),
+                ),
+                (
+                    "hydra_destination_id".to_string(),
+                    Value::String(id.to_string()),
+                ),
+                (
+                    "hydra_destination_name".to_string(),
+                    Value::String(name.to_string()),
+                ),
+                (
+                    "hydra_destination_schema".to_string(),
+                    Value::String("RTMP".to_string()),
+                ),
+            ]),
+        }
     }
 
     #[test]

@@ -21,10 +21,20 @@ defmodule HydraSrtWeb.Plugs.McpAuth do
   end
 
   def unauthorized(conn, message \\ "Unauthorized") do
+    body =
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => nil,
+        "error" => %{
+          "code" => -32_001,
+          "message" => message
+        }
+      })
+
     conn
     |> put_resp_header("www-authenticate", "Bearer")
-    |> put_status(401)
-    |> Phoenix.Controller.json(%{error: message})
+    |> put_resp_content_type("application/json")
+    |> send_resp(401, body)
     |> halt()
   end
 end

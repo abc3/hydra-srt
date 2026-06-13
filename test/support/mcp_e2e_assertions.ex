@@ -20,7 +20,10 @@ defmodule HydraSrt.TestSupport.McpE2EAssertions do
       E2EHelpers.http_raw(:post, url, request_headers, "{}")
 
     assert status == 401
-    assert Jason.decode!(body)["error"]
+
+    response = Jason.decode!(body)
+    assert response["jsonrpc"] == "2.0"
+    assert response["error"]["message"]
     assert header_value(resp_headers, "www-authenticate") == "Bearer"
     :ok
   end
