@@ -10,6 +10,7 @@ defmodule HydraSrt.SignalGenerator do
   @default_rtmp_path "/live/test"
   @stale_signature "HYDRA_SIGNAL_GENERATOR"
   @supported_transports ["srt", "udp", "rtp", "rtmp"]
+  @restart_delay_ms 2_000
 
   @ffmpeg_common_args [
     "-hide_banner",
@@ -83,7 +84,9 @@ defmodule HydraSrt.SignalGenerator do
        running_transport: nil,
        ffmpeg_port: nil,
        ffmpeg_pid: nil,
-       ffmpeg_path: System.find_executable("ffmpeg")
+       ffmpeg_path: System.find_executable("ffmpeg"),
+       auto_restart: false,
+       restart_timer_ref: nil
      }}
   end
 
@@ -137,30 +140,11 @@ defmodule HydraSrt.SignalGenerator do
           {:reply, {:error, :ffmpeg_not_found}, state}
 
         true ->
-          cfg = Map.fetch!(state.configs, transport)
-          output = output_url(transport, cfg.host, cfg.port, Map.get(cfg, :path))
-
-          ffmpeg_port =
-            Port.open({:spawn_executable, state.ffmpeg_path}, [
-              :binary,
-              :use_stdio,
-              :exit_status,
-              :stderr_to_stdout,
-              args: @ffmpeg_common_args ++ format_args(transport) ++ [output]
-            ])
-
-          ffmpeg_pid =
-            case Port.info(ffmpeg_port, :os_pid) do
-              {:os_pid, pid} when is_integer(pid) and pid > 0 -> pid
-              _ -> nil
-            end
-
-          new_state = %{
+          new_state =
             state
-            | ffmpeg_port: ffmpeg_port,
-              ffmpeg_pid: ffmpeg_pid,
-              running_transport: transport
-          }
+            |> cancel_pending_restart()
+            |> launch_ffmpeg(transport)
+            |> Map.put(:auto_restart, true)
 
           {:reply, {:ok, status_map(new_state, transport)}, new_state}
       end
@@ -172,6 +156,7 @@ defmodule HydraSrt.SignalGenerator do
 
   def handle_call({:stop_generation, transport}, _from, state) do
     transport = normalize_transport_or_default(transport)
+    state = disable_auto_restart(state)
 
     if is_port(state.ffmpeg_port) do
       safe_close_port(state.ffmpeg_port)
@@ -189,21 +174,96 @@ defmodule HydraSrt.SignalGenerator do
   end
 
   def handle_info({port, {:exit_status, _status}}, %{ffmpeg_port: port} = state) do
-    {:noreply, %{state | ffmpeg_port: nil, ffmpeg_pid: nil, running_transport: nil}}
+    {:noreply, schedule_restart_after_exit(state)}
   end
 
   def handle_info({:EXIT, port, _reason}, %{ffmpeg_port: port} = state) do
-    {:noreply, %{state | ffmpeg_port: nil, ffmpeg_pid: nil, running_transport: nil}}
+    {:noreply, schedule_restart_after_exit(state)}
+  end
+
+  def handle_info({:restart_generation, transport}, state) do
+    state = %{state | restart_timer_ref: nil}
+
+    cond do
+      not state.auto_restart ->
+        {:noreply, state}
+
+      is_port(state.ffmpeg_port) ->
+        {:noreply, state}
+
+      is_nil(state.ffmpeg_path) ->
+        {:noreply, %{state | auto_restart: false}}
+
+      true ->
+        {:noreply, launch_ffmpeg(state, transport)}
+    end
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do
+    _ = cancel_pending_restart(state)
     safe_close_port(state.ffmpeg_port)
     safe_kill_pid(state.ffmpeg_pid)
     :ok
   end
+
+  defp launch_ffmpeg(state, transport) do
+    cfg = Map.fetch!(state.configs, transport)
+    output = output_url(transport, cfg.host, cfg.port, Map.get(cfg, :path))
+
+    ffmpeg_port =
+      Port.open({:spawn_executable, state.ffmpeg_path}, [
+        :binary,
+        :use_stdio,
+        :exit_status,
+        :stderr_to_stdout,
+        args: @ffmpeg_common_args ++ format_args(transport) ++ [output]
+      ])
+
+    ffmpeg_pid =
+      case Port.info(ffmpeg_port, :os_pid) do
+        {:os_pid, pid} when is_integer(pid) and pid > 0 -> pid
+        _ -> nil
+      end
+
+    %{
+      state
+      | ffmpeg_port: ffmpeg_port,
+        ffmpeg_pid: ffmpeg_pid,
+        running_transport: transport
+    }
+  end
+
+  defp schedule_restart_after_exit(state) do
+    transport = state.running_transport
+
+    state =
+      state
+      |> Map.merge(%{ffmpeg_port: nil, ffmpeg_pid: nil, running_transport: nil})
+      |> cancel_pending_restart()
+
+    if state.auto_restart and is_binary(transport) do
+      ref = Process.send_after(self(), {:restart_generation, transport}, @restart_delay_ms)
+      %{state | restart_timer_ref: ref}
+    else
+      state
+    end
+  end
+
+  defp disable_auto_restart(state) do
+    state
+    |> cancel_pending_restart()
+    |> Map.put(:auto_restart, false)
+  end
+
+  defp cancel_pending_restart(%{restart_timer_ref: ref} = state) when is_reference(ref) do
+    Process.cancel_timer(ref)
+    %{state | restart_timer_ref: nil}
+  end
+
+  defp cancel_pending_restart(state), do: state
 
   defp status_map(state, transport) do
     cfg = Map.fetch!(state.configs, transport)

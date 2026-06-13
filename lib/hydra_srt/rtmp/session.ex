@@ -188,6 +188,11 @@ defmodule HydraSrt.Rtmp.Session do
     {session, []}
   end
 
+  @spec rtmp_command_result(number(), term()) :: Message.t()
+  def rtmp_command_result(transaction_id, data) do
+    Message.command(Response.ok(trunc(transaction_id), data: data))
+  end
+
   @spec handle_command_message(t(), Message.t()) :: {t(), [Message.t()]}
   def handle_command_message(%__MODULE__{} = session, message) do
     case message.payload do
@@ -207,11 +212,19 @@ defmodule HydraSrt.Rtmp.Session do
       %Play{} ->
         handle_play_message(session, message.payload, message.stream_id)
 
+      ["getStreamLength", transaction_id | _rest]
+      when is_number(transaction_id) ->
+        {session, [rtmp_command_result(transaction_id, 0)]}
+
+      ["_checkbw", transaction_id | _rest]
+      when is_number(transaction_id) ->
+        {session, [rtmp_command_result(transaction_id, nil)]}
+
       [command_name, transaction_id, nil | _rest]
       when is_binary(command_name) and is_number(transaction_id) ->
         Logger.debug("RtmpServer ignore command=#{command_name} peer=#{inspect(session.peer)}")
 
-        {session, [Message.command(Response.ok(trunc(transaction_id)))]}
+        {session, [rtmp_command_result(transaction_id, nil)]}
 
       other ->
         Logger.warning(

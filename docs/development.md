@@ -93,7 +93,7 @@ DEMO_DATA=true make dev
 When demo mode is enabled:
 
 - `ffmpeg` must be available in `PATH` (startup fails if missing)
-- three routes are created automatically (idempotent):
+- five routes are created automatically (idempotent):
   - `demo_route` (SRT source):
     - source: `srt://127.0.0.1:4200?mode=caller`
     - destinations:
@@ -114,6 +114,11 @@ When demo mode is enabled:
     - destinations:
       - `srt://127.0.0.1:4215?mode=listener`
       - `rtmp://127.0.0.1:1935/demo/routetest`
+  - `demo_rtmp-client_route` (SRT source → UDP + RTMP client):
+    - source: `srt://127.0.0.1:4200?mode=caller`
+    - destinations:
+      - `udp://127.0.0.1:4216` (for local playback; port 4216 avoids bind conflict with `demo_route` UDP on 4212)
+      - `rtmp://127.0.0.1:1935/live/stream`
 - routes are created with `enabled: false` (not auto-started)
 
 After startup:
@@ -125,6 +130,7 @@ After startup:
    - UDP tab → `demo_udp_route`
    - RTP tab → `demo_rtp_route`
    - RTMP tab → `demo_rtmp_route`
+   - SRT → RTMP client → `demo_rtmp-client_route` (start SRT signal generation, then this route)
 
 Verify playback:
 
@@ -146,6 +152,12 @@ ffplay -fflags nobuffer -flags low_delay -i "srt://127.0.0.1:4215?mode=caller"
 
 # demo_rtmp_route RTMP destination
 ffplay -fflags nobuffer -flags low_delay -i "rtmp://127.0.0.1:1935/demo/routetest"
+
+# demo_rtmp-client_route UDP destination
+ffplay -fflags nobuffer -flags low_delay -i "udp://@:4216"
+
+# demo_rtmp-client_route RTMP destination (Hydra RTMP proxy on 127.0.0.1:1935)
+ffplay -fflags nobuffer -flags low_delay -i "rtmp://127.0.0.1:1935/live/stream"
 ```
 
 ### Environment Variables

@@ -84,7 +84,8 @@ defmodule HydraSrtWeb.TokenControllerTest do
     test "rejects requests without bearer token" do
       conn = build_conn() |> post(~p"/mcp")
       response = json_response(conn, 401)
-      assert response["error"] == "Authorization header missing"
+      assert response["jsonrpc"] == "2.0"
+      assert response["error"]["message"] == "Authorization header missing"
       assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
     end
 
@@ -95,7 +96,8 @@ defmodule HydraSrtWeb.TokenControllerTest do
         |> post(~p"/mcp")
 
       response = json_response(conn, 401)
-      assert response["error"] == "Unauthorized"
+      assert response["jsonrpc"] == "2.0"
+      assert response["error"]["message"] == "Unauthorized"
       assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
     end
 
@@ -105,7 +107,9 @@ defmodule HydraSrtWeb.TokenControllerTest do
         |> put_req_header("authorization", "Basic dXNlcjpwYXNz")
         |> post(~p"/mcp")
 
-      assert json_response(conn, 401)["error"] == "Authorization header missing"
+      response = json_response(conn, 401)
+      assert response["jsonrpc"] == "2.0"
+      assert response["error"]["message"] == "Authorization header missing"
     end
 
     test "rejects bearer header without token value" do
@@ -114,7 +118,9 @@ defmodule HydraSrtWeb.TokenControllerTest do
         |> put_req_header("authorization", "Bearer ")
         |> post(~p"/mcp")
 
-      assert json_response(conn, 401)["error"] == "Unauthorized"
+      response = json_response(conn, 401)
+      assert response["jsonrpc"] == "2.0"
+      assert response["error"]["message"] == "Unauthorized"
     end
 
     test "rejects login session token on mcp endpoint" do
@@ -126,7 +132,9 @@ defmodule HydraSrtWeb.TokenControllerTest do
         |> put_req_header("authorization", "Bearer " <> session_token)
         |> post(~p"/mcp")
 
-      assert json_response(conn, 401)["error"] == "Unauthorized"
+      response = json_response(conn, 401)
+      assert response["jsonrpc"] == "2.0"
+      assert response["error"]["message"] == "Unauthorized"
     end
 
     test "accepts requests with valid bearer token and reaches MCP transport" do

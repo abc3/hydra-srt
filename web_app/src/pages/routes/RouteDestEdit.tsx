@@ -322,6 +322,7 @@ const RouteDestEdit = ({ initialValues, onChange }: RouteDestEditProps) => {
                                         <Radio.Group buttonStyle="solid">
                                             <Radio.Button value="SRT">SRT</Radio.Button>
                                             <Radio.Button value="UDP">UDP</Radio.Button>
+                                            <Radio.Button value="RTMP">RTMP</Radio.Button>
                                         </Radio.Group>
                                     </Form.Item>
 
@@ -568,6 +569,25 @@ const RouteDestEdit = ({ initialValues, onChange }: RouteDestEditProps) => {
                                                             style={{ width: '150px' }} 
                                                             placeholder="Enter port number" 
                                                         />
+                                                    </Form.Item>
+                                                </>
+                                            )
+                                        }
+                                    </Form.Item>
+
+                                    {/* RTMP specific options */}
+                                    <Form.Item noStyle dependencies={['schema']}>
+                                        {({ getFieldValue }) =>
+                                            getFieldValue('schema') === 'RTMP' && (
+                                                <>
+                                                    <Form.Item
+                                                        label="Location"
+                                                        required
+                                                        name="location"
+                                                        extra="The RTMP destination URL (e.g. rtmp://live.twitch.tv/app/stream_key)"
+                                                        rules={[{ required: true, message: 'Please enter an RTMP destination URL' }]}
+                                                    >
+                                                        <Input placeholder="rtmp://host/app/key" />
                                                     </Form.Item>
                                                 </>
                                             )

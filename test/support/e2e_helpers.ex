@@ -73,6 +73,82 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     :ok
   end
 
+  def ensure_ffprobe_executable! do
+    case System.find_executable("ffprobe") do
+      nil ->
+        raise ExUnit.AssertionError, message: "E2E RTMP tests require ffprobe in PATH"
+
+      _path ->
+        :ok
+    end
+  end
+
+  def rtmp_port do
+    Application.fetch_env!(:hydra_srt, :rtmp_port)
+  end
+
+  def rtmp_play_url(path) when is_binary(path) do
+    normalized_path =
+      if String.starts_with?(path, "/"), do: path, else: "/#{path}"
+
+    "rtmp://127.0.0.1:#{rtmp_port()}#{normalized_path}"
+  end
+
+  def ffprobe_streams(url, timeout_ms \\ 3_500) when is_binary(url) do
+    effective_timeout_ms = e2e_timeout_ms(timeout_ms)
+
+    with {:ok, raw} <-
+           HydraSrt.SourceProbe.run_ffprobe(:ffprobe, url, effective_timeout_ms),
+         {:ok, decoded} <- HydraSrt.SourceProbe.decode_output(raw) do
+      {:ok, Map.get(decoded, "streams", [])}
+    end
+  end
+
+  def rtmp_streams_include_av?(streams) when is_list(streams) do
+    has_video =
+      Enum.any?(streams, fn stream ->
+        stream["codec_type"] == "video" and stream["codec_name"] in ["h264", "hevc"]
+      end)
+
+    has_audio =
+      Enum.any?(streams, fn stream ->
+        stream["codec_type"] == "audio" and stream["codec_name"] == "aac"
+      end)
+
+    has_video and has_audio
+  end
+
+  def await_rtmp_av_streams(url, opts \\ []) when is_binary(url) do
+    timeout_ms = Keyword.get(opts, :timeout_ms, 25_000)
+    interval_ms = Keyword.get(opts, :interval_ms, 750)
+    probe_timeout_ms = Keyword.get(opts, :probe_timeout_ms, 3_500)
+
+    wait_until(
+      fn ->
+        case ffprobe_streams(url, probe_timeout_ms) do
+          {:ok, streams} -> rtmp_streams_include_av?(streams)
+          _ -> false
+        end
+      end,
+      timeout_ms,
+      interval_ms
+    )
+
+    case ffprobe_streams(url, probe_timeout_ms) do
+      {:ok, streams} ->
+        if rtmp_streams_include_av?(streams) do
+          {:ok, %{streams: streams}}
+        else
+          {:error, {:missing_av_streams, streams}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  rescue
+    RuntimeError -> {:error, :timeout}
+  end
+
   def ffmpeg_supports_srt_encryption? do
     # Some ffmpeg/libsrt builds accept the passphrase options syntactically but
     # fail only when an encrypted connection is actually attempted.

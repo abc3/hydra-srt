@@ -99,8 +99,10 @@ defmodule HydraSrt.Api.Endpoint do
     |> put_change(:type, "destination")
     |> put_default_enabled(false)
     |> put_default_ip_access_field(:multicast, false)
+    |> normalize_rtmp_location_change()
     |> validate_required([:route_id, :schema, :type])
-    |> validate_inclusion(:schema, ["SRT", "UDP"])
+    |> validate_inclusion(:schema, ["SRT", "UDP", "RTMP"])
+    |> validate_rtmp_required_fields()
     |> put_bind_target_fields()
     |> unique_constraint([:route_id, :position, :type], name: @source_unique_constraint)
     |> unique_constraint(:bind_port,
@@ -191,6 +193,7 @@ defmodule HydraSrt.Api.Endpoint do
   def validate_rtmp_required_fields(changeset) do
     case {get_field(changeset, :schema), get_field(changeset, :type)} do
       {"RTMP", "source"} -> validate_required(changeset, [:path])
+      {"RTMP", "destination"} -> validate_required(changeset, [:location])
       _ -> changeset
     end
   end

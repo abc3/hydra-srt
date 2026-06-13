@@ -306,7 +306,7 @@ defmodule HydraSrt.RouteHandler do
           [env: [{~c"GST_DEBUG", String.to_charlist(debug)}, {~c"GST_DEBUG_NO_COLOR", ~c"1"}]]
 
         _ ->
-          [env: [{~c"GST_DEBUG_NO_COLOR", ~c"1"}]]
+          [env: [{~c"GST_DEBUG", ~c"0"}, {~c"GST_DEBUG_NO_COLOR", ~c"1"}]]
       end
 
     Logger.info(
@@ -469,20 +469,24 @@ defmodule HydraSrt.RouteHandler do
   end
 
   defp process_port_line(line, data) do
-    Logger.debug("RouteHandler: pipeline: #{inspect(line)}")
+    {:message_queue_len, len} = Process.info(self(), :message_queue_len)
 
-    case HydraSrt.Stats.PipelineLogParser.parse(line) do
-      {:ok, log} ->
-        log = Map.put(log, :route_id, data.id)
+    if len < 500 do
+      Logger.debug("RouteHandler: pipeline: #{inspect(line)}")
 
-        Phoenix.PubSub.broadcast(
-          HydraSrt.PubSub,
-          "pipeline_logs",
-          {:pipeline_log, log}
-        )
+      case HydraSrt.Stats.PipelineLogParser.parse(line) do
+        {:ok, log} ->
+          log = Map.put(log, :route_id, data.id)
 
-      :error ->
-        :ok = HydraSrt.PipelineLogTelemetry.emit_unparsed(data.id)
+          Phoenix.PubSub.broadcast(
+            HydraSrt.PubSub,
+            "pipeline_logs",
+            {:pipeline_log, log}
+          )
+
+        :error ->
+          :ok = HydraSrt.PipelineLogTelemetry.emit_unparsed(data.id)
+      end
     end
 
     data
@@ -1179,6 +1183,33 @@ defmodule HydraSrt.RouteHandler do
          "hydra_destination_schema" => "UDP"
        }
        |> drop_nil_values()}
+    end
+  end
+
+  def sink_from_record(%{"schema" => "RTMP"} = destination) do
+    opts = endpoint_options_from_record(destination)
+
+    with false <- map_size(opts) == 0,
+         {:ok, resolved_opts} <- resolve_interface_options(opts) do
+      id = Map.get(destination, "id")
+      name = Map.get(destination, "name", id)
+      location = Map.get(resolved_opts, "location")
+
+      if is_nil(location) or location == "" do
+        {:error, :invalid_destination}
+      else
+        {:ok,
+         %{
+           "type" => "rtmpsink",
+           "location" => location,
+           "hydra_destination_id" => id,
+           "hydra_destination_name" => name,
+           "hydra_destination_schema" => "RTMP"
+         }}
+      end
+    else
+      true -> {:error, :invalid_destination}
+      {:error, _} = error -> error
     end
   end
 
