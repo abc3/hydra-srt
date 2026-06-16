@@ -78,6 +78,100 @@ defmodule HydraSrt.MonitoringTest do
     end
   end
 
+  test "OsMon storage_from_disk_data normalizes disk entries" do
+    storage =
+      OsMon.storage_from_disk_data([
+        {~c"/", 100, 25},
+        {"/data", 200, 50.5},
+        {"none", 0, 0}
+      ])
+
+    assert storage["root"] == %{
+             id: "root",
+             mountpoint: "/",
+             total_bytes: 102_400,
+             used_bytes: 25_600,
+             free_bytes: 76_800,
+             used_percent: 25.0
+           }
+
+    data_id = OsMon.storage_id("/data")
+
+    assert storage[data_id] == %{
+             id: data_id,
+             mountpoint: "/data",
+             total_bytes: 204_800,
+             used_bytes: 103_424,
+             free_bytes: 101_376,
+             used_percent: 50.5
+           }
+
+    refute Map.has_key?(storage, OsMon.storage_id("none"))
+  end
+
+  test "OsMon merge_darwin_storage keeps disksup mounts missing from df" do
+    df_storage =
+      OsMon.storage_from_df_output("""
+      Filesystem         1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+      /dev/disk3s3s1       971350180  12270908 367550900     4%  458725 3675509000    0%   /
+      """)
+
+    external_id = OsMon.storage_id("/Volumes/External")
+
+    disksup_storage = %{
+      external_id => %{
+        id: external_id,
+        mountpoint: "/Volumes/External",
+        total_bytes: 500 * 1024 * 1024,
+        used_bytes: 100 * 1024 * 1024,
+        free_bytes: 400 * 1024 * 1024,
+        used_percent: 20.0
+      }
+    }
+
+    merged = OsMon.merge_darwin_storage(disksup_storage, df_storage)
+
+    assert merged["root"].free_bytes == 367_550_900 * 1024
+    assert merged[external_id].mountpoint == "/Volumes/External"
+    assert merged[external_id].free_bytes == 400 * 1024 * 1024
+  end
+
+  test "OsMon storage_from_df_output uses root shared APFS footprint" do
+    storage =
+      OsMon.storage_from_df_output("""
+      Filesystem         1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+      /dev/disk3s3s1       971350180  12270908 367550900     4%  458725 3675509000    0%   /
+      /dev/disk3s7         971350180  39879140 367550900    10% 2804760 3675509000    0%   /nix
+      devfs                      211       211         0   100%     730          0  100%   /dev
+      map auto_home                0         0         0   100%       0          0     -   /System/Volumes/Data/home
+      """)
+
+    nix_id = OsMon.storage_id("/nix")
+
+    assert storage["root"].used_bytes == (971_350_180 - 367_550_900) * 1024
+    assert storage["root"].free_bytes == 367_550_900 * 1024
+    assert storage[nix_id].used_bytes == 39_879_140 * 1024
+    assert storage[nix_id].free_bytes == 367_550_900 * 1024
+    refute Map.has_key?(storage, OsMon.storage_id("/dev"))
+    refute Map.has_key?(storage, OsMon.storage_id("/System/Volumes/Data/home"))
+  end
+
+  test "OsMon database_entry returns database footprint including wal and shm" do
+    path = Path.join(System.tmp_dir!(), "hydra_db_size_#{System.unique_integer([:positive])}.db")
+    File.write!(path, String.duplicate("x", 123))
+    File.write!(path <> "-wal", String.duplicate("w", 10))
+    File.write!(path <> "-shm", String.duplicate("s", 20))
+
+    assert OsMon.database_entry({"metadata_database", "Metadata Database", path}) == %{
+             id: "metadata_database",
+             name: "Metadata Database",
+             path: Path.expand(path),
+             size_bytes: 153
+           }
+
+    Enum.each([path, path <> "-wal", path <> "-shm"], &File.rm/1)
+  end
+
   test "OsMon parse_darwin_swap_usage parses unit values" do
     output = "vm.swapusage: total = 6.00G  used = 4.96G  free = 1.04G  (encrypted)"
     usage = OsMon.parse_darwin_swap_usage(output)
@@ -112,6 +206,10 @@ defmodule HydraSrt.MonitoringTest do
     assert is_float(stats.cpu_la.avg5)
     assert is_float(stats.cpu_la.avg15)
     assert is_float(stats.swap) or is_nil(stats.swap)
+    assert is_map(stats.storage)
+    assert is_map(stats.databases)
+    assert Map.has_key?(stats.databases, "metadata_database")
+    assert Map.has_key?(stats.databases, "metrics_logs_database")
   end
 
   test "NodeStats.all_nodes returns current node stats" do
@@ -125,6 +223,8 @@ defmodule HydraSrt.MonitoringTest do
     assert Map.has_key?(self_stat, :cpu)
     assert Map.has_key?(self_stat, :ram)
     assert Map.has_key?(self_stat, :swap)
+    assert Map.has_key?(self_stat, :storage)
+    assert Map.has_key?(self_stat, :databases)
     assert Map.has_key?(self_stat, :la)
   end
 

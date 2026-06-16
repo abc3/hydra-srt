@@ -13,6 +13,8 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
   @event_cpu_la OsMonTelemetry.cpu_la_event()
   @event_memory OsMonTelemetry.memory_event()
   @event_network_interface OsMonTelemetry.network_interface_event()
+  @event_storage OsMonTelemetry.storage_event()
+  @event_database OsMonTelemetry.database_event()
 
   @default_flush_interval_ms 5_000
   @default_max_batch_size 1_000
@@ -128,7 +130,9 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
       {"#{prefix}-cpu", OsMonTelemetry.cpu_util_event()},
       {"#{prefix}-la", OsMonTelemetry.cpu_la_event()},
       {"#{prefix}-swap", OsMonTelemetry.swap_usage_event()},
-      {"#{prefix}-netif", OsMonTelemetry.network_interface_event()}
+      {"#{prefix}-netif", OsMonTelemetry.network_interface_event()},
+      {"#{prefix}-storage", OsMonTelemetry.storage_event()},
+      {"#{prefix}-database", OsMonTelemetry.database_event()}
     ]
     |> Enum.map(fn {handler_id, event_name} ->
       maybe_attach(handler_id, event_name, target_pid)
@@ -198,6 +202,14 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
         interface = Map.get(measurements, :interface)
         network_rows(measurements, interface)
 
+      event_name == @event_storage ->
+        mountpoint = Map.get(measurements, :mountpoint)
+        storage_rows(measurements, mountpoint)
+
+      event_name == @event_database ->
+        database = Map.get(measurements, :id) || Map.get(measurements, :database)
+        database_rows(measurements, database)
+
       true ->
         []
     end
@@ -227,6 +239,35 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
   end
 
   defp network_rows(_measurements, _interface), do: []
+
+  def storage_rows(measurements, mountpoint)
+      when is_map(measurements) and is_binary(mountpoint) do
+    node_storage_id = "#{Atom.to_string(node())}:#{mountpoint}"
+
+    metric_rows(measurements, %{
+      total_bytes: "storage_total_bytes",
+      used_bytes: "storage_used_bytes",
+      free_bytes: "storage_free_bytes",
+      used_percent: "storage_used_percent"
+    })
+    |> Enum.map(&Map.put(&1, :entity_type, "storage"))
+    |> Enum.map(&Map.put(&1, :entity_id, node_storage_id))
+  end
+
+  def storage_rows(_measurements, _mountpoint), do: []
+
+  def database_rows(measurements, database)
+      when is_map(measurements) and is_binary(database) do
+    node_database_id = "#{Atom.to_string(node())}:#{database}"
+
+    metric_rows(measurements, %{
+      size_bytes: "database_size_bytes"
+    })
+    |> Enum.map(&Map.put(&1, :entity_type, "database"))
+    |> Enum.map(&Map.put(&1, :entity_id, node_database_id))
+  end
+
+  def database_rows(_measurements, _database), do: []
 
   defp metric_rows(measurements, metric_map) when is_map(measurements) and is_map(metric_map) do
     Enum.flat_map(metric_map, fn {measurement_key, metric_key} ->

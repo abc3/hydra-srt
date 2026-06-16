@@ -17,7 +17,15 @@ import { ROUTES } from '../../utils/constants';
 
 const { Title } = Typography;
 type AnyRecord = Record<string, any>;
-type AnalyticsMeta = { from?: string; to?: string; bucket_ms?: number } | null;
+type StorageMeta = { id: string; mountpoint: string; name?: string; type?: string };
+type AnalyticsMeta = {
+  from?: string;
+  to?: string;
+  bucket_ms?: number;
+  storages?: StorageMeta[];
+  databases?: StorageMeta[];
+  default_storage_id?: string | null;
+} | null;
 type AnalyticsState = { points: AnyRecord[]; meta: AnalyticsMeta };
 type QueryParams = Record<string, string>;
 
@@ -31,6 +39,8 @@ const LIVE_ANALYTICS_WINDOW = 'live';
 const CUSTOM_ANALYTICS_WINDOW = 'custom';
 const LIVE_WINDOW_MINUTES = 5;
 const LIVE_REFRESH_INTERVAL_MS = 5_000;
+const STORAGE_LINE_COLORS = ['#2f54eb', '#fa8c16', '#52c41a', '#13c2c2', '#eb2f96', '#a0d911'];
+const DATABASE_LINE_COLORS = ['#eb2f96', '#13c2c2', '#faad14', '#722ed1'];
 const CHART_GRID_STYLE = {
   stroke: '#4f4f4f',
   strokeWidth: 0.6,
@@ -74,6 +84,21 @@ const formatBitrate = (bytesPerSec: number | undefined | null): string => {
   return `${value.toFixed(digits)} ${units[unitIndex]}`;
 };
 
+const formatBytes = (bytes: number | undefined | null): string => {
+  if (typeof bytes !== 'number' || Number.isNaN(bytes)) return '-';
+
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  let value = Math.max(0, bytes);
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const digits = value >= 100 || unitIndex === 0 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
+};
+
 const formatSignedThroughput = (bytesPerSec: number | undefined | null): string => {
   if (typeof bytesPerSec !== 'number' || Number.isNaN(bytesPerSec)) return '-';
   const sign = bytesPerSec < 0 ? '-' : '';
@@ -96,6 +121,12 @@ const formatOneDecimal = (value: number | null | undefined): string => {
   return value.toFixed(1);
 };
 
+const formatDatabaseLabel = (database: StorageMeta): string => {
+  if (database.id === 'metadata_database') return 'Meta DB';
+  if (database.id === 'metrics_logs_database') return 'Metrics+Logs DB';
+  return database.name || database.mountpoint || database.id;
+};
+
 const renderChartTooltip = ({ active, payload }: { active?: boolean; payload?: readonly AnyRecord[] }) => {
   if (!active || !Array.isArray(payload) || payload.length === 0) return null;
 
@@ -107,6 +138,9 @@ const renderChartTooltip = ({ active, payload }: { active?: boolean; payload?: r
     if (typeof value !== 'number' || Number.isNaN(value)) return value;
     if (String(entry?.dataKey || '').startsWith('net_')) {
       return formatSignedThroughput(value);
+    }
+    if (String(entry?.dataKey || '').startsWith('storage_')) {
+      return formatBytes(value);
     }
     return formatRoundedMetricValue(value);
   };
@@ -154,7 +188,9 @@ const SystemNodeMetrics = () => {
   const [analyticsRefreshTick, setAnalyticsRefreshTick] = useState(0);
   const [allowedInterfaces, setAllowedInterfaces] = useState<string[]>([]);
   const [selectedNetworkInterfaces, setSelectedNetworkInterfaces] = useState<string[]>([]);
-  const didInitFromUrlRef = useRef(false);
+  const [selectedStorageIds, setSelectedStorageIds] = useState<string[]>([]);
+  const didInitFromUrlRef = useRef<string | null>(null);
+  const didInitStorageFromUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!window.setBreadcrumbItems) return;
@@ -175,8 +211,8 @@ const SystemNodeMetrics = () => {
   }, [nodeId]);
 
   useEffect(() => {
-    if (didInitFromUrlRef.current) return;
-    didInitFromUrlRef.current = true;
+    if (didInitFromUrlRef.current === nodeId) return;
+    didInitFromUrlRef.current = nodeId;
 
     const timeFromUrl = searchParams.get('time');
     if (timeFromUrl && ANALYTICS_WINDOW_VALUES.has(timeFromUrl)) {
@@ -191,7 +227,20 @@ const SystemNodeMetrics = () => {
         .filter(Boolean);
       setSelectedNetworkInterfaces(Array.from(new Set(selected)));
     }
-  }, [searchParams]);
+
+    const storageFromUrl = searchParams.get('storage');
+    if (storageFromUrl) {
+      didInitStorageFromUrlRef.current = nodeId;
+      const selected = storageFromUrl
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
+      setSelectedStorageIds(Array.from(new Set(selected)));
+    } else {
+      didInitStorageFromUrlRef.current = null;
+      setSelectedStorageIds([]);
+    }
+  }, [nodeId, searchParams]);
 
   useEffect(() => {
     let mounted = true;
@@ -346,7 +395,7 @@ const SystemNodeMetrics = () => {
     const seriesKeys = new Set<string>();
     rawPoints.forEach((point: AnyRecord) => {
       Object.keys(point || {}).forEach((key: string) => {
-        if (key.startsWith('net_in_') || key.startsWith('net_out_')) {
+        if (key.startsWith('net_in_') || key.startsWith('net_out_') || key.startsWith('storage_')) {
           seriesKeys.add(key);
         }
       });
@@ -387,6 +436,53 @@ const SystemNodeMetrics = () => {
 
     return dense.map(normalizePoint);
   }, [analyticsData?.meta, analyticsData?.points, analyticsWindow]);
+
+  const storageOptions = useMemo(() => {
+    const storages = Array.isArray(analyticsData?.meta?.storages) ? analyticsData.meta.storages : [];
+    return storages
+      .filter((storage) => storage.type !== 'database')
+      .map((storage) => ({
+        label: storage.name || storage.mountpoint,
+        value: storage.id,
+      }));
+  }, [analyticsData?.meta?.storages]);
+
+  const storageLabelById = useMemo(() => {
+    const storages = Array.isArray(analyticsData?.meta?.storages) ? analyticsData.meta.storages : [];
+    return storages
+      .filter((storage) => storage.type !== 'database')
+      .reduce((acc: Record<string, string>, storage) => {
+        acc[storage.id] = storage.name || storage.mountpoint || storage.id;
+        return acc;
+      }, {});
+  }, [analyticsData?.meta?.storages]);
+
+  useEffect(() => {
+    const validIds = new Set(storageOptions.map((item) => item.value));
+    const defaultStorageId = analyticsData?.meta?.default_storage_id || null;
+
+    setSelectedStorageIds((prev) => {
+      if (storageOptions.length === 0) {
+        return analyticsData?.meta == null ? prev : [];
+      }
+
+      const filtered = prev.filter((id) => validIds.has(id));
+      if (filtered.length > 0) return filtered;
+
+      const hadStorageUrlInit = didInitStorageFromUrlRef.current === nodeId;
+      const urlHadInvalidIdsOnly = hadStorageUrlInit && prev.length > 0 && filtered.length === 0;
+
+      if (
+        (!hadStorageUrlInit || urlHadInvalidIdsOnly) &&
+        defaultStorageId &&
+        validIds.has(defaultStorageId)
+      ) {
+        return [defaultStorageId];
+      }
+
+      return filtered;
+    });
+  }, [analyticsData?.meta, analyticsData?.meta?.default_storage_id, nodeId, storageOptions]);
 
   const networkSeries = useMemo(() => {
     if (!chartData.length) return [];
@@ -459,12 +555,18 @@ const SystemNodeMetrics = () => {
       nextParams.delete('network');
     }
 
+    if (selectedStorageIds.length > 0) {
+      nextParams.set('storage', selectedStorageIds.join(','));
+    } else {
+      nextParams.delete('storage');
+    }
+
     const current = searchParams.toString();
     const next = nextParams.toString();
     if (current !== next) {
       setSearchParams(nextParams, { replace: true });
     }
-  }, [analyticsWindow, searchParams, selectedNetworkInterfaces, setSearchParams]);
+  }, [analyticsWindow, searchParams, selectedNetworkInterfaces, selectedStorageIds, setSearchParams]);
 
   const networkDomain = useMemo(() => {
     const values: number[] = [];
@@ -517,6 +619,81 @@ const SystemNodeMetrics = () => {
 
     return { cpu, ram, swap, la1, la5, la15, netIn, netOut };
   }, [chartData, networkChartData]);
+
+  const renderedStorageSeries = useMemo(
+    () =>
+      selectedStorageIds.flatMap((id) => [
+        {
+          key: `storage_total_${id}`,
+          name: `${storageLabelById[id] || id} total`,
+        },
+        {
+          key: `storage_used_${id}`,
+          name: `${storageLabelById[id] || id} used`,
+        },
+        {
+          key: `storage_free_${id}`,
+          name: `${storageLabelById[id] || id} free`,
+        },
+      ]),
+    [selectedStorageIds, storageLabelById]
+  );
+
+  const databaseSeries = useMemo(() => {
+    const databases = Array.isArray(analyticsData?.meta?.databases) ? analyticsData.meta.databases : [];
+    return databases.map((database) => ({
+      key: `storage_used_${database.id}`,
+      name: formatDatabaseLabel(database),
+    }));
+  }, [analyticsData?.meta?.databases]);
+
+  const storageLatest = useMemo(() => {
+    if (selectedStorageIds.length !== 1) {
+      return { total: null, used: null, free: null };
+    }
+
+    const storageId = selectedStorageIds[0];
+    const totalKey = `storage_total_${storageId}`;
+    const usedKey = `storage_used_${storageId}`;
+    const freeKey = `storage_free_${storageId}`;
+
+    const latest = [...chartData]
+      .reverse()
+      .find((point) => typeof point[totalKey] === 'number' && point[totalKey] > 0);
+
+    if (!latest) {
+      return { total: null, used: null, free: null };
+    }
+
+    return {
+      total: latest[totalKey],
+      used: latest[usedKey],
+      free: latest[freeKey],
+    };
+  }, [chartData, selectedStorageIds]);
+
+  const databaseLatestTitle = useMemo(() => {
+    if (!databaseSeries.length) return '';
+
+    const latest = [...chartData].reverse().find((point) =>
+      databaseSeries.some((series) => {
+        const value = point?.[series.key];
+        return typeof value === 'number' && !Number.isNaN(value);
+      })
+    );
+
+    if (!latest) return '';
+
+    const parts = databaseSeries
+      .map((series) => {
+        const value = latest[series.key];
+        if (typeof value !== 'number' || Number.isNaN(value)) return null;
+        return `${series.name}: ${formatBytes(value)}`;
+      })
+      .filter(Boolean);
+
+    return parts.length ? `: ${parts.join(', ')}` : '';
+  }, [chartData, databaseSeries]);
 
   return (
     <Space
@@ -725,6 +902,109 @@ const SystemNodeMetrics = () => {
                           </span>
                         );
                       })}
+                    </Space>
+                  </div>
+                )}
+              </Card>
+            </Col>
+
+            <Col xs={24} lg={12}>
+              <Card
+                size="small"
+                title={`Storage${
+                  storageLatest.total != null
+                    ? `: used ${formatBytes(storageLatest.used)}, free ${formatBytes(storageLatest.free)}, total ${formatBytes(storageLatest.total)}`
+                    : selectedStorageIds.length > 1
+                      ? `: ${selectedStorageIds.length} selected`
+                    : ''
+                }`}
+              >
+                <Space size={12} style={{ marginBottom: 8 }}>
+                  <Select
+                    size="small"
+                    mode="multiple"
+                    allowClear
+                    placeholder="Select storages"
+                    value={selectedStorageIds}
+                    onChange={setSelectedStorageIds}
+                    options={storageOptions}
+                    style={{ minWidth: 260 }}
+                  />
+                </Space>
+                <div style={{ width: '100%', height: 260 }}>
+                  <ResponsiveContainer>
+                    <LineChart data={chartData} margin={{ top: 8, right: 20, left: 8, bottom: 8 }}>
+                      <CartesianGrid {...CHART_GRID_STYLE} />
+                      <XAxis dataKey="xLabel" />
+                      <YAxis width={80} tickFormatter={(value: number) => formatBytes(value)} />
+                      <RechartsTooltip content={renderChartTooltip as any} />
+                      {renderedStorageSeries.map((series, index) => (
+                        <Line
+                          key={series.key}
+                          type="monotone"
+                          dataKey={series.key}
+                          name={series.name}
+                          stroke={STORAGE_LINE_COLORS[index % STORAGE_LINE_COLORS.length]}
+                          dot={false}
+                          isAnimationActive={false}
+                          connectNulls
+                        />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+                {renderedStorageSeries.length > 0 && (
+                  <div style={{ maxHeight: 100, overflowY: 'auto', marginTop: 8 }}>
+                    <Space wrap size={[12, 8]}>
+                      {renderedStorageSeries.map((series, index) => (
+                        <span
+                          key={`${series.key}-legend`}
+                          style={{ color: STORAGE_LINE_COLORS[index % STORAGE_LINE_COLORS.length] }}
+                        >
+                          {series.name}
+                        </span>
+                      ))}
+                    </Space>
+                  </div>
+                )}
+              </Card>
+            </Col>
+
+            <Col xs={24} lg={12}>
+              <Card size="small" title={`Database size${databaseLatestTitle}`}>
+                <div style={{ width: '100%', height: 260 }}>
+                  <ResponsiveContainer>
+                    <LineChart data={chartData} margin={{ top: 8, right: 20, left: 8, bottom: 8 }}>
+                      <CartesianGrid {...CHART_GRID_STYLE} />
+                      <XAxis dataKey="xLabel" />
+                      <YAxis width={80} tickFormatter={(value: number) => formatBytes(value)} />
+                      <RechartsTooltip content={renderChartTooltip as any} />
+                      {databaseSeries.map((series, index) => (
+                        <Line
+                          key={series.key}
+                          type="monotone"
+                          dataKey={series.key}
+                          name={series.name}
+                          stroke={DATABASE_LINE_COLORS[index % DATABASE_LINE_COLORS.length]}
+                          dot={false}
+                          isAnimationActive={false}
+                          connectNulls
+                        />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+                {databaseSeries.length > 0 && (
+                  <div style={{ maxHeight: 100, overflowY: 'auto', marginTop: 8 }}>
+                    <Space wrap size={[12, 8]}>
+                      {databaseSeries.map((series, index) => (
+                        <span
+                          key={`${series.key}-legend`}
+                          style={{ color: DATABASE_LINE_COLORS[index % DATABASE_LINE_COLORS.length] }}
+                        >
+                          {series.name}
+                        </span>
+                      ))}
                     </Space>
                   </div>
                 )}
