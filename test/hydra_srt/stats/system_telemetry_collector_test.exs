@@ -56,6 +56,28 @@ defmodule HydraSrt.Stats.SystemTelemetryCollectorTest do
         }
       )
 
+    storage_rows =
+      SystemTelemetryCollector.rows_from_telemetry(
+        [:prom_ex, :plugin, :osmon, :storage],
+        %{
+          mountpoint: "/var/lib/hydra",
+          total_bytes: 1000,
+          used_bytes: 250,
+          free_bytes: 750,
+          used_percent: 25.0
+        }
+      )
+
+    database_rows =
+      SystemTelemetryCollector.rows_from_telemetry(
+        [:prom_ex, :plugin, :osmon, :database],
+        %{
+          id: "metadata_database",
+          path: "/tmp/hydra.db",
+          size_bytes: 2048
+        }
+      )
+
     assert Enum.map(cpu_rows, & &1.metric_key) == ["cpu_util"]
     assert Enum.map(ram_rows, & &1.metric_key) == ["ram_usage"]
     assert Enum.map(swap_rows, & &1.metric_key) == ["swap_usage"]
@@ -85,6 +107,21 @@ defmodule HydraSrt.Stats.SystemTelemetryCollectorTest do
              "net_tx_errors_total",
              "net_tx_packets_total"
            ]
+
+    assert Enum.all?(storage_rows, &(&1.entity_type == "storage"))
+    assert Enum.all?(storage_rows, &String.ends_with?(&1.entity_id, ":/var/lib/hydra"))
+
+    assert Enum.map(storage_rows, & &1.metric_key) |> Enum.sort() == [
+             "storage_free_bytes",
+             "storage_total_bytes",
+             "storage_used_bytes",
+             "storage_used_percent"
+           ]
+
+    assert Enum.all?(database_rows, &(&1.entity_type == "database"))
+    assert Enum.all?(database_rows, &String.ends_with?(&1.entity_id, ":metadata_database"))
+    assert Enum.map(database_rows, & &1.metric_key) == ["database_size_bytes"]
+    assert Enum.map(database_rows, & &1.value_double) == [2048.0]
   end
 
   test "telemetry cpu event is persisted to duckdb" do

@@ -7,6 +7,8 @@ defmodule HydraSrt.Monitoring.OsMonTelemetry do
   @event_cpu_la [:prom_ex, :plugin, :osmon, :cpu_avg1]
   @event_swap_usage [:prom_ex, :plugin, :osmon, :swap_usage]
   @event_network_interface [:prom_ex, :plugin, :osmon, :network_interface]
+  @event_storage [:prom_ex, :plugin, :osmon, :storage]
+  @event_database [:prom_ex, :plugin, :osmon, :database]
 
   @spec memory_event() :: [atom()]
   def memory_event, do: @event_memory
@@ -26,6 +28,12 @@ defmodule HydraSrt.Monitoring.OsMonTelemetry do
   @spec network_interface_event() :: [atom()]
   def network_interface_event, do: @event_network_interface
 
+  @spec storage_event() :: [atom()]
+  def storage_event, do: @event_storage
+
+  @spec database_event() :: [atom()]
+  def database_event, do: @event_database
+
   @spec all_events() :: [[atom()]]
   def all_events do
     [
@@ -34,7 +42,9 @@ defmodule HydraSrt.Monitoring.OsMonTelemetry do
       cpu_util_event(),
       cpu_la_event(),
       swap_usage_event(),
-      network_interface_event()
+      network_interface_event(),
+      storage_event(),
+      database_event()
     ]
   end
 end

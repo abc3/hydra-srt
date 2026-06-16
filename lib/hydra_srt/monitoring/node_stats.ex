@@ -12,6 +12,8 @@ defmodule HydraSrt.Monitoring.NodeStats do
   def self_node_stats do
     stats = OsMon.get_stats()
     network = if(is_map(stats), do: Map.get(stats, :network, %{}), else: %{})
+    storage = if(is_map(stats), do: Map.get(stats, :storage, %{}), else: %{})
+    databases = if(is_map(stats), do: Map.get(stats, :databases, %{}), else: %{})
     {network_in, network_out} = aggregate_network_totals(network)
 
     la_string =
@@ -28,6 +30,8 @@ defmodule HydraSrt.Monitoring.NodeStats do
       swap: if(is_map(stats), do: stats.swap, else: nil),
       network_in_bytes_per_sec: network_in,
       network_out_bytes_per_sec: network_out,
+      storage: storage,
+      databases: databases,
       la: la_string,
       status: "self"
     }
@@ -42,6 +46,8 @@ defmodule HydraSrt.Monitoring.NodeStats do
       swap: nil,
       network_in_bytes_per_sec: nil,
       network_out_bytes_per_sec: nil,
+      storage: %{},
+      databases: %{},
       la: "N/A / N/A / N/A",
       status: "down"
     }

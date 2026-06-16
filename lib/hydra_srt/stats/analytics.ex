@@ -1,6 +1,7 @@
 defmodule HydraSrt.Stats.Analytics do
   @moduledoc false
   alias HydraSrt.Db
+  alias HydraSrt.Monitoring.OsMon
 
   @window_to_seconds %{
     "last_30_min" => 30 * 60,
@@ -107,7 +108,7 @@ defmodule HydraSrt.Stats.Analytics do
           {:ok, map()} | {:error, term()}
   def fetch_node_timeseries(node_id, query_params, conn \\ HydraSrt.AnalyticsConn)
       when is_binary(node_id) and is_map(query_params) do
-    node_netif_prefix = "#{node_id}:%"
+    node_entity_prefix = "#{node_id}:%"
 
     sql = """
     WITH sampled AS (
@@ -123,6 +124,10 @@ defmodule HydraSrt.Stats.Analytics do
           (entity_type = 'node' AND entity_id = ? AND metric_key IN ('cpu_util', 'ram_usage', 'swap_usage', 'cpu_la_avg1', 'cpu_la_avg5', 'cpu_la_avg15'))
           OR
           (entity_type = 'net_if' AND entity_id LIKE ? AND metric_key IN ('net_rx_bytes_per_sec', 'net_tx_bytes_per_sec'))
+          OR
+          (entity_type = 'storage' AND entity_id LIKE ? AND metric_key IN ('storage_total_bytes', 'storage_used_bytes', 'storage_free_bytes', 'storage_used_percent'))
+          OR
+          (entity_type = 'database' AND entity_id LIKE ? AND metric_key IN ('database_size_bytes'))
         )
         AND ts >= CAST(? AS TIMESTAMP)
         AND ts <= CAST(? AS TIMESTAMP)
@@ -137,7 +142,9 @@ defmodule HydraSrt.Stats.Analytics do
       query_params.bucket_ms,
       query_params.bucket_ms,
       node_id,
-      node_netif_prefix,
+      node_entity_prefix,
+      node_entity_prefix,
+      node_entity_prefix,
       DateTime.to_iso8601(query_params.from),
       DateTime.to_iso8601(query_params.to)
     ]
@@ -153,7 +160,10 @@ defmodule HydraSrt.Stats.Analytics do
              from: DateTime.to_iso8601(query_params.from),
              to: DateTime.to_iso8601(query_params.to),
              window: query_params.window,
-             bucket_ms: query_params.bucket_ms
+             bucket_ms: query_params.bucket_ms,
+             storages: storage_meta_from_rows(rows),
+             databases: database_meta_from_rows(rows),
+             default_storage_id: default_storage_id(rows)
            }
          }}
 
@@ -1340,6 +1350,27 @@ defmodule HydraSrt.Stats.Analytics do
               interface_name -> Map.put(current, "net_out_#{interface_name}", value)
             end
 
+          row.entity_type == "storage" ->
+            case storage_point_key(row.entity_id, row.metric_key) do
+              nil -> current
+              key -> Map.put(current, key, value)
+            end
+
+          row.entity_type == "database" and row.metric_key == "database_size_bytes" ->
+            case database_name(row.entity_id) do
+              nil ->
+                current
+
+              database ->
+                storage_id = OsMon.database_id(database)
+
+                current
+                |> Map.put("storage_total_#{storage_id}", value)
+                |> Map.put("storage_used_#{storage_id}", value)
+                |> Map.put("storage_free_#{storage_id}", 0.0)
+                |> Map.put("storage_used_percent_#{storage_id}", 100.0)
+            end
+
           true ->
             current
         end
@@ -1358,4 +1389,136 @@ defmodule HydraSrt.Stats.Analytics do
   end
 
   defp net_interface_name(_entity_id), do: nil
+
+  def storage_point_key(entity_id, metric_key)
+      when is_binary(entity_id) and is_binary(metric_key) do
+    with mountpoint when is_binary(mountpoint) <- storage_mountpoint(entity_id),
+         field_prefix when is_binary(field_prefix) <- storage_field_prefix(metric_key) do
+      "#{field_prefix}_#{OsMon.storage_id(mountpoint)}"
+    else
+      _ -> nil
+    end
+  end
+
+  def storage_point_key(_entity_id, _metric_key), do: nil
+
+  def storage_field_prefix("storage_total_bytes"), do: "storage_total"
+  def storage_field_prefix("storage_used_bytes"), do: "storage_used"
+  def storage_field_prefix("storage_free_bytes"), do: "storage_free"
+  def storage_field_prefix("storage_used_percent"), do: "storage_used_percent"
+  def storage_field_prefix(_metric_key), do: nil
+
+  def storage_meta_from_rows(rows) when is_list(rows) do
+    storage_rows =
+      rows
+      |> Enum.filter(&(&1.entity_type == "storage"))
+      |> Enum.map(&storage_mountpoint(&1.entity_id))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Enum.sort()
+      |> Enum.map(fn mountpoint ->
+        %{id: OsMon.storage_id(mountpoint), mountpoint: mountpoint, type: "mountpoint"}
+      end)
+
+    storage_rows ++ database_meta_from_rows(rows)
+  end
+
+  def database_meta_from_rows(rows) when is_list(rows) do
+    rows
+    |> Enum.filter(&(&1.entity_type == "database"))
+    |> Enum.map(&database_name(&1.entity_id))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.map(fn database ->
+      %{
+        id: OsMon.database_id(database),
+        mountpoint: database_display_name(database),
+        name: database_display_name(database),
+        type: "database"
+      }
+    end)
+  end
+
+  def default_storage_id(rows, anchor_paths \\ nil)
+
+  def default_storage_id(rows, anchor_paths) when is_list(rows) do
+    storages = Enum.reject(storage_meta_from_rows(rows), &(&1[:type] == "database"))
+
+    anchor_paths =
+      case anchor_paths do
+        nil -> default_storage_anchor_paths()
+        paths -> expand_anchor_paths(paths)
+      end
+
+    chosen =
+      anchor_paths
+      |> Enum.flat_map(fn anchor_path ->
+        storages
+        |> Enum.filter(fn storage -> path_within_mountpoint?(anchor_path, storage.mountpoint) end)
+        |> Enum.map(fn storage -> {String.length(storage.mountpoint), storage} end)
+      end)
+      |> Enum.max_by(fn {length, _storage} -> length end, fn -> nil end)
+      |> case do
+        {_, storage} -> storage
+        nil -> nil
+      end
+
+    cond do
+      is_map(chosen) ->
+        chosen.id
+
+      root = Enum.find(storages, &(&1.mountpoint == "/")) ->
+        root.id
+
+      first = List.first(storages) ->
+        first.id
+
+      true ->
+        nil
+    end
+  end
+
+  def default_storage_anchor_paths do
+    expand_anchor_paths([OsMon.repo_database_path(), OsMon.analytics_database_path()])
+  end
+
+  def expand_anchor_paths(paths) when is_list(paths) do
+    paths
+    |> Enum.filter(&is_binary/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.map(&Path.expand/1)
+    |> Enum.uniq()
+  end
+
+  def storage_mountpoint(entity_id) when is_binary(entity_id) do
+    case String.split(entity_id, ":", parts: 2) do
+      [_node, mountpoint] when mountpoint != "" -> mountpoint
+      _ -> nil
+    end
+  end
+
+  def storage_mountpoint(_entity_id), do: nil
+
+  def database_name(entity_id) when is_binary(entity_id) do
+    case String.split(entity_id, ":", parts: 2) do
+      [_node, database] when database != "" -> database
+      _ -> nil
+    end
+  end
+
+  def database_name(_entity_id), do: nil
+
+  def database_display_name("metadata_database"), do: "Metadata Database"
+  def database_display_name("metrics_logs_database"), do: "Metrics and Logs Database"
+  def database_display_name(database) when is_binary(database), do: database
+
+  def path_within_mountpoint?(path, "/") when is_binary(path), do: String.starts_with?(path, "/")
+
+  def path_within_mountpoint?(path, mountpoint)
+      when is_binary(path) and is_binary(mountpoint) do
+    path == mountpoint or String.starts_with?(path, mountpoint <> "/")
+  end
+
+  def path_within_mountpoint?(_path, _mountpoint), do: false
 end

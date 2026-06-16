@@ -145,6 +145,50 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
           measurement: :tx_bytes_per_sec,
           tags: [:interface],
           tag_values: &net_tag_values/1
+        ),
+        last_value(
+          @prefix ++ [:osmon, :storage, :total_bytes],
+          event_name: OsMonTelemetry.storage_event(),
+          description: "Total bytes available on the mounted storage.",
+          unit: :bytes,
+          measurement: :total_bytes,
+          tags: [:mountpoint],
+          tag_values: &storage_tag_values/1
+        ),
+        last_value(
+          @prefix ++ [:osmon, :storage, :used_bytes],
+          event_name: OsMonTelemetry.storage_event(),
+          description: "Used bytes on the mounted storage.",
+          unit: :bytes,
+          measurement: :used_bytes,
+          tags: [:mountpoint],
+          tag_values: &storage_tag_values/1
+        ),
+        last_value(
+          @prefix ++ [:osmon, :storage, :free_bytes],
+          event_name: OsMonTelemetry.storage_event(),
+          description: "Free bytes on the mounted storage.",
+          unit: :bytes,
+          measurement: :free_bytes,
+          tags: [:mountpoint],
+          tag_values: &storage_tag_values/1
+        ),
+        last_value(
+          @prefix ++ [:osmon, :storage, :used_percent],
+          event_name: OsMonTelemetry.storage_event(),
+          description: "Used storage percentage on the mounted storage.",
+          measurement: :used_percent,
+          tags: [:mountpoint],
+          tag_values: &storage_tag_values/1
+        ),
+        last_value(
+          @prefix ++ [:osmon, :database, :size_bytes],
+          event_name: OsMonTelemetry.database_event(),
+          description: "Database file size in bytes.",
+          unit: :bytes,
+          measurement: :size_bytes,
+          tags: [:database, :path],
+          tag_values: &__MODULE__.database_tag_values/1
         )
       ]
     )
@@ -157,7 +201,9 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
       cpu_la: MonitoringOsMon.cpu_la(),
       swap: MonitoringOsMon.swap_usage(),
       memory: memory(),
-      network: network_snapshot()
+      network: network_snapshot(),
+      storage: MonitoringOsMon.storage(),
+      databases: MonitoringOsMon.databases()
     }
 
     :persistent_term.put(@cache_key, stats)
@@ -170,6 +216,19 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
 
     Enum.each(stats.network, fn {iface, measurements} ->
       execute_metrics(OsMonTelemetry.network_interface_event(), measurements, %{interface: iface})
+    end)
+
+    Enum.each(stats.storage, fn {_id, measurements} ->
+      execute_metrics(OsMonTelemetry.storage_event(), measurements, %{
+        mountpoint: Map.get(measurements, :mountpoint)
+      })
+    end)
+
+    Enum.each(stats.databases, fn {_id, measurements} ->
+      execute_metrics(OsMonTelemetry.database_event(), measurements, %{
+        database: Map.get(measurements, :id),
+        path: Map.get(measurements, :path)
+      })
     end)
   end
 
@@ -235,5 +294,16 @@ defmodule HydraSrt.PromEx.Plugins.OsMon do
 
   defp net_tag_values(metadata) when is_map(metadata) do
     %{interface: to_string(Map.get(metadata, :interface, "unknown"))}
+  end
+
+  def storage_tag_values(metadata) when is_map(metadata) do
+    %{mountpoint: to_string(Map.get(metadata, :mountpoint, "unknown"))}
+  end
+
+  def database_tag_values(metadata) when is_map(metadata) do
+    %{
+      database: to_string(Map.get(metadata, :database, "unknown")),
+      path: to_string(Map.get(metadata, :path, "unknown"))
+    }
   end
 end

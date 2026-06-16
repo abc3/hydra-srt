@@ -1,7 +1,9 @@
 defmodule HydraSrt.Stats.AnalyticsTest do
   use ExUnit.Case, async: true
 
+  alias HydraSrt.Monitoring.OsMon
   alias HydraSrt.Stats.Analytics
+  alias HydraSrt.Stats.Duckdb
 
   test "build_query_params resolves known window" do
     assert {:ok, params} = Analytics.build_query_params(%{"window" => "last_hour"})
@@ -20,6 +22,141 @@ defmodule HydraSrt.Stats.AnalyticsTest do
              Analytics.build_query_params(%{"window" => "last_24_hour", "max_points" => "120"})
 
     assert params.bucket_ms == 900_000
+  end
+
+  test "fetch_node_timeseries returns storage and database points and metadata" do
+    :ok = Duckdb.ensure_schema()
+
+    node_id = "storage-test-#{System.unique_integer([:positive])}"
+    mountpoint = "/tmp/hydra-storage-test"
+    storage_id = HydraSrt.Monitoring.OsMon.storage_id(mountpoint)
+    ts = ~U[2026-06-16 12:00:00Z]
+
+    storage_rows =
+      [
+        {"storage_total_bytes", 1000.0},
+        {"storage_used_bytes", 400.0},
+        {"storage_free_bytes", 600.0},
+        {"storage_used_percent", 40.0}
+      ]
+      |> Enum.map(fn {metric_key, value} ->
+        %{
+          ts: ts,
+          route_id: nil,
+          entity_type: "storage",
+          entity_id: "#{node_id}:#{mountpoint}",
+          metric_key: metric_key,
+          value_type: "double",
+          value_double: value,
+          value_bigint: nil,
+          value_text: nil
+        }
+      end)
+
+    database_rows = [
+      %{
+        ts: ts,
+        route_id: nil,
+        entity_type: "database",
+        entity_id: "#{node_id}:metadata_database",
+        metric_key: "database_size_bytes",
+        value_type: "double",
+        value_double: 2048.0,
+        value_bigint: nil,
+        value_text: nil
+      }
+    ]
+
+    assert :ok = Duckdb.insert_rows(storage_rows ++ database_rows)
+
+    assert {:ok, payload} =
+             Analytics.fetch_node_timeseries(node_id, %{
+               from: DateTime.add(ts, -60, :second),
+               to: DateTime.add(ts, 60, :second),
+               window: "custom",
+               bucket_ms: 10_000
+             })
+
+    assert %{
+             id: "metadata_database",
+             mountpoint: "Metadata Database",
+             name: "Metadata Database",
+             type: "database"
+           } in payload.meta.databases
+
+    assert Enum.any?(payload.meta.storages, fn storage ->
+             storage.id == storage_id and storage.mountpoint == mountpoint and
+               storage.type == "mountpoint"
+           end)
+
+    assert %{id: "metadata_database", mountpoint: "Metadata Database", type: "database"} =
+             Enum.find(payload.meta.storages, &(&1.id == "metadata_database"))
+
+    assert payload.meta.default_storage_id == storage_id
+
+    assert Enum.any?(payload.points, fn point ->
+             point["storage_total_#{storage_id}"] == 1000.0 and
+               point["storage_used_#{storage_id}"] == 400.0 and
+               point["storage_free_#{storage_id}"] == 600.0 and
+               point["storage_used_percent_#{storage_id}"] == 40.0
+           end)
+
+    assert Enum.any?(payload.points, fn point ->
+             point["storage_total_metadata_database"] == 2048.0 and
+               point["storage_used_metadata_database"] == 2048.0 and
+               point["storage_free_metadata_database"] == 0.0 and
+               point["storage_used_percent_metadata_database"] == 100.0
+           end)
+  end
+
+  test "default_storage_id falls back without anchor paths" do
+    rows = [
+      %{
+        entity_type: "storage",
+        entity_id: "node@host:/",
+        metric_key: "storage_total_bytes"
+      }
+    ]
+
+    assert Analytics.default_storage_id(rows, []) == "root"
+  end
+
+  test "default_storage_id prefers mountpoint containing database paths" do
+    rows = [
+      %{
+        entity_type: "storage",
+        entity_id: "node@host:/",
+        metric_key: "storage_total_bytes"
+      },
+      %{
+        entity_type: "storage",
+        entity_id: "node@host:/data",
+        metric_key: "storage_total_bytes"
+      }
+    ]
+
+    assert Analytics.default_storage_id(rows, ["/data/hydra_srt/hydra_srt.db"]) ==
+             OsMon.storage_id("/data")
+  end
+
+  test "default_storage_id expands relative anchor paths before matching" do
+    relative_db = "relative/hydra_srt.db"
+    mountpoint = Path.dirname(Path.expand(relative_db))
+
+    rows = [
+      %{
+        entity_type: "storage",
+        entity_id: "node@host:/",
+        metric_key: "storage_total_bytes"
+      },
+      %{
+        entity_type: "storage",
+        entity_id: "node@host:#{mountpoint}",
+        metric_key: "storage_total_bytes"
+      }
+    ]
+
+    assert Analytics.default_storage_id(rows, [relative_db]) == OsMon.storage_id(mountpoint)
   end
 
   test "source_timeline_from_switches builds contiguous segments" do
