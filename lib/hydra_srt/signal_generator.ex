@@ -68,6 +68,9 @@ defmodule HydraSrt.SignalGenerator do
     GenServer.call(__MODULE__, {:stop_generation, transport})
   end
 
+  @doc false
+  def restart_delay_ms, do: @restart_delay_ms
+
   @impl true
   def init(_state) do
     Process.flag(:trap_exit, true)
