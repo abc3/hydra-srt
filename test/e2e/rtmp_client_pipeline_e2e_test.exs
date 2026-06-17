@@ -64,7 +64,8 @@ defmodule HydraSrt.E2E.RtmpClientPipelineE2ETest do
 
     assert E2EHelpers.rtmp_streams_include_av?(streams)
 
-    ffmpeg_exit_wait_ms = E2EHelpers.e2e_ffmpeg_stream_duration_sec() * 1_000 + 5_000
-    assert E2EHelpers.await_tag_exit_status("ffmpeg-rtmp-client", ffmpeg_exit_wait_ms) == 0
+    # The source streams well past the probe window so the publisher stays live while
+    # ffprobe negotiates; once A/V is verified we stop it instead of waiting it out.
+    E2EHelpers.kill_port(tx)
   end
 end

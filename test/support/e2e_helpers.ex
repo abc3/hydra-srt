@@ -26,51 +26,61 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
   end
 
   @doc false
+  # The RTMP proxy chain (SRT -> parsebin -> flvmux -> rtmpsink -> publish) has a
+  # variable warm-up latency (mpegts demux, first keyframe at g=60, flvmux aggregator
+  # waiting for buffers on every pad). The source must keep streaming for the whole
+  # ffprobe probe window, otherwise the publisher may never come up and the play side
+  # times out forever. Keep this comfortably above `await_rtmp_av_streams/2` timeouts.
   def e2e_ffmpeg_stream_duration_sec do
-    if System.get_env("CI") == "true", do: 45, else: 6
+    if System.get_env("CI") == "true", do: 150, else: 45
   end
 
   @doc false
   def ffmpeg_srt_test_pattern_args(source_port, opts \\ []) when is_integer(source_port) do
     duration_sec = Keyword.get(opts, :duration_sec, e2e_ffmpeg_stream_duration_sec())
+    # On CI, -re throttles to wall clock: slow runners can spend the whole -t budget
+    # before the RTMP remux branch connects, so ffprobe never sees a live stream.
+    realtime? = Keyword.get(opts, :realtime, System.get_env("CI") != "true")
 
     [
       "-hide_banner",
       "-loglevel",
-      "error",
-      "-re",
-      "-f",
-      "lavfi",
-      "-i",
-      "testsrc2=size=1280x720:rate=30",
-      "-f",
-      "lavfi",
-      "-i",
-      "sine=frequency=440:sample_rate=48000",
-      "-t",
-      Integer.to_string(duration_sec),
-      "-c:v",
-      "libx264",
-      "-preset",
-      "veryfast",
-      "-tune",
-      "zerolatency",
-      "-pix_fmt",
-      "yuv420p",
-      "-g",
-      "60",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      "-ar",
-      "48000",
-      "-ac",
-      "2",
-      "-f",
-      "mpegts",
-      "srt://127.0.0.1:#{source_port}?mode=caller"
-    ]
+      "error"
+    ] ++
+      if(realtime?, do: ["-re"], else: []) ++
+      [
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=1280x720:rate=30",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000",
+        "-t",
+        Integer.to_string(duration_sec),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-tune",
+        "zerolatency",
+        "-pix_fmt",
+        "yuv420p",
+        "-g",
+        "60",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-f",
+        "mpegts",
+        "srt://127.0.0.1:#{source_port}?mode=caller"
+      ]
   end
 
   def ensure_e2e_prereqs! do
