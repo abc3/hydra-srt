@@ -1,5 +1,5 @@
 defmodule HydraSrt.DbNotificationsTest do
-  use HydraSrt.DataCase, async: true
+  use HydraSrt.DataCase, async: false
 
   alias HydraSrt.Api.Notification
   alias HydraSrt.Db
