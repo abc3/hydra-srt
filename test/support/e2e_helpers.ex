@@ -25,6 +25,54 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     if System.get_env("CI") == "true", do: 2_000, else: 750
   end
 
+  @doc false
+  def e2e_ffmpeg_stream_duration_sec do
+    if System.get_env("CI") == "true", do: 45, else: 6
+  end
+
+  @doc false
+  def ffmpeg_srt_test_pattern_args(source_port, opts \\ []) when is_integer(source_port) do
+    duration_sec = Keyword.get(opts, :duration_sec, e2e_ffmpeg_stream_duration_sec())
+
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-re",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=size=1280x720:rate=30",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440:sample_rate=48000",
+      "-t",
+      Integer.to_string(duration_sec),
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-tune",
+      "zerolatency",
+      "-pix_fmt",
+      "yuv420p",
+      "-g",
+      "60",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "128k",
+      "-ar",
+      "48000",
+      "-ac",
+      "2",
+      "-f",
+      "mpegts",
+      "srt://127.0.0.1:#{source_port}?mode=caller"
+    ]
+  end
+
   def ensure_e2e_prereqs! do
     kill_all_pipelines!()
     ensure_executables!()
@@ -94,8 +142,15 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     "rtmp://127.0.0.1:#{rtmp_port()}#{normalized_path}"
   end
 
-  def ffprobe_streams(url, timeout_ms \\ 3_500) when is_binary(url) do
-    effective_timeout_ms = e2e_timeout_ms(timeout_ms)
+  def ffprobe_streams(url, timeout_ms \\ 3_500, opts \\ []) when is_binary(url) do
+    scale_timeout? = Keyword.get(opts, :scale_timeout, true)
+
+    effective_timeout_ms =
+      if scale_timeout? do
+        e2e_timeout_ms(timeout_ms)
+      else
+        timeout_ms
+      end
 
     with {:ok, raw} <-
            HydraSrt.SourceProbe.run_ffprobe(:ffprobe, url, effective_timeout_ms),
@@ -125,7 +180,7 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
 
     wait_until(
       fn ->
-        case ffprobe_streams(url, probe_timeout_ms) do
+        case ffprobe_streams(url, probe_timeout_ms, scale_timeout: false) do
           {:ok, streams} -> rtmp_streams_include_av?(streams)
           _ -> false
         end
@@ -134,7 +189,7 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
       interval_ms
     )
 
-    case ffprobe_streams(url, probe_timeout_ms) do
+    case ffprobe_streams(url, probe_timeout_ms, scale_timeout: false) do
       {:ok, streams} ->
         if rtmp_streams_include_av?(streams) do
           {:ok, %{streams: streams}}

@@ -97,6 +97,11 @@ if shared_http_e2e_mode? do
   # One shared HTTP endpoint + one SQLite file: parallel ExUnit cases contend on DB
   # locks and route lifecycle, causing flaky "database is locked" / pipeline timeouts.
   ExUnit.configure(max_cases: 1)
+
+  # E2EHelpers.e2e_timeout_ms/1 scales waits up to 120s on CI; keep ExUnit above that budget.
+  if System.get_env("TEST_TIMEOUT") == nil and System.get_env("CI") == "true" do
+    ExUnit.configure(timeout: 180_000)
+  end
 end
 
 if e2e_route_mode_enabled? do
