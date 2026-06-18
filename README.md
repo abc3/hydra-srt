@@ -92,21 +92,21 @@ See [docs/architecture.md](docs/architecture.md) for details.
 
 ## Quick Start
 
-### Docker (Recommended)
+### Docker
 
 ```bash
-docker run --rm -p 4000:4000 \
-  -p 4100-4500:4100-4500/udp \
-  -v "$(pwd)/data/db:/app/db" \
-  -e PHX_SERVER=true \
-  -e DATABASE_PATH=/app/db/hydra_srt.db \
-  -e ANALYTICS_DATABASE_PATH=/app/db/hydra_srt_analytics.duckdb \
-  -e API_AUTH_USERNAME=admin \
-  -e API_AUTH_PASSWORD=password123 \
-  streamband/hydra-srt:latest
+docker compose up
 ```
 
 Open [http://127.0.0.1:4000](http://127.0.0.1:4000) and log in with `admin` / `password123`.
+
+The default Compose file uses Linux host networking. If your Docker Engine cannot use Linux host networking, run with explicit port mappings:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ports.yml up
+```
+
+Host networking is intended for native Linux, including WSL2 only when Docker Engine runs inside the WSL distro.
 
 ### Local Development
 

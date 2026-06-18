@@ -1,0 +1,9 @@
+services:
+  hydra_srt:
+    # Bridge networking with explicit port mappings for Docker environments
+    # where Linux host networking is not available or not desired.
+    network_mode: "bridge"
+    ports:
+      - "4000:4000"
+      - "1935:1935"
+      - "4100-4500:4100-4500/udp"

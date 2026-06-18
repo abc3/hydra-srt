@@ -4,11 +4,9 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    # Docker Desktop (macOS/Windows) does not support Linux-style host networking.
-    # Use the default bridge network with explicit port mappings for portability.
-    ports:
-      - "4000:4000"
-      - "4100-4500:4100-4500/udp"
+    # Linux-first default for streaming workloads: share the host network namespace.
+    # If your Docker Engine cannot use Linux host networking, add docker-compose.ports.yml.
+    network_mode: "host"
     environment:
       - NODE_IP=127.0.0.1
       - HYDRA_DEFAULT_BIND_IP=0.0.0.0

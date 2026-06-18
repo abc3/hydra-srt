@@ -233,8 +233,24 @@ Prebuilt Docker image is available on Docker Hub:
 
 ### Quick Start with Published Image
 
+Native Linux:
+
+```bash
+docker run --rm --network host \
+  -v "$(pwd)/data/db:/app/db" \
+  -e PHX_SERVER=true \
+  -e DATABASE_PATH=/app/db/hydra_srt.db \
+  -e ANALYTICS_DATABASE_PATH=/app/db/hydra_srt_analytics.duckdb \
+  -e API_AUTH_USERNAME=admin \
+  -e API_AUTH_PASSWORD=password123 \
+  streamband/hydra-srt:latest
+```
+
+Explicit port mappings:
+
 ```bash
 docker run --rm -p 4000:4000 \
+  -p 1935:1935 \
   -p 4100-4500:4100-4500/udp \
   -v "$(pwd)/data/db:/app/db" \
   -e PHX_SERVER=true \
@@ -260,7 +276,7 @@ Required env vars (see [envs.md](envs.md)):
    docker compose build
    ```
 
-2. **Start**:
+2. **Start on native Linux**:
 
    ```bash
    docker compose up
@@ -269,6 +285,14 @@ Required env vars (see [envs.md](envs.md)):
    On first start (fresh `./data/db` volume), the container will automatically run DB migrations.
    To disable auto-migrations, set `RUN_MIGRATIONS=false`.
    `docker-compose.yml` uses `DATABASE_PATH=/app/db/hydra_srt.db` and mounts `./data/db`.
+
+   The default Compose file uses `network_mode: "host"` so HydraSRT can bind directly to the host network. This is intended for native Linux, including WSL2 only when Docker Engine runs inside the WSL distro.
+
+   If your Docker Engine cannot use Linux host networking, start with explicit port mappings:
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.ports.yml up
+   ```
 
    To override the DB path (and/or increase `POOL_SIZE`), create a `.env` file:
 
@@ -291,14 +315,14 @@ Required env vars (see [envs.md](envs.md)):
    docker compose down
    ```
 
-### Network Mode: Host
+### Docker Networking
 
 Docker networking modes:
 
-- **Default (recommended / portable)**: normal bridge networking with explicit port mappings (works on Linux + Docker Desktop).
-- **Host network (Linux-only)**: share the host network namespace.
+- **Default (recommended on native Linux)**: host networking through `network_mode: "host"`.
+- **Ports override**: bridge networking with explicit port mappings through `docker-compose.ports.yml`.
 
-#### Default mode (portable, recommended for macOS/Windows)
+#### Default mode: host network
 
 ```bash
 docker compose up --build
@@ -310,27 +334,25 @@ Web UI:
 http://127.0.0.1:4000
 ```
 
-Use this mode on macOS/Windows or when explicit port mappings are enough.
-
-#### Host network mode (Linux-only, recommended on Linux servers)
-
-Docker Desktop does not support Linux-style `network_mode: "host"` in the same way. Use this mode on Linux hosts.
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
-```
-
-To stop:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.host.yml down
-```
-
 Host network means:
 
 - The container uses the host IP and interfaces.
 - Container ports are exposed on the host network.
 - Port conflicts must be handled on the host.
+
+#### Ports override
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ports.yml up -d
+```
+
+To stop:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ports.yml down
+```
+
+Use the ports override when Linux host networking is not available or not desired. Docker Desktop-backed setups do not provide the same host network behavior as a native Linux Docker Engine. On WSL2, host networking is only the expected Linux behavior when Docker Engine runs inside the WSL distro.
 
 ## Troubleshooting
 
