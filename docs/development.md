@@ -171,7 +171,7 @@ See [envs.md](envs.md).
 1. **Clone the repository**:
 
    ```bash
-   git clone https://github.com/abc3/hydra-srt.git
+   git clone https://github.com/streamband/hydra-srt.git
    cd hydra-srt
    ```
 
@@ -227,93 +227,57 @@ Use `start_iex` when you want an interactive shell.
 
 > `duckdb` CLI is installed in the Docker image during build.
 
-Prebuilt Docker image is available on Docker Hub:
+The repository includes Compose files for the recommended Docker workflow.
 
-- [streamband/hydra-srt](https://hub.docker.com/r/streamband/hydra-srt)
+### Quick Start with Docker Compose
 
-### Quick Start with Published Image
-
-Native Linux:
+Build the local image:
 
 ```bash
-docker run --rm --network host \
-  -v "$(pwd)/data/db:/app/db" \
-  -e PHX_SERVER=true \
-  -e DATABASE_PATH=/app/db/hydra_srt.db \
-  -e ANALYTICS_DATABASE_PATH=/app/db/hydra_srt_analytics.duckdb \
-  -e API_AUTH_USERNAME=admin \
-  -e API_AUTH_PASSWORD=password123 \
-  streamband/hydra-srt:latest
+docker compose build
 ```
 
-Explicit port mappings:
+Start on native Linux:
 
 ```bash
-docker run --rm -p 4000:4000 \
-  -p 1935:1935 \
-  -p 4100-4500:4100-4500/udp \
-  -v "$(pwd)/data/db:/app/db" \
-  -e PHX_SERVER=true \
-  -e DATABASE_PATH=/app/db/hydra_srt.db \
-  -e ANALYTICS_DATABASE_PATH=/app/db/hydra_srt_analytics.duckdb \
-  -e API_AUTH_USERNAME=admin \
-  -e API_AUTH_PASSWORD=password123 \
-  streamband/hydra-srt:latest
+docker compose up
 ```
 
-Required env vars (see [envs.md](envs.md)):
+On first start (fresh `./data/db` volume), the container will automatically run DB migrations.
+To disable auto-migrations, set `RUN_MIGRATIONS=false`.
+`docker-compose.yml` uses `DATABASE_PATH=/app/db/hydra_srt.db`, `ANALYTICS_DATABASE_PATH=/app/db/hydra_srt_analytics.duckdb`, and mounts `./data/db`.
 
-- `API_AUTH_USERNAME`
-- `API_AUTH_PASSWORD`
-- `DATABASE_PATH`
-- `ANALYTICS_DATABASE_PATH`
+The default Compose file uses `network_mode: "host"` so HydraSRT can bind directly to the host network. This is intended for native Linux, including WSL2 only when Docker Engine runs inside the WSL distro.
 
-### Building and Running with Docker Compose
+If your Docker Engine cannot use Linux host networking, start with the ports override:
 
-1. **Build the Docker image**:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ports.yml up
+```
 
-   ```bash
-   docker compose build
-   ```
+To override the DB path, credentials, demo mode, or `POOL_SIZE`, create a `.env` file:
 
-2. **Start on native Linux**:
+```bash
+echo "API_AUTH_USERNAME=admin" > .env
+echo "API_AUTH_PASSWORD=password123" >> .env
+echo "DATABASE_PATH=/app/db/hydra_srt.db" >> .env
+echo "DEMO_DATA=false" >> .env
+echo "POOL_SIZE=1" >> .env
+```
 
-   ```bash
-   docker compose up
-   ```
+Open the UI:
 
-   On first start (fresh `./data/db` volume), the container will automatically run DB migrations.
-   To disable auto-migrations, set `RUN_MIGRATIONS=false`.
-   `docker-compose.yml` uses `DATABASE_PATH=/app/db/hydra_srt.db` and mounts `./data/db`.
+```
+http://127.0.0.1:4000
+```
 
-   The default Compose file uses `network_mode: "host"` so HydraSRT can bind directly to the host network. This is intended for native Linux, including WSL2 only when Docker Engine runs inside the WSL distro.
+Log in with `API_AUTH_USERNAME` and `API_AUTH_PASSWORD`.
 
-   If your Docker Engine cannot use Linux host networking, start with explicit port mappings:
+Stop:
 
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.ports.yml up
-   ```
-
-   To override the DB path (and/or increase `POOL_SIZE`), create a `.env` file:
-
-   ```bash
-   echo "DATABASE_PATH=/app/db/hydra_srt.db" > .env
-   echo "POOL_SIZE=1" >> .env
-   ```
-
-3. **Open the UI**:
-
-   ```
-   http://127.0.0.1:4000
-   ```
-
-   Log in with `API_AUTH_USERNAME` and `API_AUTH_PASSWORD`.
-
-4. **Stop**:
-
-   ```bash
-   docker compose down
-   ```
+```bash
+docker compose down
+```
 
 ### Docker Networking
 
@@ -353,6 +317,42 @@ docker compose -f docker-compose.yml -f docker-compose.ports.yml down
 ```
 
 Use the ports override when Linux host networking is not available or not desired. Docker Desktop-backed setups do not provide the same host network behavior as a native Linux Docker Engine. On WSL2, host networking is only the expected Linux behavior when Docker Engine runs inside the WSL distro.
+
+### Running the Published Image Directly
+
+Use direct `docker run` only when you do not want to use the repository Compose files.
+
+Prebuilt Docker image:
+
+- [streamband/hydra-srt](https://hub.docker.com/r/streamband/hydra-srt)
+
+Native Linux:
+
+```bash
+docker run --rm --network host \
+  -v "$(pwd)/data/db:/app/db" \
+  -e PHX_SERVER=true \
+  -e DATABASE_PATH=/app/db/hydra_srt.db \
+  -e ANALYTICS_DATABASE_PATH=/app/db/hydra_srt_analytics.duckdb \
+  -e API_AUTH_USERNAME=admin \
+  -e API_AUTH_PASSWORD=password123 \
+  streamband/hydra-srt:latest
+```
+
+Fallback with explicit port mappings:
+
+```bash
+docker run --rm -p 4000:4000 \
+  -p 1935:1935 \
+  -p 4100-4500:4100-4500/udp \
+  -v "$(pwd)/data/db:/app/db" \
+  -e PHX_SERVER=true \
+  -e DATABASE_PATH=/app/db/hydra_srt.db \
+  -e ANALYTICS_DATABASE_PATH=/app/db/hydra_srt_analytics.duckdb \
+  -e API_AUTH_USERNAME=admin \
+  -e API_AUTH_PASSWORD=password123 \
+  streamband/hydra-srt:latest
+```
 
 ## Troubleshooting
 

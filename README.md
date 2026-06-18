@@ -8,16 +8,16 @@
 <p align="center">
   An open-source alternative to Haivision SRT Gateway.
   <br />
-  <a href="https://github.com/abc3/hydra-srt/issues/new">Report Bug</a>
+  <a href="https://github.com/streamband/hydra-srt/issues/new">Report Bug</a>
   ·
-  <a href="https://github.com/abc3/hydra-srt/issues/new?labels=enhancement">Request Feature</a>
+  <a href="https://github.com/streamband/hydra-srt/issues/new?labels=enhancement">Request Feature</a>
 </p>
 
 ## Status
 
 > **Project Status**: Beta.
 
-[![GitHub License](https://img.shields.io/github/license/abc3/hydra-srt)](https://github.com/abc3/hydra-srt/blob/main/LICENSE)
+[![GitHub License](https://img.shields.io/github/license/streamband/hydra-srt)](https://github.com/streamband/hydra-srt/blob/main/LICENSE)
 
 ### Supported transports
 
@@ -47,7 +47,7 @@ RTMP output remuxes the route MPEG-TS stream to FLV without decoding. It support
 | Security | SRT passphrase and stream ID | Beta |
 | Observability | Prometheus metrics, route stats, and pipeline logs | Beta |
 
-Missing a feature? [Open an issue](https://github.com/abc3/hydra-srt/issues/new?labels=enhancement).
+Missing a feature? [Open an issue](https://github.com/streamband/hydra-srt/issues/new?labels=enhancement).
 
 ## Overview
 
@@ -158,4 +158,4 @@ Apache 2.0. See [LICENSE](LICENSE).
 
 ## Contact
 
-Use GitHub issues: [https://github.com/abc3/hydra-srt/issues](https://github.com/abc3/hydra-srt/issues)
+Use GitHub issues: [https://github.com/streamband/hydra-srt/issues](https://github.com/streamband/hydra-srt/issues)

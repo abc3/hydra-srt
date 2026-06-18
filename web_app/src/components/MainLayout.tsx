@@ -20,7 +20,7 @@ import type { ReactNode } from 'react';
 
 const { Sider, Content } = Layout;
 const { useBreakpoint } = Grid;
-const feedbackUrl = 'https://github.com/abc3/hydra-srt/issues/new';
+const feedbackUrl = 'https://github.com/streamband/hydra-srt/issues/new';
 
 declare global {
   interface Window {
