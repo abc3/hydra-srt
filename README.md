@@ -51,7 +51,9 @@ Missing a feature? [Open an issue](https://github.com/streamband/hydra-srt/issue
 
 ## Overview
 
-https://github.com/user-attachments/assets/8230f902-b037-424f-a337-a3828dac6a3c
+<p align="center">
+  <img src="docs/images/hydrasrt-dashboard.png" alt="HydraSRT operations dashboard" width="1200" />
+</p>
 
 HydraSRT is an open-source alternative to Haivision SRT Gateway for reliable video transport and routing. It manages SRT, UDP, and RTP (TS over RTP) streams with built-in failover, supervision, metrics, and a modern web UI and API designed for broadcast and live production workflows.
 
