@@ -41,6 +41,7 @@ defmodule HydraSrtWeb.Router do
 
   scope "/api", HydraSrtWeb do
     pipe_through [:api, :auth]
+    get "/dashboard", DashboardController, :show
     post "/routes/test-source", RouteController, :test_source
     get "/tags", RouteController, :list_tags
     post "/tags", RouteController, :create_tag

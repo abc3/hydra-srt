@@ -43,6 +43,7 @@ export const AUTH_USER_KEY = 'user';
 export const ROUTES = {
   LOGIN: '/login',
   HOME: '/',
+  DASHBOARD: '/dashboard',
   ROUTES: '/routes',
   INTERFACES: '/interfaces',
   SETTINGS: '/settings',

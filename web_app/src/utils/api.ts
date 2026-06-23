@@ -84,6 +84,10 @@ export const initApi = {
   get: async () => requestPublicJson<Record<string, unknown>>('/api/init', {}, 'Failed to load app init payload'),
 };
 
+export const dashboardApi = {
+  get: async () => requestJson<Record<string, unknown>>('/api/dashboard', {}, 'Failed to load dashboard'),
+};
+
 // System Pipelines API
 export const systemPipelinesApi = {
   // Get all pipeline processes

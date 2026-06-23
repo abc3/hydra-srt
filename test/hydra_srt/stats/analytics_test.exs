@@ -24,6 +24,44 @@ defmodule HydraSrt.Stats.AnalyticsTest do
     assert params.bucket_ms == 900_000
   end
 
+  test "route_status_point_series ignores events for deleted routes" do
+    from_dt = ~U[2026-06-23 09:00:00Z]
+    to_dt = ~U[2026-06-23 09:01:00Z]
+    bucket_ms = 60_000
+    allowed_route_ids = MapSet.new(["route-1"])
+
+    route_statuses = %{"route-1" => "processing"}
+
+    event_rows = [
+      %{
+        "route_id" => "route-deleted",
+        "ts_ms" => DateTime.to_unix(~U[2026-06-23 09:00:30Z], :millisecond),
+        "status" => "processing"
+      },
+      %{
+        "route_id" => "route-1",
+        "ts_ms" => DateTime.to_unix(~U[2026-06-23 09:00:30Z], :millisecond),
+        "status" => "stopped"
+      }
+    ]
+
+    assert [
+             %{processing: 1, stopped: 0},
+             %{processing: 0, stopped: 1}
+           ] =
+             Analytics.route_status_point_series(
+               route_statuses,
+               event_rows,
+               from_dt,
+               to_dt,
+               bucket_ms,
+               allowed_route_ids
+             )
+             |> Enum.map(fn point ->
+               Map.take(point, [:processing, :stopped])
+             end)
+  end
+
   test "fetch_node_timeseries returns storage and database points and metadata" do
     :ok = Duckdb.ensure_schema()
 
