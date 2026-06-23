@@ -4,6 +4,7 @@ import { StrictMode, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import MainLayout from './components/MainLayout';
+import Dashboard from './pages/Dashboard';
 import R from './pages/routes/Routes';
 import Settings from './pages/Settings';
 import RouteItem from './pages/routes/RouteItem';
@@ -116,7 +117,15 @@ const App = () => {
 
         <Route path={ROUTES.HOME} element={
           <ProtectedRoute>
-            <Navigate to={ROUTES.ROUTES} replace />
+            <Navigate to={ROUTES.DASHBOARD} replace />
+          </ProtectedRoute>
+        } />
+
+        <Route path={ROUTES.DASHBOARD} element={
+          <ProtectedRoute>
+            <MainLayout>
+              <Dashboard />
+            </MainLayout>
           </ProtectedRoute>
         } />
 

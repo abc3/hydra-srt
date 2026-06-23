@@ -344,6 +344,7 @@ defmodule HydraSrt.Stats.Analytics do
          {:ok, seed_rows} <- fetch_route_status_seed_rows(query_params, conn),
          {:ok, event_rows} <- fetch_route_status_event_rows(query_params, conn) do
       route_statuses = initial_route_statuses(routes, seed_rows)
+      allowed_route_ids = MapSet.new(routes, & &1["id"])
 
       points =
         build_route_status_points(
@@ -351,7 +352,8 @@ defmodule HydraSrt.Stats.Analytics do
           event_rows,
           query_params.from,
           query_params.to,
-          query_params.bucket_ms
+          query_params.bucket_ms,
+          allowed_route_ids
         )
 
       {:ok,
@@ -1033,14 +1035,54 @@ defmodule HydraSrt.Stats.Analytics do
         Map.put(acc, route_id, status)
       end)
 
-    Enum.reduce(seed_rows, base, fn row, acc ->
-      Map.put(acc, row["route_id"], normalize_route_status(row["status"]))
+    Enum.reduce(seed_rows, base, fn %{"route_id" => route_id, "status" => status}, acc ->
+      case Map.fetch(acc, route_id) do
+        :error -> acc
+        {:ok, _} -> Map.put(acc, route_id, normalize_route_status(status))
+      end
     end)
   end
 
-  defp build_route_status_points(route_statuses, event_rows, from_dt, to_dt, bucket_ms)
+  @doc false
+  @spec route_status_point_series(
+          map(),
+          [map()],
+          DateTime.t(),
+          DateTime.t(),
+          pos_integer(),
+          MapSet.t()
+        ) ::
+          [map()]
+  def route_status_point_series(
+        route_statuses,
+        event_rows,
+        from_dt,
+        to_dt,
+        bucket_ms,
+        allowed_route_ids
+      )
+      when is_map(route_statuses) and is_list(event_rows) and is_integer(bucket_ms) and
+             bucket_ms > 0 and is_struct(allowed_route_ids, MapSet) do
+    build_route_status_points(
+      route_statuses,
+      event_rows,
+      from_dt,
+      to_dt,
+      bucket_ms,
+      allowed_route_ids
+    )
+  end
+
+  defp build_route_status_points(
+         route_statuses,
+         event_rows,
+         from_dt,
+         to_dt,
+         bucket_ms,
+         allowed_route_ids
+       )
        when is_map(route_statuses) and is_list(event_rows) and is_integer(bucket_ms) and
-              bucket_ms > 0 do
+              bucket_ms > 0 and is_struct(allowed_route_ids, MapSet) do
     from_ms = DateTime.to_unix(from_dt, :millisecond)
     to_ms = DateTime.to_unix(to_dt, :millisecond)
     start_ms = ceil_ts_to_bucket(from_ms, bucket_ms)
@@ -1058,7 +1100,7 @@ defmodule HydraSrt.Stats.Analytics do
             apply_until_ms = min(bucket_ts_ms, to_ms)
 
             {updated_statuses, remaining_events} =
-              apply_events_until_bucket(statuses, events_left, apply_until_ms)
+              apply_events_until_bucket(statuses, events_left, apply_until_ms, allowed_route_ids)
 
             point =
               updated_statuses
@@ -1073,18 +1115,23 @@ defmodule HydraSrt.Stats.Analytics do
     end
   end
 
-  defp apply_events_until_bucket(statuses, events, bucket_ts_ms) do
-    do_apply_events_until_bucket(statuses, events, bucket_ts_ms)
+  defp apply_events_until_bucket(statuses, events, bucket_ts_ms, allowed_route_ids) do
+    do_apply_events_until_bucket(statuses, events, bucket_ts_ms, allowed_route_ids)
   end
 
-  defp do_apply_events_until_bucket(statuses, [], _bucket_ts_ms), do: {statuses, []}
+  defp do_apply_events_until_bucket(statuses, [], _bucket_ts_ms, _allowed_route_ids),
+    do: {statuses, []}
 
-  defp do_apply_events_until_bucket(statuses, [event | rest], bucket_ts_ms) do
+  defp do_apply_events_until_bucket(statuses, [event | rest], bucket_ts_ms, allowed_route_ids) do
     if event["ts_ms"] <= bucket_ts_ms do
       next_statuses =
-        Map.put(statuses, event["route_id"], normalize_route_status(event["status"]))
+        if MapSet.member?(allowed_route_ids, event["route_id"]) do
+          Map.put(statuses, event["route_id"], normalize_route_status(event["status"]))
+        else
+          statuses
+        end
 
-      do_apply_events_until_bucket(next_statuses, rest, bucket_ts_ms)
+      do_apply_events_until_bucket(next_statuses, rest, bucket_ts_ms, allowed_route_ids)
     else
       {statuses, [event | rest]}
     end

@@ -10,6 +10,7 @@ import {
   ApiOutlined,
   CodeOutlined,
   MessageOutlined,
+  DashboardOutlined,
 } from '@ant-design/icons';
 import { Button, Layout, Menu, Grid, Dropdown, message, Breadcrumb, Tooltip } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -29,11 +30,23 @@ declare global {
 }
 
 const getDefaultBreadcrumbItems = (path: string): any[] => {
+  if (path.startsWith(ROUTES.DASHBOARD)) {
+    return [
+      {
+        href: ROUTES.DASHBOARD,
+        title: <HomeOutlined />,
+      },
+      {
+        title: 'Dashboard',
+      }
+    ];
+  }
+
   if (path.startsWith(ROUTES.ROUTES)) {
     if (path === ROUTES.ROUTES) {
       return [
         {
-          href: ROUTES.ROUTES,
+          href: ROUTES.DASHBOARD,
           title: <HomeOutlined />,
         },
         {
@@ -44,7 +57,7 @@ const getDefaultBreadcrumbItems = (path: string): any[] => {
 
     return [
       {
-        href: ROUTES.ROUTES,
+        href: ROUTES.DASHBOARD,
         title: <HomeOutlined />,
       }
     ];
@@ -53,7 +66,7 @@ const getDefaultBreadcrumbItems = (path: string): any[] => {
   if (path.startsWith(ROUTES.SETTINGS)) {
     return [
       {
-        href: ROUTES.ROUTES,
+        href: ROUTES.DASHBOARD,
         title: <HomeOutlined />,
       },
       {
@@ -65,7 +78,7 @@ const getDefaultBreadcrumbItems = (path: string): any[] => {
   if (path.startsWith(ROUTES.INTERFACES)) {
     return [
       {
-        href: ROUTES.ROUTES,
+        href: ROUTES.DASHBOARD,
         title: <HomeOutlined />,
       },
       {
@@ -77,7 +90,7 @@ const getDefaultBreadcrumbItems = (path: string): any[] => {
   if (path.startsWith(ROUTES.SYSTEM_PIPELINES)) {
     return [
       {
-        href: ROUTES.ROUTES,
+        href: ROUTES.DASHBOARD,
         title: <HomeOutlined />,
       },
       {
@@ -89,7 +102,7 @@ const getDefaultBreadcrumbItems = (path: string): any[] => {
   if (path.startsWith(ROUTES.SYSTEM_NODES)) {
     return [
       {
-        href: ROUTES.ROUTES,
+        href: ROUTES.DASHBOARD,
         title: <HomeOutlined />,
       },
       {
@@ -100,7 +113,7 @@ const getDefaultBreadcrumbItems = (path: string): any[] => {
 
   return [
     {
-      href: ROUTES.ROUTES,
+      href: ROUTES.DASHBOARD,
       title: <HomeOutlined />,
     }
   ];
@@ -155,6 +168,11 @@ const MainLayout = ({ children }: { children: ReactNode }) => {
 
   const menuItems = [
     {
+      key: ROUTES.DASHBOARD,
+      icon: <DashboardOutlined />,
+      label: 'Dashboard',
+    },
+    {
       key: ROUTES.ROUTES,
       icon: <CompassOutlined />,
       label: 'Routes',
@@ -196,7 +214,9 @@ const MainLayout = ({ children }: { children: ReactNode }) => {
           boxShadow: 'none',
           zIndex: 10,
           borderRight: '1px solid #1a1a1a',
-          position: 'relative',
+          position: 'sticky',
+          top: 0,
+          alignSelf: 'flex-start',
           display: 'flex',
           flexDirection: 'column',
           height: '100vh',
@@ -222,7 +242,7 @@ const MainLayout = ({ children }: { children: ReactNode }) => {
               alignItems: 'center',
               cursor: 'pointer' 
             }}
-            onClick={() => navigate(ROUTES.ROUTES)}
+            onClick={() => navigate(ROUTES.DASHBOARD)}
           >
             <img src="/favicon.svg" alt="HydraSRT Logo" style={{ width: '40px', height: '40px', marginRight: '8px' }} />
             {!collapsed && 'HydraSRT'}
