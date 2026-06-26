@@ -112,6 +112,7 @@ defmodule HydraSrt do
            ) do
       :ok = emit_route_status_transition(id, previous_status, route_runtime_status(route))
       :ok = broadcast_route_items_status_for_id(id)
+      :ok = publish_terminal_zero_stats(route)
       {:ok, route}
     end
   end
@@ -128,6 +129,7 @@ defmodule HydraSrt do
            ) do
       :ok = emit_route_status_transition(id, previous_status, route_runtime_status(route))
       :ok = broadcast_route_items_status_for_id(id)
+      :ok = publish_terminal_zero_stats(route)
       {:ok, route}
     end
   end
@@ -235,4 +237,38 @@ defmodule HydraSrt do
       {:error, _reason} -> :ok
     end
   end
+
+  @doc false
+  def publish_terminal_zero_stats(route) when is_map(route) do
+    route_id = route["id"]
+
+    if is_binary(route_id) do
+      destinations =
+        route
+        |> Map.get("destinations", [])
+        |> Enum.filter(&(&1["enabled"] == true))
+        |> Enum.flat_map(fn
+          %{"id" => id} when is_binary(id) ->
+            [%{"id" => id, "bytes_out_per_sec" => 0}]
+
+          _ ->
+            []
+        end)
+
+      HydraSrt.RouteHandler.publish_stats(
+        route_id,
+        %{
+          "source" => %{"bytes_in_per_sec" => 0},
+          "destinations" => destinations
+        },
+        %{
+          active_source_id: route["active_source_id"]
+        }
+      )
+    end
+
+    :ok
+  end
+
+  def publish_terminal_zero_stats(_route), do: :ok
 end

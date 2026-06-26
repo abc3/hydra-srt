@@ -19,6 +19,7 @@ import { getErrorMessage } from '../../types/errors';
 import type { InterfaceOption, InterfaceRecord } from '../../types/interfaces';
 
 const { Title } = Typography;
+const ANY_INTERFACE_OPTION: InterfaceOption = { label: 'Any interface', value: '' };
 
 const RouteDestEdit = ({ initialValues, onChange }: RouteDestEditProps) => {
     const [form] = Form.useForm();
@@ -159,7 +160,7 @@ const RouteDestEdit = ({ initialValues, onChange }: RouteDestEditProps) => {
                 }, []);
 
                 if (mounted) {
-                    setInterfaceOptions(options);
+                    setInterfaceOptions([ANY_INTERFACE_OPTION, ...options]);
                 }
             } catch (error) {
                 if (mounted) {

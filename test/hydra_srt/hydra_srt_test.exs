@@ -76,6 +76,8 @@ defmodule HydraSrtTest do
   end
 
   test "mark_route_stopped/1 sets schema status and stops only enabled destinations" do
+    Phoenix.PubSub.subscribe(HydraSrt.PubSub, "stats")
+
     route =
       route_fixture(%{
         status: "started",
@@ -83,7 +85,7 @@ defmodule HydraSrtTest do
         stopped_at: nil
       })
 
-    destination_fixture(route, %{status: "starting", enabled: true})
+    enabled_destination = destination_fixture(route, %{status: "starting", enabled: true})
     destination_fixture(route, %{status: "processing", enabled: false})
 
     assert {:ok, updated} = HydraSrt.mark_route_stopped(route.id)
@@ -100,6 +102,21 @@ defmodule HydraSrtTest do
 
     assert {true, "stopped"} in statuses_by_enabled
     assert {false, "processing"} in statuses_by_enabled
+
+    assert_receive {:stats,
+                    %{
+                      route_id: route_id,
+                      metric: "snapshot",
+                      stats: %{
+                        "source" => %{"bytes_in_per_sec" => 0},
+                        "destinations" => [
+                          %{"id" => destination_id, "bytes_out_per_sec" => 0}
+                        ]
+                      }
+                    }}
+
+    assert route_id == route.id
+    assert destination_id == enabled_destination.id
   end
 
   test "mark_route_failed/1 sets schema status to failed and timestamps stop time" do

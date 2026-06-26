@@ -2,6 +2,7 @@ type EndpointValue = string | number | boolean | null | undefined;
 export type EndpointRecord = Record<string, unknown> & {
   schema?: string;
   mode?: string;
+  interface_sys_name?: EndpointValue;
   address?: EndpointValue;
   localaddress?: EndpointValue;
   host?: EndpointValue;
@@ -58,6 +59,13 @@ export const normalizeEndpointForForm = (endpoint: EndpointRecord | null | undef
   }
 
   const flat = normalizeBooleanAliases({ ...endpoint });
+
+  if (
+    Object.prototype.hasOwnProperty.call(flat, 'interface_sys_name') &&
+    flat.interface_sys_name === undefined
+  ) {
+    flat.interface_sys_name = null;
+  }
 
   // Backward compatibility: legacy SRT records may still persist remote peer in `host`
   // (historically from schema_options JSON) while the current form uses `address`.

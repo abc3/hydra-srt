@@ -56,4 +56,16 @@ describe('endpointOptions', () => {
     expect(payload?.interface_sys_name).toBe('en0');
     expect(payload?.multicast_iface).toBe('en0');
   });
+
+  it('sends null when a selected interface is cleared', () => {
+    const payload = flattenEndpointPayload({
+      schema: 'SRT',
+      mode: 'listener',
+      interface_sys_name: undefined,
+      localaddress: '0.0.0.0',
+      localport: 9100,
+    });
+
+    expect(payload?.interface_sys_name).toBeNull();
+  });
 });

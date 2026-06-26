@@ -253,6 +253,9 @@ const hasRouteReachedActionResult = (route: RouteRecord | null | undefined, acti
   return runtimeStatus === 'stopped' || runtimeStatus === 'failed';
 };
 
+const isTerminalRuntimeStatus = (status: string | null | undefined) =>
+  ['stopped', 'failed'].includes((status || '').toLowerCase());
+
 const RouteItem = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
@@ -299,6 +302,58 @@ const RouteItem = () => {
     [destinationIdsDependency]
   );
 
+  const appendLiveZeroPoint = useCallback(() => {
+    if (analyticsWindow !== LIVE_ANALYTICS_WINDOW || analyticsCardTab !== 'bandwidth') {
+      return;
+    }
+
+    if (liveSnapshotFlushTimerRef.current) {
+      window.clearTimeout(liveSnapshotFlushTimerRef.current);
+      liveSnapshotFlushTimerRef.current = null;
+    }
+
+    liveSnapshotBufferRef.current = null;
+
+    const timestamp = alignToSecondIso(new Date());
+    const cutoffMs = Date.now() - (LIVE_WINDOW_MINUTES * 60 * 1000);
+    const zeroDestinations = (routeData?.destinations || []).reduce<Record<string, number>>(
+      (acc, destination) => {
+        if (destination?.id && destination.enabled !== false) {
+          acc[String(destination.id)] = 0;
+        }
+
+        return acc;
+      },
+      {},
+    );
+
+    setAnalyticsData((prev) => {
+      const prevPoints = prev?.points || [];
+      const zeroPoint: AnalyticsPoint = {
+        timestamp,
+        source: 0,
+        destinations: zeroDestinations,
+      };
+      const existingIndex = prevPoints.findIndex((point) => point.timestamp === timestamp);
+
+      const mergedPoints = existingIndex >= 0
+        ? prevPoints.map((point, index) => (index === existingIndex ? zeroPoint : point))
+        : [...prevPoints, zeroPoint];
+
+      const trimmedPoints = mergedPoints
+        .filter((point) => {
+          const pointMs = Date.parse(String(point.timestamp ?? ''));
+          return !Number.isNaN(pointMs) && pointMs >= cutoffMs;
+        })
+        .slice(-MAX_LIVE_POINTS);
+
+      return {
+        ...prev,
+        points: trimmedPoints,
+      };
+    });
+  }, [analyticsWindow, analyticsCardTab, routeData?.destinations]);
+
   // Breadcrumb setup
   useEffect(() => {
     if (window.setBreadcrumbItems) {
@@ -342,6 +397,10 @@ const RouteItem = () => {
 
         if (!itemIdFromEvent || typeof status !== 'string' || status.length === 0) {
           return;
+        }
+
+        if (itemIdFromEvent === routeData.id && isTerminalRuntimeStatus(status)) {
+          appendLiveZeroPoint();
         }
 
         setRouteData((prev) => {
@@ -402,7 +461,7 @@ const RouteItem = () => {
         unsubscribe?.();
       });
     };
-  }, [routeData?.id, sourceIdsSignature, destinationIdsSignature]);
+  }, [routeData?.id, sourceIdsSignature, destinationIdsSignature, appendLiveZeroPoint]);
 
   useEffect(() => {
     if (!routeData?.id) {

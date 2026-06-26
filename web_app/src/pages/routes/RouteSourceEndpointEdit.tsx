@@ -20,6 +20,7 @@ import type { InterfaceOption, InterfaceRecord } from '../../types/interfaces';
 import SrtAccessFields from './SrtAccessFields';
 
 const { Title } = Typography;
+const ANY_INTERFACE_OPTION: InterfaceOption = { label: 'Any interface', value: '' };
 
 const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpointEditProps) => {
     const [form] = Form.useForm();
@@ -159,7 +160,7 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                 }, []);
 
                 if (mounted) {
-                    setInterfaceOptions(options);
+                    setInterfaceOptions([ANY_INTERFACE_OPTION, ...options]);
                 }
             } catch (error) {
                 if (mounted) {

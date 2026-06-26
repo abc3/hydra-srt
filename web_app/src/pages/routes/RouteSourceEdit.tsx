@@ -45,6 +45,7 @@ import type { EndpointRecord } from './endpointOptions';
 import SrtAccessFields from './SrtAccessFields';
 
 const { Title } = Typography;
+const ANY_INTERFACE_OPTION: InterfaceOption = { label: 'Any interface', value: '' };
 
 type RouteEditFormValues = Omit<RouteFormValues, 'sources' | 'destinations'> & {
   sources?: EndpointRecord[];
@@ -195,7 +196,7 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
           .filter((option): option is InterfaceOption => Boolean(option.value));
 
         if (mounted) {
-          setInterfaceOptions(options);
+          setInterfaceOptions([ANY_INTERFACE_OPTION, ...options]);
         }
       } catch (error) {
         if (mounted) {
