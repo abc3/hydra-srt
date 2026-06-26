@@ -15,7 +15,7 @@ defmodule HydraSrt.Api.Route do
     field :status, :string
     field :schema_status, :string
     field :node, :string
-    field :gst_debug, :string, default: "4"
+    field :gst_debug, :string, default: "2"
     field :backup_mode, :string, default: "passive"
     field :backup_switch_after_ms, :integer, default: 3000
     field :backup_cooldown_ms, :integer, default: 10000

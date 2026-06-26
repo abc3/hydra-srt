@@ -73,6 +73,7 @@ const DEFAULT_DESTINATION = {
 const getInitialFormValues = (initialValues?: Partial<RouteEditFormValues>): RouteEditFormValues => ({
   enabled: true,
   node: 'self',
+  gstDebug: '2',
   backup_mode: 'passive',
   backup_switch_after_ms: 3000,
   backup_cooldown_ms: 10000,
@@ -627,7 +628,7 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                   </Form.Item>
 
                   <Form.Item label="GST_DEBUG" name="gstDebug">
-                    <Input placeholder="GST_AUTOPLUG:6,GST_ELEMENT_*:4" />
+                    <Input placeholder="2 (default: warnings) or e.g. GST_AUTOPLUG:6,srtlib:4" />
                   </Form.Item>
 
                   <Form.Item label="Node" name="node" rules={[{ required: true, message: 'Please select a node' }]}>
