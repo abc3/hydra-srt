@@ -368,6 +368,36 @@ defmodule HydraSrt.RouteHandlerTest do
     assert RouteHandler.next_enabled_source(sources, "p", "passive")["id"] == "b2"
   end
 
+  test "failover_target_source is nil when only one enabled source would wrap to itself" do
+    sources = [
+      %{"id" => "p", "position" => 0, "enabled" => true},
+      %{"id" => "b1", "position" => 1, "enabled" => false}
+    ]
+
+    assert RouteHandler.failover_target_source(sources, "p", "passive") == nil
+    assert RouteHandler.failover_target_source(sources, "p", "active") == nil
+  end
+
+  test "failover_target_source returns alternate source when backup is available" do
+    sources = [
+      %{"id" => "p", "position" => 0, "enabled" => true},
+      %{"id" => "b1", "position" => 1, "enabled" => true}
+    ]
+
+    assert RouteHandler.failover_target_source(sources, "p", "passive")["id"] == "b1"
+    assert RouteHandler.failover_target_source(sources, "b1", "passive")["id"] == "p"
+    assert RouteHandler.failover_target_source(sources, "p", "active")["id"] == "b1"
+  end
+
+  test "failover_target_source is nil in disabled backup mode" do
+    sources = [
+      %{"id" => "p", "position" => 0, "enabled" => true},
+      %{"id" => "b1", "position" => 1, "enabled" => true}
+    ]
+
+    assert RouteHandler.failover_target_source(sources, "p", "disabled") == nil
+  end
+
   test "next_enabled_source returns current source when it is the only enabled source" do
     sources = [
       %{"id" => "p", "position" => 0, "enabled" => true},

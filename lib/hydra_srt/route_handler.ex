@@ -585,10 +585,7 @@ defmodule HydraSrt.RouteHandler do
     mode = backup_mode(data.route)
     sources = get_in(data, [:route, "sources"]) || []
 
-    case next_enabled_source(sources, data.active_source_id, mode) do
-      %{"id" => id} = source when is_binary(id) -> source
-      _ -> nil
-    end
+    failover_target_source(sources, data.active_source_id, mode)
   end
 
   defp failover_to_source(data, source_id, reason) do
@@ -1331,6 +1328,18 @@ defmodule HydraSrt.RouteHandler do
   end
 
   def multicast_address?(_), do: false
+
+  @doc false
+  def failover_target_source(sources, active_source_id, mode)
+      when is_list(sources) and mode in ["active", "passive", "disabled"] do
+    case next_enabled_source(sources, active_source_id, mode) do
+      %{"id" => id} when is_binary(id) and id == active_source_id -> nil
+      %{"id" => _} = source -> source
+      _ -> nil
+    end
+  end
+
+  def failover_target_source(_sources, _active_source_id, _mode), do: nil
 
   @doc false
   def next_enabled_source(sources, current_id, mode)
