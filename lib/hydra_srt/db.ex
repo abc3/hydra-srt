@@ -754,7 +754,7 @@ defmodule HydraSrt.Db do
              |> Repo.update_all(set: [status: sources_status, updated_at: now])
            end
 
-           %{route: get_route_map(updated_route.id), previous_status: previous_status}
+           %{route: get_route_map(updated_route.id, true), previous_status: previous_status}
          end) do
       {:ok, payload} ->
         {:ok, payload}
