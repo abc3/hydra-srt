@@ -1,5 +1,8 @@
 rs-native/target
 target
+native/target
 _build
 deps
 node_modules
+web_app/node_modules
+web_app/dist

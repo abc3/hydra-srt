@@ -1,10 +1,13 @@
 ARG ELIXIR_VERSION=1.18
 ARG OTP_VERSION=27.3
 ARG DEBIAN_VERSION=bookworm-20250929-slim
+ARG NODE_MAJOR=24
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
 
-FROM ${BUILDER_IMAGE} as builder
+FROM ${BUILDER_IMAGE} AS builder
+
+ARG NODE_MAJOR=24
 
 ENV MIX_ENV="prod"
 
@@ -17,11 +20,11 @@ RUN apt-get update -y \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Install Node.js 18.x
+# Install Node.js for the web application build
 RUN mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
     | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_18.x nodistro main" \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
     > /etc/apt/sources.list.d/nodesource.list \
     && apt-get update -y \
     && apt-get install -y nodejs \
@@ -68,7 +71,7 @@ COPY rel rel
 
 # Build the web application
 RUN cd web_app \
-    && npm install \
+    && npm ci \
     && npm run build
 
 # Compile the Elixir application. This also builds native in release mode via mix compiler.
