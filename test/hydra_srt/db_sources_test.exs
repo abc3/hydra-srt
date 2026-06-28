@@ -43,6 +43,29 @@ defmodule HydraSrt.DbSourcesTest do
     assert length(updated_route["sources"]) == 1
   end
 
+  test "persists streamid for an SRT caller source" do
+    route = route_fixture()
+
+    assert {:ok, created} =
+             Db.create_source(route["id"], %{
+               "position" => 0,
+               "schema" => "SRT",
+               "mode" => "caller",
+               "address" => "198.51.100.20",
+               "port" => 4209,
+               "streamid" => "#!::r=primary"
+             })
+
+    assert created["streamid"] == "#!::r=primary"
+    assert {:ok, fetched} = Db.get_source(route["id"], created["id"])
+    assert fetched["streamid"] == "#!::r=primary"
+
+    assert {:ok, updated} =
+             Db.update_source(route["id"], created["id"], %{"streamid" => "#!::r=backup"})
+
+    assert updated["streamid"] == "#!::r=backup"
+  end
+
   test "set_route_active_source broadcasts item_source event" do
     route = route_fixture()
     source = source_fixture(route, %{"position" => 0})

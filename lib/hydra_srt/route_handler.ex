@@ -1094,6 +1094,13 @@ defmodule HydraSrt.RouteHandler do
       |> maybe_add_param(opts, "pbkeylen")
       |> maybe_add_param(opts, "poll-timeout")
 
+    query_params =
+      if mode in ["caller", "rendezvous"] do
+        maybe_add_param(query_params, opts, "streamid")
+      else
+        query_params
+      end
+
     {host, port} =
       case mode do
         "caller" ->
@@ -1131,17 +1138,19 @@ defmodule HydraSrt.RouteHandler do
 
     with {:ok, resolved_opts} <- resolve_interface_options(opts) do
       name = Map.get(destination, "name", id)
+      uri = build_srt_uri(resolved_opts)
+      runtime_opts = drop_srt_uri_options(resolved_opts)
 
       # Native pipeline expects SRT properties directly on the element config (not a URI).
       {:ok,
        %{
          "type" => "srtsink",
-         "uri" => build_srt_uri(resolved_opts),
+         "uri" => uri,
          "hydra_destination_id" => id,
          "hydra_destination_name" => name,
          "hydra_destination_schema" => "SRT"
        }
-       |> Map.merge(resolved_opts)}
+       |> Map.merge(runtime_opts)}
     end
   end
 
@@ -1217,9 +1226,11 @@ defmodule HydraSrt.RouteHandler do
 
     with false <- map_size(opts) == 0,
          {:ok, resolved_opts} <- resolve_interface_options(opts) do
+      uri = build_srt_uri(resolved_opts)
+      runtime_opts = drop_srt_uri_options(resolved_opts)
+
       # Native pipeline expects SRT properties directly on the element config (not a URI).
-      {:ok,
-       %{"type" => "srtsrc", "uri" => build_srt_uri(resolved_opts)} |> Map.merge(resolved_opts)}
+      {:ok, %{"type" => "srtsrc", "uri" => uri} |> Map.merge(runtime_opts)}
     else
       true -> {:error, :invalid_source}
     end
@@ -1439,6 +1450,9 @@ defmodule HydraSrt.RouteHandler do
 
   def resolve_interface_options(_), do: {:error, :invalid_options}
 
+  @doc false
+  def drop_srt_uri_options(opts), do: Map.delete(opts, "streamid")
+
   defp endpoint_options_from_record(record) when is_map(record) do
     %{}
     |> put_opt(record, "mode")
@@ -1450,6 +1464,7 @@ defmodule HydraSrt.RouteHandler do
     |> put_opt(record, "host")
     |> put_opt(record, "latency")
     |> put_opt(record, "authentication")
+    |> put_opt(record, "streamid")
     |> put_opt(record, "passphrase")
     |> put_opt(record, "pbkeylen")
     |> put_opt(record, "poll-timeout", "poll_timeout")

@@ -61,6 +61,27 @@ defmodule HydraSrtWeb.SourceControllerTest do
     assert json_response(conn, 422)["errors"] != %{}
   end
 
+  test "create and update SRT source streamid", %{conn: conn, route: %{id: route_id}} do
+    attrs = %{
+      "position" => 0,
+      "schema" => "SRT",
+      "mode" => "caller",
+      "address" => "198.51.100.20",
+      "port" => 4209,
+      "streamid" => "#!::r=primary"
+    }
+
+    conn = post(conn, ~p"/api/routes/#{route_id}/sources", source: attrs)
+    assert %{"id" => source_id, "streamid" => "#!::r=primary"} = json_response(conn, 201)["data"]
+
+    conn =
+      patch(conn, ~p"/api/routes/#{route_id}/sources/#{source_id}",
+        source: %{"streamid" => "#!::r=backup"}
+      )
+
+    assert %{"streamid" => "#!::r=backup"} = json_response(conn, 200)["data"]
+  end
+
   test "create UDP multicast source persists multicast fields", %{
     conn: conn,
     route: %{id: route_id}

@@ -28,6 +28,7 @@ defmodule HydraSrt.Api.Endpoint do
     field :host, :string
     field :latency, :integer
     field :authentication, :boolean
+    field :streamid, :string
     field :passphrase, :string
     field :pbkeylen, :integer
     field :poll_timeout, :integer
@@ -130,6 +131,7 @@ defmodule HydraSrt.Api.Endpoint do
       :host,
       :latency,
       :authentication,
+      :streamid,
       :passphrase,
       :pbkeylen,
       :poll_timeout,

@@ -146,12 +146,22 @@ describe('Route form validation', () => {
     expect(sourceScope.getByText('Limit Access')).toBeInTheDocument();
     expect(sourceScope.getByText('Allowed IPs')).toBeInTheDocument();
     expect(sourceScope.getByText('Denied IPs')).toBeInTheDocument();
+    expect(sourceScope.queryByPlaceholderText('Enter Stream ID')).not.toBeInTheDocument();
 
     fireEvent.click(sourceScope.getByRole('radio', { name: 'Caller' }));
 
     await waitFor(() => {
       expect(sourceScope.queryByText('Limit Access')).not.toBeInTheDocument();
+      expect(sourceScope.getByPlaceholderText('Enter Stream ID')).toBeInTheDocument();
     });
+
+    fireEvent.change(sourceScope.getByPlaceholderText('Enter Stream ID'), {
+      target: { value: '#!::r=channel' },
+    });
+    fireEvent.click(sourceScope.getByRole('radio', { name: 'Listener' }));
+    expect(sourceScope.queryByPlaceholderText('Enter Stream ID')).not.toBeInTheDocument();
+    fireEvent.click(sourceScope.getByRole('radio', { name: 'Caller' }));
+    expect(sourceScope.getByPlaceholderText('Enter Stream ID')).toHaveValue('#!::r=channel');
   });
 
   it('shows destination SRT authentication fields on new route form', async () => {
@@ -178,6 +188,7 @@ describe('Route form validation', () => {
 
     await waitFor(() => {
       expect(destinationScope.getByText('Authentication')).toBeInTheDocument();
+      expect(destinationScope.getByPlaceholderText('Enter Stream ID')).toBeInTheDocument();
     });
 
     const switches = destinationScope.getAllByRole('switch');

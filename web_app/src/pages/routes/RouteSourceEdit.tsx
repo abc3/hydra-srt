@@ -804,6 +804,18 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                                       <InputNumber style={{ width: 180 }} />
                                     </Form.Item>
 
+                                    {showRemote && (
+                                      <Form.Item
+                                        key={`source-${field.key}-streamid`}
+                                        label="Stream ID"
+                                        name={[field.name, 'streamid']}
+                                        preserve
+                                        extra="Optional SRT Stream ID sent to the remote peer."
+                                      >
+                                        <Input placeholder="Enter Stream ID" />
+                                      </Form.Item>
+                                    )}
+
                                     <Form.Item
                                       key={`source-${field.key}-bind-address`}
                                       label="Bind Address"
@@ -1072,6 +1084,17 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                                               >
                                                 <InputNumber style={{ width: 150 }} placeholder="Enter remote port" />
                                               </Form.Item>
+
+                                              {showRemote && (
+                                                <Form.Item
+                                                  label="Stream ID"
+                                                  name={[field.name, 'streamid']}
+                                                  preserve
+                                                  extra="Optional SRT Stream ID sent to the remote peer."
+                                                >
+                                                  <Input placeholder="Enter Stream ID" />
+                                                </Form.Item>
+                                              )}
 
                                               <Form.Item
                                                 label="Bind Port"

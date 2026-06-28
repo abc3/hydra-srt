@@ -379,6 +379,17 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                                                                         </Form.Item>
                                                                     )}
 
+                                                                    {(isCaller || isRendezvous) && (
+                                                                        <Form.Item
+                                                                            label="Stream ID"
+                                                                            name="streamid"
+                                                                            preserve
+                                                                            extra="Optional SRT Stream ID sent to the remote peer."
+                                                                        >
+                                                                            <Input placeholder="Enter Stream ID" />
+                                                                        </Form.Item>
+                                                                    )}
+
                                                                     {(!isCaller || isRendezvous) && (
                                                                         <Form.Item
                                                                             label="Bind Address"

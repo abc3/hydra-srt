@@ -103,6 +103,94 @@ defmodule HydraSrt.RouteHandlerTest do
     assert RouteHandler.build_srt_uri(opts) == "srt://198.51.100.20:4209?mode=caller"
   end
 
+  test "build_srt_uri encodes streamid with SRT authentication options" do
+    opts = %{
+      "mode" => "caller",
+      "address" => "198.51.100.20",
+      "port" => 4209,
+      "streamid" => "#!::r=channel",
+      "passphrase" => "some_pass_1",
+      "pbkeylen" => 16
+    }
+
+    uri = RouteHandler.build_srt_uri(opts)
+    query = URI.parse(uri).query |> URI.decode_query()
+
+    assert URI.parse(uri).host == "198.51.100.20"
+    assert URI.parse(uri).port == 4209
+
+    assert query == %{
+             "mode" => "caller",
+             "streamid" => "#!::r=channel",
+             "passphrase" => "some_pass_1",
+             "pbkeylen" => "16"
+           }
+  end
+
+  test "build_srt_uri supports streamid in rendezvous mode" do
+    uri =
+      RouteHandler.build_srt_uri(%{
+        "mode" => "rendezvous",
+        "address" => "198.51.100.20",
+        "port" => 4209,
+        "streamid" => "channel"
+      })
+
+    assert URI.decode_query(URI.parse(uri).query) == %{
+             "mode" => "rendezvous",
+             "streamid" => "channel"
+           }
+  end
+
+  test "build_srt_uri omits nil and empty streamid" do
+    base = %{"mode" => "caller", "address" => "198.51.100.20", "port" => 4209}
+
+    for streamid <- [nil, ""] do
+      uri = RouteHandler.build_srt_uri(Map.put(base, "streamid", streamid))
+      refute URI.decode_query(URI.parse(uri).query) |> Map.has_key?("streamid")
+    end
+  end
+
+  test "build_srt_uri omits preserved streamid in listener mode" do
+    uri =
+      RouteHandler.build_srt_uri(%{
+        "mode" => "listener",
+        "localaddress" => "127.0.0.1",
+        "localport" => 4201,
+        "streamid" => "#!::r=preserved"
+      })
+
+    refute URI.decode_query(URI.parse(uri).query) |> Map.has_key?("streamid")
+  end
+
+  test "source_from_record does not send preserved streamid to a listener pipeline" do
+    record = %{
+      "schema" => "SRT",
+      "mode" => "listener",
+      "localaddress" => "127.0.0.1",
+      "localport" => 4201,
+      "streamid" => "#!::r=preserved"
+    }
+
+    assert {:ok, source} = RouteHandler.source_from_record(record)
+    refute Map.has_key?(source, "streamid")
+    refute URI.decode_query(URI.parse(source["uri"]).query) |> Map.has_key?("streamid")
+  end
+
+  test "source_from_record sends caller streamid only through the URI" do
+    record = %{
+      "schema" => "SRT",
+      "mode" => "caller",
+      "address" => "198.51.100.20",
+      "port" => 4209,
+      "streamid" => "#!::r=channel"
+    }
+
+    assert {:ok, source} = RouteHandler.source_from_record(record)
+    refute Map.has_key?(source, "streamid")
+    assert URI.decode_query(URI.parse(source["uri"]).query)["streamid"] == "#!::r=channel"
+  end
+
   test "strip_cidr_suffix removes netmask from discovered interface ip" do
     assert RouteHandler.strip_cidr_suffix("172.20.20.12/24") == "172.20.20.12"
     assert RouteHandler.strip_cidr_suffix("fe80::1%en0/64") == "fe80::1%en0"
@@ -462,7 +550,8 @@ defmodule HydraSrt.RouteHandlerTest do
       "schema" => "SRT",
       "localaddress" => "127.0.0.1",
       "localport" => 4202,
-      "mode" => "caller"
+      "mode" => "caller",
+      "streamid" => "#!::r=destination"
     }
 
     assert {:ok, sink} = RouteHandler.sink_from_record(record)
@@ -470,6 +559,23 @@ defmodule HydraSrt.RouteHandlerTest do
     assert sink["hydra_destination_id"] == "dest1"
     assert sink["hydra_destination_name"] == "Destination 1"
     assert sink["hydra_destination_schema"] == "SRT"
+    refute Map.has_key?(sink, "streamid")
+    assert URI.decode_query(URI.parse(sink["uri"]).query)["streamid"] == "#!::r=destination"
+  end
+
+  test "sink_from_record does not send preserved streamid to a listener pipeline" do
+    record = %{
+      "id" => "dest-listener",
+      "schema" => "SRT",
+      "localaddress" => "127.0.0.1",
+      "localport" => 4202,
+      "mode" => "listener",
+      "streamid" => "#!::r=preserved"
+    }
+
+    assert {:ok, sink} = RouteHandler.sink_from_record(record)
+    refute Map.has_key?(sink, "streamid")
+    refute URI.decode_query(URI.parse(sink["uri"]).query) |> Map.has_key?("streamid")
   end
 
   test "sink_from_record includes hydra destination metadata for UDP" do

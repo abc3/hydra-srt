@@ -20,6 +20,7 @@ export type EndpointFormValues = Record<string, unknown> & {
   location?: string;
   latency?: number;
   authentication?: boolean;
+  streamid?: string;
   passphrase?: string;
   pbkeylen?: number;
 };

@@ -1360,6 +1360,7 @@ defmodule HydraSrt.Db do
       "host" => endpoint.host,
       "latency" => endpoint.latency,
       "authentication" => endpoint.authentication,
+      "streamid" => endpoint.streamid,
       "passphrase" => endpoint.passphrase,
       "pbkeylen" => endpoint.pbkeylen,
       "poll_timeout" => endpoint.poll_timeout,

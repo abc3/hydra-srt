@@ -10,6 +10,7 @@ export type EndpointRecord = Record<string, unknown> & {
   localport?: EndpointValue;
   auto_reconnect?: EndpointValue;
   keep_listening?: EndpointValue;
+  streamid?: EndpointValue;
   multicast?: EndpointValue;
   multicast_iface?: EndpointValue;
   bind_address_option?: EndpointValue;

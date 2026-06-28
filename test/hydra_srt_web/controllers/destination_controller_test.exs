@@ -75,6 +75,29 @@ defmodule HydraSrtWeb.DestinationControllerTest do
       conn = post(conn, ~p"/api/routes/#{route_id}/destinations", destination: @invalid_attrs)
       assert json_response(conn, 422)["errors"] != %{}
     end
+
+    test "persists SRT destination streamid", %{conn: conn, route: %{id: route_id}} do
+      attrs = %{
+        "enabled" => true,
+        "name" => "SRT output",
+        "schema" => "SRT",
+        "mode" => "caller",
+        "address" => "198.51.100.30",
+        "port" => 4210,
+        "streamid" => "#!::r=output"
+      }
+
+      conn = post(conn, ~p"/api/routes/#{route_id}/destinations", destination: attrs)
+
+      assert %{"id" => id, "streamid" => "#!::r=output"} = json_response(conn, 201)["data"]
+
+      conn =
+        put(conn, ~p"/api/routes/#{route_id}/destinations/#{id}",
+          destination: %{"streamid" => "#!::r=updated"}
+        )
+
+      assert %{"streamid" => "#!::r=updated"} = json_response(conn, 200)["data"]
+    end
   end
 
   describe "update destination" do

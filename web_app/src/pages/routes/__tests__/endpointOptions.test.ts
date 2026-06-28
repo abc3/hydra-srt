@@ -68,4 +68,17 @@ describe('endpointOptions', () => {
 
     expect(payload?.interface_sys_name).toBeNull();
   });
+
+  it('preserves streamid through API normalization and flattening', () => {
+    const endpoint = normalizeEndpointForForm({
+      schema: 'SRT',
+      mode: 'caller',
+      address: '198.51.100.20',
+      port: 4209,
+      streamid: '#!::r=channel',
+    });
+
+    expect(endpoint?.streamid).toBe('#!::r=channel');
+    expect(flattenEndpointPayload(endpoint)?.streamid).toBe('#!::r=channel');
+  });
 });

@@ -121,6 +121,32 @@ Notes:
 
 ## Sources Management
 
+### SRT Caller Stream ID
+
+SRT source and destination endpoints in `caller` or `rendezvous` mode accept an optional
+`streamid`. HydraSRT preserves the value as an opaque string and URL-encodes it when building
+the SRT connection URI. Stream ID is independent of passphrase authentication.
+
+Example caller source payload:
+
+```json
+{
+  "source": {
+    "schema": "SRT",
+    "mode": "caller",
+    "address": "198.51.100.20",
+    "port": 4209,
+    "streamid": "#!::r=channel",
+    "authentication": true,
+    "passphrase": "some_pass_1",
+    "pbkeylen": 16
+  }
+}
+```
+
+The same `streamid` field is accepted for an SRT caller/rendezvous destination. Listener
+endpoints receive the Stream ID from the remote caller and do not configure an outgoing value.
+
 ### SRT Listener IP Access Control
 
 SRT source endpoints in `mode=listener` can optionally limit incoming caller connections by IP address. This is a source-level stream access control feature; route control only stores and forwards the source settings to the native pipeline process.

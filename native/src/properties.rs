@@ -48,6 +48,12 @@ pub fn apply_element_properties_with_logging(
             continue;
         }
 
+        if (config.element_type == "srtsrc" || config.element_type == "srtsink")
+            && key == "streamid"
+        {
+            continue;
+        }
+
         match value {
             Value::Bool(v) => element.set_property(key.as_str(), *v),
             Value::Number(v) => {
@@ -175,10 +181,18 @@ pub fn build_srt_uri(props: &BTreeMap<String, Value>) -> Option<String> {
     };
 
     let mut query = Vec::new();
-    for key in ["mode"] {
-        if let Some(value) = props.get(key) {
+    let query_keys = if mode == "caller" || mode == "rendezvous" {
+        ["mode", "streamid"].as_slice()
+    } else {
+        ["mode"].as_slice()
+    };
+
+    for key in query_keys {
+        if let Some(value) = props.get(*key) {
             match value {
-                Value::String(s) if !s.is_empty() => query.push(format!("{key}={s}")),
+                Value::String(s) if !s.is_empty() => {
+                    query.push(format!("{key}={}", percent_encode_query_value(s)))
+                }
                 Value::Number(n) => query.push(format!("{key}={n}")),
                 Value::Bool(b) => query.push(format!("{key}={b}")),
                 _ => {}
@@ -193,6 +207,18 @@ pub fn build_srt_uri(props: &BTreeMap<String, Value>) -> Option<String> {
     };
 
     Some(format!("srt://{host}:{port}{query}"))
+}
+
+fn percent_encode_query_value(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -269,14 +295,18 @@ mod tests {
     }
 
     #[test]
-    fn build_srt_uri_only_embeds_transport_fields() {
+    fn build_srt_uri_embeds_streamid_but_not_element_properties() {
         let props = BTreeMap::from([
             (
                 "localaddress".to_string(),
                 Value::String("127.0.0.1".to_string()),
             ),
             ("localport".to_string(), Value::Number(4201_u64.into())),
-            ("mode".to_string(), Value::String("listener".to_string())),
+            ("mode".to_string(), Value::String("caller".to_string())),
+            (
+                "streamid".to_string(),
+                Value::String("#!::r=channel".to_string()),
+            ),
             (
                 "passphrase".to_string(),
                 Value::String("secret".to_string()),
@@ -287,7 +317,84 @@ mod tests {
 
         let uri = build_srt_uri(&props).expect("uri should be built");
 
-        assert_eq!(uri, "srt://127.0.0.1:4201?mode=listener");
+        assert_eq!(
+            uri,
+            "srt://127.0.0.1:4201?mode=caller&streamid=%23%21%3A%3Ar%3Dchannel"
+        );
+    }
+
+    #[test]
+    fn build_srt_uri_omits_streamid_in_listener_mode() {
+        let props = BTreeMap::from([
+            (
+                "localaddress".to_string(),
+                Value::String("127.0.0.1".to_string()),
+            ),
+            ("localport".to_string(), Value::Number(4201_u64.into())),
+            ("mode".to_string(), Value::String("listener".to_string())),
+            (
+                "streamid".to_string(),
+                Value::String("#!::r=preserved".to_string()),
+            ),
+        ]);
+
+        assert_eq!(
+            build_srt_uri(&props).expect("uri should be built"),
+            "srt://127.0.0.1:4201?mode=listener"
+        );
+    }
+
+    #[test]
+    fn does_not_warn_for_srt_streamid_property() {
+        init_gst();
+
+        #[derive(Debug, Default)]
+        struct MemoryWriter {
+            messages: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl StatsWriter for MemoryWriter {
+            fn send_message(&mut self, message: &str) -> Result<()> {
+                self.messages
+                    .lock()
+                    .expect("messages lock")
+                    .push(message.to_string());
+                Ok(())
+            }
+        }
+
+        let element = gst::ElementFactory::make("srtsrc")
+            .build()
+            .expect("srtsrc element should be available for tests");
+        let config = ElementConfig {
+            element_type: "srtsrc".to_string(),
+            props: BTreeMap::from([
+                (
+                    "localaddress".to_string(),
+                    Value::String("127.0.0.1".to_string()),
+                ),
+                ("localport".to_string(), Value::Number(4201_u64.into())),
+                ("mode".to_string(), Value::String("caller".to_string())),
+                (
+                    "streamid".to_string(),
+                    Value::String("#!::r=channel".to_string()),
+                ),
+            ]),
+        };
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(MemoryWriter {
+                messages: messages.clone(),
+            })));
+
+        apply_element_properties_with_logging(&element, &config, Some(&writer))
+            .expect("setting srtsrc properties should work");
+
+        assert!(messages.lock().expect("messages lock").is_empty());
+        assert_eq!(
+            element.property::<String>("uri"),
+            "srt://127.0.0.1:4201?mode=caller&streamid=%23!::r=channel"
+        );
     }
 
     #[test]

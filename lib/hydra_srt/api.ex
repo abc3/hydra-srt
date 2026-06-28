@@ -392,6 +392,7 @@ defmodule HydraSrt.Api do
     "host",
     "latency",
     "authentication",
+    "streamid",
     "passphrase",
     "pbkeylen",
     "poll_timeout",
