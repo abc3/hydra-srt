@@ -133,8 +133,10 @@ describe('SystemNodeMetrics', () => {
   it('renders selected storages as separate series instead of aggregate totals', async () => {
     renderPage('time=live&storage=root,L2RhdGE');
 
-    expect(await screen.findByTestId('line-storage_total_root')).toHaveTextContent('/ total');
-    expect(screen.getByTestId('line-storage_total_L2RhdGE')).toHaveTextContent('/data total');
+    await waitFor(() => {
+      expect(screen.getByTestId('line-storage_total_root')).toHaveTextContent('/ total');
+      expect(screen.getByTestId('line-storage_total_L2RhdGE')).toHaveTextContent('/data total');
+    });
     expect(screen.queryByTestId('line-storage_total_selected')).not.toBeInTheDocument();
   });
 

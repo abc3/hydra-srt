@@ -383,20 +383,31 @@ defmodule HydraSrt.RtmpServer do
   # Reconcile the set of route-status subscriptions with the current live set for the
   # path: drop subscriptions for routes no longer live, add ones for newly-live routes,
   # and record the new set on the session. Called after a stop broadcast that did not
-  # tear down the publisher because other routes still ingest the path.
-  @spec refresh_route_status_subscriptions(Session.t(), [String.t()]) :: Session.t()
+  # tear down the publisher because other routes still ingest the path. Callers must pass
+  # a non-empty `new_ids` (the live-ingesting set after a re-query); an empty list means
+  # the publisher should have been stopped instead.
+  @spec refresh_route_status_subscriptions(Session.t(), [String.t(), ...]) :: Session.t()
   defp refresh_route_status_subscriptions(
          %Session{publish_route_ids: old_ids} = session,
          new_ids
        )
-       when is_list(old_ids) and is_list(new_ids) do
+       when is_list(old_ids) and is_list(new_ids) and new_ids != [] do
     old_set = MapSet.new(old_ids)
     new_set = MapSet.new(new_ids)
 
     Session.unsubscribe_route_status(MapSet.to_list(MapSet.difference(old_set, new_set)))
     Session.subscribe_route_status(MapSet.to_list(MapSet.difference(new_set, old_set)))
 
-    %{session | publish_route_ids: new_ids}
+    # Event attribution uses publish_route_id (a single "primary" route). If the
+    # primary left the live set but other routes still ingest the path, roll forward
+    # to the head of the remaining set so codec/inactivity/disconnect events are not
+    # logged against a stopped route.
+    new_primary_id =
+      if session.publish_route_id in new_ids,
+        do: session.publish_route_id,
+        else: hd(new_ids)
+
+    %{session | publish_route_ids: new_ids, publish_route_id: new_primary_id}
   end
 
   @spec schedule_codec_check(Session.t()) :: Session.t()

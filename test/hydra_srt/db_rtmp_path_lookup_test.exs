@@ -228,5 +228,19 @@ defmodule HydraSrt.DbRtmpPathLookupTest do
       assert [] = Db.find_live_routes_by_rtmp_path("/live/backup")
       assert [%{id: ^route_id}] = Db.find_live_routes_by_rtmp_path("/live/primary")
     end
+
+    test "returns multiple matching routes in stable inserted_at order" do
+      path = "/live/shared-#{System.unique_integer([:positive])}"
+
+      route_a = route_with_status("processing")
+      route_b = route_with_status("processing")
+
+      rtmp_source_fixture(route_a, %{"path" => path, "name" => "rtmp-a"})
+      rtmp_source_fixture(route_b, %{"path" => path, "name" => "rtmp-b"})
+
+      assert [%{id: first_id}, %{id: second_id}] = Db.find_live_routes_by_rtmp_path(path)
+      assert first_id == route_a["id"]
+      assert second_id == route_b["id"]
+    end
   end
 end

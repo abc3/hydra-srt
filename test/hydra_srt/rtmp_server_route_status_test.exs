@@ -254,11 +254,26 @@ defmodule HydraSrt.RtmpServerRouteStatusTest do
       assert PublisherRegistry.owner(path) == pid
       assert Process.alive?(pid)
 
+      # Primary route attribution must follow the remaining live route, not the stopped
+      # primary, so subsequent events land on route_b's log.
+      assert %{
+               publish_route_id: ^route_b,
+               publish_route_ids: remaining_ids
+             } = :sys.get_state(pid)
+
+      assert route_b in remaining_ids
+      refute route_a in remaining_ids
+
       # Stop the remaining matching route: no live route ingests the path anymore, so
-      # the publisher is disconnected and the path is released.
+      # the publisher is disconnected and the path is released. Disconnect is attributed
+      # to the surviving primary (route_b), not the already-stopped route_a.
       stop_route!(route_b)
       assert_receive {:publish_eos, ^path}, 1_000
-      assert_receive {:event, %{"event_type" => "publisher_disconnected"}}, 1_000
+
+      assert_receive {:event,
+                      %{"event_type" => "publisher_disconnected", "route_id" => ^route_b}},
+                     1_000
+
       assert_receive {:transport_closed}, 1_000
       refute PublisherRegistry.active?(path)
       assert StreamCache.get(path) == nil

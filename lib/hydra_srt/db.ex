@@ -255,6 +255,7 @@ defmodule HydraSrt.Db do
           e.enabled == true and
           r.enabled == true and
           (e.type == ^source_type or e.type == ^destination_type),
+      order_by: [asc: r.inserted_at, asc: r.id],
       select: %{
         id: r.id,
         schema_status: r.schema_status,
