@@ -24,6 +24,11 @@ end
 config :hydra_srt, demo_data: Env.get_boolean("DEMO_DATA", false)
 config :hydra_srt, rtmp_port: Env.get_integer("RTMP_PORT", 1935)
 
+config :hydra_srt,
+  rtmp_bootstrap_ttl_ms: Env.get_integer("RTMP_BOOTSTRAP_TTL_MS", :timer.seconds(30)),
+  rtmp_codec_check_ms: Env.get_integer("RTMP_CODEC_CHECK_MS", :timer.seconds(5)),
+  rtmp_publish_inactivity_ms: Env.get_integer("RTMP_PUBLISH_INACTIVITY_MS", :timer.seconds(10))
+
 secret_key_base =
   cond do
     config_env() == :dev ->

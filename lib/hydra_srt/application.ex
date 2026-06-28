@@ -22,7 +22,6 @@ defmodule HydraSrt.Application do
       )
 
     :syn.add_node_to_scopes([:routes])
-    :ok = HydraSrt.Rtmp.StreamCache.init()
     runtime_schedulers = System.schedulers_online()
     rtmp_port = Application.fetch_env!(:hydra_srt, :rtmp_port)
 
@@ -47,6 +46,8 @@ defmodule HydraSrt.Application do
        child_spec: DynamicSupervisor, strategy: :one_for_one, name: HydraSrt.DynamicSupervisor},
       {Registry,
        keys: :unique, name: HydraSrt.Registry.MsgHandlers, partitions: runtime_schedulers},
+      {Registry,
+       keys: :unique, name: HydraSrt.Rtmp.PublisherRegistry, partitions: runtime_schedulers},
       HydraSrt.Repo,
       HydraSrt.AuthCleanup,
       HydraSrt.SignalGenerator,
@@ -73,8 +74,16 @@ defmodule HydraSrt.Application do
       HydraSrtWeb.Endpoint
     ]
 
-    # Cachex is used by API auth; keep it always available.
-    children = [{Cachex, name: HydraSrt.Cache} | children]
+    # Cachex is used by API auth and RTMP stream bootstrap cache; keep them always available.
+    rtmp_cache_child = %{
+      id: HydraSrt.RtmpCache,
+      start: {Cachex, :start_link, [[name: HydraSrt.RtmpCache]]}
+    }
+
+    children = [
+      {Cachex, name: HydraSrt.Cache},
+      rtmp_cache_child | children
+    ]
 
     opts = [strategy: :one_for_one, name: HydraSrt.Supervisor]
     {:ok, pid} = Supervisor.start_link(children, opts)

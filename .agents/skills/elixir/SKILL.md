@@ -36,6 +36,27 @@ Use for any task touching Elixir, Phoenix, Ecto, Mix, OTP, or ExUnit.
 - Use `Task.Supervisor` for isolated async work.
 - Add timeouts and backpressure where needed.
 
+## Time durations (milliseconds)
+Many APIs in this repo take or store durations in **milliseconds** (`Process.send_after/3`, `:inet.setopts/2` `send_timeout`, Cachex TTL, `Application.get_env/3` defaults, test `assert_receive` timeouts, etc.).
+
+Prefer **`:timer`** over raw integer literals so the unit is obvious:
+
+```elixir
+# Good
+@default_interval_ms :timer.seconds(30)
+@recv_timeout :timer.seconds(10)
+Process.send_after(self(), :tick, :timer.seconds(5))
+config :app, ttl_ms: Env.get_integer("TTL_MS", :timer.minutes(5))
+
+# Avoid (unless the value is not a duration, e.g. bytes or a port)
+@default_interval_ms 30_000
+send_timeout: 10_000
+```
+
+Use `:timer.seconds/1`, `:timer.minutes/1`, or `:timer.hours/1` as appropriate. `:timer` returns milliseconds. Existing examples: `HydraSrt.Auth` (`:timer.minutes(5)`), `HydraSrt.Stats.Cleaner` (`:timer.hours(1)`), RTMP config in `config/runtime.exs`.
+
+Do **not** use `:timer` for non-duration numbers (byte counts, port numbers, numeric limits).
+
 ## Phoenix
 - Controllers should orchestrate, not own domain logic.
 - Keep params validation close to boundaries.

@@ -51,4 +51,87 @@ defmodule HydraSrt.Stats.EventLoggerTest do
 
     assert_receive {:event, %{"route_id" => "route-2", "event_type" => "route_status_change"}}
   end
+
+  describe "RTMP publisher events" do
+    setup do
+      Phoenix.PubSub.subscribe(HydraSrt.PubSub, "events:route-rtmp")
+      Phoenix.PubSub.subscribe(HydraSrt.PubSub, "events:all")
+      :ok
+    end
+
+    test "log_publisher_connected/3 broadcasts publisher_connected" do
+      :ok =
+        EventLogger.log_publisher_connected("route-rtmp", "/live/prochid", {{127, 0, 0, 1}, 9})
+
+      assert_receive {:event,
+                      %{"route_id" => "route-rtmp", "event_type" => "publisher_connected"}}
+
+      assert_receive {:event,
+                      %{"event_type" => "publisher_connected", "details_json" => details_json}}
+
+      assert Jason.decode!(details_json)["path"] == "/live/prochid"
+    end
+
+    test "log_publisher_disconnected/3 broadcasts publisher_disconnected" do
+      :ok =
+        EventLogger.log_publisher_disconnected("route-rtmp", "/live/prochid", {{127, 0, 0, 1}, 9})
+
+      assert_receive {:event, %{"event_type" => "publisher_disconnected"}}
+    end
+
+    test "log_publish_rejected/3 carries the rejection reason" do
+      :ok = EventLogger.log_publish_rejected("route-rtmp", "/live/prochid", "route_not_live")
+
+      assert_receive {:event,
+                      %{
+                        "event_type" => "publish_rejected",
+                        "severity" => "warning",
+                        "reason" => "route_not_live"
+                      }}
+    end
+
+    test "log_publish_conflict/2 broadcasts publish_conflict" do
+      :ok = EventLogger.log_publish_conflict("route-rtmp", "/live/prochid", self())
+
+      assert_receive {:event, %{"event_type" => "publish_conflict", "severity" => "warning"}}
+    end
+
+    test "log_publish_audio_only/2 broadcasts a warning" do
+      :ok = EventLogger.log_publish_audio_only("route-rtmp", "/live/prochid")
+
+      assert_receive {:event, %{"event_type" => "publish_audio_only", "severity" => "warning"}}
+    end
+
+    test "log_publish_video_only/2 broadcasts a warning" do
+      :ok = EventLogger.log_publish_video_only("route-rtmp", "/live/prochid")
+
+      assert_receive {:event, %{"event_type" => "publish_video_only", "severity" => "warning"}}
+    end
+
+    test "log_publish_caps_changed/2 broadcasts a warning" do
+      :ok = EventLogger.log_publish_caps_changed("route-rtmp", "/live/prochid")
+
+      assert_receive {:event, %{"event_type" => "publish_caps_changed", "severity" => "warning"}}
+    end
+
+    test "log_publish_no_codecs/2 broadcasts an error" do
+      :ok = EventLogger.log_publish_no_codecs("route-rtmp", "/live/prochid")
+
+      assert_receive {:event, %{"event_type" => "publish_no_codecs", "severity" => "error"}}
+    end
+
+    test "log_publish_inactivity/2 broadcasts a warning" do
+      :ok = EventLogger.log_publish_inactivity("route-rtmp", "/live/prochid")
+
+      assert_receive {:event, %{"event_type" => "publish_inactivity", "severity" => "warning"}}
+    end
+
+    test "publish_rejected with nil route_id still reaches events:all" do
+      Phoenix.PubSub.subscribe(HydraSrt.PubSub, "events:all")
+
+      :ok = EventLogger.log_publish_rejected(nil, "/live/prochid", "route_not_live")
+
+      assert_receive {:event, %{"route_id" => nil, "event_type" => "publish_rejected"}}
+    end
+  end
 end

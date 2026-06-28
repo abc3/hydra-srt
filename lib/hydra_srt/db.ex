@@ -51,6 +51,26 @@ defmodule HydraSrt.Db do
     get_route(id, include_dest?, true)
   end
 
+  @doc """
+  Fresh, single-row read of a route's live-ness for the RTMP publish gate.
+
+  Used after subscribing to the route's status topic so the gate can re-verify the
+  route is still live: a stop before this read is caught here, a stop after it is
+  caught by the subscription just established. Mirrors the liveness rule used by
+  `find_live_routes_by_rtmp_path/1` (`enabled` and `schema_status || status` in the
+  live set).
+  """
+  @spec route_live?(String.t()) :: boolean()
+  def route_live?(route_id) when is_binary(route_id) do
+    case Repo.get(Route, route_id) do
+      %Route{enabled: enabled, schema_status: schema_status, status: status} ->
+        enabled == true and HydraSrt.live_route_status?(schema_status || status)
+
+      nil ->
+        false
+    end
+  end
+
   @spec get_route_map(String.t(), boolean(), boolean()) :: map() | nil
   def get_route_map(id, include_dest? \\ false, include_sources? \\ true) when is_binary(id) do
     case get_route(id, include_dest?, include_sources?) do
@@ -202,6 +222,106 @@ defmodule HydraSrt.Db do
   def list_enabled_routes do
     from(r in Route, where: r.enabled == true, order_by: [asc: r.inserted_at])
     |> Repo.all()
+  end
+
+  @doc """
+  Returns live routes whose RTMP source `path` matches the given path.
+
+  Used by the RTMP publish gate to decide whether to accept a publisher: a publish
+  is accepted only when at least one route consuming that RTMP path is live
+  (`schema_status || status` in `HydraSrt.live_route_statuses/0`). Path is
+  normalized with `HydraSrt.Api.Endpoint.normalize_rtmp_path/1` before matching.
+  Returns a list of `%{id: route_id, status: runtime_status}` maps.
+  """
+  @spec find_live_routes_by_rtmp_path(String.t()) :: [%{id: String.t(), status: String.t()}]
+  def find_live_routes_by_rtmp_path(path) when is_binary(path) do
+    normalized = HydraSrt.Api.Endpoint.normalize_rtmp_path(path)
+    live = MapSet.new(HydraSrt.live_route_statuses())
+    source_type = Endpoint.source_type()
+    destination_type = Endpoint.destination_type()
+
+    # A publish to a local RTMP path is owned by a live, enabled route in two shapes:
+    #   - an enabled RTMP *source* whose `path` matches and that is the route's active
+    #     source (cold-standby backup sources with a different path must not gate-publish
+    #     unless they are the active one); when no active source is recorded the route is
+    #     treated as single-source and any matching enabled source is accepted.
+    #   - an enabled RTMP *destination* whose `location` URL path matches (the native
+    #     rtmpsink publishes back into the local RtmpServer for play fan-out).
+    from(e in Endpoint,
+      join: r in Route,
+      on: r.id == e.route_id,
+      where:
+        e.schema == "RTMP" and
+          e.enabled == true and
+          r.enabled == true and
+          (e.type == ^source_type or e.type == ^destination_type),
+      select: %{
+        id: r.id,
+        schema_status: r.schema_status,
+        status: r.status,
+        type: e.type,
+        path: e.path,
+        location: e.location,
+        endpoint_id: e.id,
+        active_source_id: r.active_source_id
+      }
+    )
+    |> Repo.all()
+    |> Enum.filter(fn %{type: type, path: ep_path, location: location} ->
+      case type do
+        ^source_type -> ep_path == normalized
+        ^destination_type -> rtmp_location_path_matches?(location, normalized)
+        _ -> false
+      end
+    end)
+    |> Enum.filter(fn %{
+                        type: type,
+                        endpoint_id: endpoint_id,
+                        active_source_id: active_source_id
+                      } ->
+      # Only the route's active source may gate-publish once failover has selected one;
+      # destinations are always eligible (no active-source concept applies to them).
+      case type do
+        ^source_type -> is_nil(active_source_id) or active_source_id == endpoint_id
+        _ -> true
+      end
+    end)
+    |> Enum.filter(fn %{schema_status: schema_status, status: status} ->
+      MapSet.member?(live, schema_status || status)
+    end)
+    |> Enum.map(fn %{id: id, schema_status: schema_status, status: status} ->
+      %{id: id, status: schema_status || status}
+    end)
+    |> Enum.uniq_by(& &1.id)
+  end
+
+  defp rtmp_location_path_matches?(location, normalized) when is_binary(location) do
+    # Only an RTMP destination whose `location` points back at the *local* RtmpServer
+    # unlocks the publish gate (the native rtmpsink publishes into the local server for
+    # play fan-out). An external sink (e.g. YouTube) that merely shares a path suffix
+    # must not open the gate for local publishing.
+    case URI.parse(location) do
+      %URI{scheme: "rtmp", host: host, port: port, path: uri_path}
+      when is_binary(host) and host != "" and is_binary(uri_path) and uri_path != "" ->
+        local_rtmp_host?(host) and local_rtmp_port?(port) and
+          HydraSrt.Api.Endpoint.normalize_rtmp_path(uri_path) == normalized
+
+      _ ->
+        false
+    end
+  end
+
+  defp rtmp_location_path_matches?(_location, _normalized), do: false
+
+  defp local_rtmp_host?(host) when is_binary(host) do
+    host in ["127.0.0.1", "localhost", "::1", "[::1]"]
+  end
+
+  defp local_rtmp_port?(nil), do: local_rtmp_port?(1935)
+
+  defp local_rtmp_port?(port) when is_integer(port) do
+    rtmp_port = Application.get_env(:hydra_srt, :rtmp_port, 1935)
+    port == rtmp_port
   end
 
   @spec list_all_tags() :: list(String.t())
