@@ -85,6 +85,97 @@ defmodule HydraSrt.Stats.EventLogger do
     })
   end
 
+  def log_publisher_connected(route_id, path, peer) do
+    ingest(%{
+      route_id: route_id,
+      event_type: "publisher_connected",
+      severity: "info",
+      message: "RTMP publisher connected",
+      details_json: Jason.encode!(%{"path" => path, "peer" => inspect(peer)})
+    })
+  end
+
+  def log_publisher_disconnected(route_id, path, peer) do
+    ingest(%{
+      route_id: route_id,
+      event_type: "publisher_disconnected",
+      severity: "info",
+      message: "RTMP publisher disconnected",
+      details_json: Jason.encode!(%{"path" => path, "peer" => inspect(peer)})
+    })
+  end
+
+  def log_publish_rejected(route_id, path, reason) do
+    ingest(%{
+      route_id: route_id,
+      event_type: "publish_rejected",
+      severity: "warning",
+      reason: reason,
+      message: "RTMP publish rejected",
+      details_json: Jason.encode!(%{"path" => path, "reason" => reason})
+    })
+  end
+
+  def log_publish_conflict(route_id, path, owner_pid) do
+    ingest(%{
+      route_id: route_id,
+      event_type: "publish_conflict",
+      severity: "warning",
+      message: "RTMP publish rejected: another publisher is active",
+      details_json: Jason.encode!(%{"path" => path, "owner_pid" => inspect(owner_pid)})
+    })
+  end
+
+  def log_publish_audio_only(route_id, path) do
+    ingest(%{
+      route_id: route_id,
+      event_type: "publish_audio_only",
+      severity: "warning",
+      message: "RTMP publish has audio but no video track",
+      details_json: Jason.encode!(%{"path" => path})
+    })
+  end
+
+  def log_publish_video_only(route_id, path) do
+    ingest(%{
+      route_id: route_id,
+      event_type: "publish_video_only",
+      severity: "warning",
+      message: "RTMP publish has video but no audio track",
+      details_json: Jason.encode!(%{"path" => path})
+    })
+  end
+
+  def log_publish_caps_changed(route_id, path) do
+    ingest(%{
+      route_id: route_id,
+      event_type: "publish_caps_changed",
+      severity: "warning",
+      message: "RTMP publisher changed codec configuration mid-stream",
+      details_json: Jason.encode!(%{"path" => path})
+    })
+  end
+
+  def log_publish_no_codecs(route_id, path) do
+    ingest(%{
+      route_id: route_id,
+      event_type: "publish_no_codecs",
+      severity: "error",
+      message: "RTMP publish delivered no codec sequence headers",
+      details_json: Jason.encode!(%{"path" => path})
+    })
+  end
+
+  def log_publish_inactivity(route_id, path) do
+    ingest(%{
+      route_id: route_id,
+      event_type: "publish_inactivity",
+      severity: "warning",
+      message: "RTMP publisher timed out due to inactivity",
+      details_json: Jason.encode!(%{"path" => path})
+    })
+  end
+
   def ingest(event) when is_map(event) do
     enriched = enrich(event)
     broadcast_event(enriched)

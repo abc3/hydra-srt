@@ -11,13 +11,15 @@ defmodule HydraSrt.Rtmp.Session do
   alias ExRTMP.Message.Command.NetConnection.{CreateStream, Response}
   alias ExRTMP.Message.Command.NetStream.{FCPublish, OnStatus, Play, Publish}
   alias ExRTMP.Message.Metadata
+  alias HydraSrt.Rtmp.PublisherRegistry
   alias HydraSrt.Rtmp.StreamCache
+  alias HydraSrt.Stats.EventLogger
 
   @default_acknowledgement_size 3_000_000
   @default_chunk_size 128
-  @recv_timeout 10_000
+  @recv_timeout :timer.seconds(10)
 
-  @type phase :: :handshake | :init | :connected | :publishing | :playing
+  @type phase :: :handshake | :init | :connected | :publishing | :playing | :closed
 
   @type t :: %__MODULE__{
           socket: :gen_tcp.socket(),
@@ -29,7 +31,14 @@ defmodule HydraSrt.Rtmp.Session do
           chunk_size: non_neg_integer(),
           app: String.t() | nil,
           stream_name: String.t() | nil,
-          path: String.t() | nil
+          path: String.t() | nil,
+          publisher_pid: pid() | nil,
+          publish_route_id: String.t() | nil,
+          publish_route_ids: [String.t()] | nil,
+          publish_started_at: integer() | nil,
+          codec_check_timer_ref: reference() | nil,
+          inactivity_timer_ref: reference() | nil,
+          inactivity_token: reference() | nil
         }
 
   defstruct [
@@ -42,7 +51,14 @@ defmodule HydraSrt.Rtmp.Session do
     chunk_size: @default_chunk_size,
     app: nil,
     stream_name: nil,
-    path: nil
+    path: nil,
+    publisher_pid: nil,
+    publish_route_id: nil,
+    publish_route_ids: nil,
+    publish_started_at: nil,
+    codec_check_timer_ref: nil,
+    inactivity_timer_ref: nil,
+    inactivity_token: nil
   ]
 
   @spec new(:gen_tcp.socket(), module(), term()) :: t()
@@ -80,7 +96,7 @@ defmodule HydraSrt.Rtmp.Session do
   @spec configure_socket(t()) :: :ok
   def configure_socket(%__MODULE__{socket: socket}) do
     :inet.setopts(socket,
-      send_timeout: 10_000,
+      send_timeout: :timer.seconds(10),
       send_timeout_close: true,
       nodelay: true
     )
@@ -141,8 +157,12 @@ defmodule HydraSrt.Rtmp.Session do
     _ = payload_size
     data = IO.iodata_to_binary(payload)
 
-    :ok = StreamCache.record_media(path, type, data, timestamp)
+    record_status = StreamCache.record_media(path, type, data, timestamp)
     :ok = Phoenix.PubSub.broadcast(HydraSrt.PubSub, path, {:msg, type, data, timestamp})
+
+    if record_status == :changed do
+      :ok = EventLogger.log_publish_caps_changed(session.publish_route_id, path)
+    end
 
     # Logger.info(
     #   "RtmpServer media chunk path=#{path} type=#{type} bytes=#{payload_size} peer=#{inspect(session.peer)}"
@@ -156,7 +176,7 @@ defmodule HydraSrt.Rtmp.Session do
     {session, []}
   end
 
-  def dispatch_message(%__MODULE__{path: path} = session, %Message{
+  def dispatch_message(%__MODULE__{phase: :publishing, path: path} = session, %Message{
         type: 18,
         payload: %Metadata{data: data},
         timestamp: timestamp
@@ -284,30 +304,113 @@ defmodule HydraSrt.Rtmp.Session do
 
   @spec handle_publish_message(t(), Publish.t(), non_neg_integer()) :: {t(), [Message.t()]}
   def handle_publish_message(
-        %__MODULE__{phase: :connected, stream_id: stream_id} = session,
+        %__MODULE__{phase: :connected, stream_id: stream_id, peer: peer} = session,
         publish,
         _message_stream_id
       )
       when is_integer(stream_id) do
-    session =
-      session
-      |> put_stream_name(publish.name)
-      |> Map.put(:phase, :publishing)
+    session = put_stream_name(session, publish.name)
+    path = session.path
 
-    Logger.debug(
-      "RtmpServer publish path=#{session.path} stream_id=#{stream_id} peer=#{inspect(session.peer)}"
-    )
+    cond do
+      is_nil(path) ->
+        :ok = EventLogger.log_publish_rejected(nil, to_string(path), "invalid_path")
 
-    outbound = [
-      Message.stream_begin(stream_id),
-      Message.command(OnStatus.publish_ok(), stream_id)
-    ]
+        Logger.warning("RtmpServer publish rejected reason=invalid_path peer=#{inspect(peer)}")
 
-    {session, outbound}
+        {session, [Message.command(OnStatus.publish_bad_stream(), stream_id)]}
+
+      true ->
+        accept_or_reject_publish(session, path, stream_id)
+    end
   end
 
   def handle_publish_message(%__MODULE__{} = session, _publish, message_stream_id) do
     {session, [Message.command(OnStatus.publish_bad_stream(), message_stream_id)]}
+  end
+
+  @spec accept_or_reject_publish(t(), String.t(), non_neg_integer()) ::
+          {t(), [Message.t()]}
+  defp accept_or_reject_publish(
+         %__MODULE__{publisher_pid: publisher_pid, peer: peer} = session,
+         path,
+         stream_id
+       ) do
+    case HydraSrt.Db.find_live_routes_by_rtmp_path(path) do
+      [] ->
+        :ok = EventLogger.log_publish_rejected(nil, path, "route_not_live")
+
+        Logger.warning(
+          "RtmpServer publish rejected path=#{path} reason=route_not_live peer=#{inspect(peer)}"
+        )
+
+        {session, [Message.command(OnStatus.publish_bad_stream(), stream_id)]}
+
+      matches ->
+        # A path can be ingested by more than one live route at once (e.g. several
+        # routes each running an rtmpsrc on the same path). The publish is admitted if
+        # ANY matching route is live, and the publisher must stay up while at least one
+        # of them is. Re-verify each match with a fresh read (closes the
+        # lookup->subscribe race) and keep the live ones.
+        live_matches = Enum.filter(matches, fn %{id: rid} -> HydraSrt.Db.route_live?(rid) end)
+
+        case live_matches do
+          [] ->
+            :ok = EventLogger.log_publish_rejected(nil, path, "route_not_live")
+
+            Logger.warning(
+              "RtmpServer publish rejected path=#{path} reason=route_not_live peer=#{inspect(peer)}"
+            )
+
+            {session, [Message.command(OnStatus.publish_bad_stream(), stream_id)]}
+
+          live_matches ->
+            route_ids = Enum.map(live_matches, & &1.id)
+            primary_id = hd(route_ids)
+
+            # Subscribe to every matching route's status topic BEFORE acquiring the
+            # registry lock and before emitting publisher_connected / sending
+            # publish_ok, so a stop broadcast in the admission window is not missed.
+            # The teardown handler re-queries the live set, so the publisher is only
+            # dropped once no matching route is live anymore.
+            :ok = subscribe_route_status(route_ids)
+
+            case PublisherRegistry.register(path, publisher_pid) do
+              :ok ->
+                session =
+                  Map.merge(session, %{
+                    phase: :publishing,
+                    publish_route_id: primary_id,
+                    publish_route_ids: route_ids,
+                    publish_started_at: System.monotonic_time(:millisecond)
+                  })
+
+                :ok = StreamCache.clear(path)
+                :ok = EventLogger.log_publisher_connected(primary_id, path, peer)
+
+                Logger.debug(
+                  "RtmpServer publish accepted path=#{path} route_ids=#{inspect(route_ids)} stream_id=#{stream_id} peer=#{inspect(peer)}"
+                )
+
+                outbound = [
+                  Message.stream_begin(stream_id),
+                  Message.command(OnStatus.publish_ok(), stream_id)
+                ]
+
+                {session, outbound}
+
+              {:error, {:conflict, owner_pid}} ->
+                :ok = unsubscribe_route_status(route_ids)
+                :ok = EventLogger.log_publish_conflict(primary_id, path, owner_pid)
+
+                Logger.warning(
+                  "RtmpServer publish rejected path=#{path} reason=conflict owner=#{inspect(owner_pid)} peer=#{inspect(peer)}"
+                )
+
+                {session, [Message.command(OnStatus.publish_bad_stream(), stream_id)]}
+            end
+        end
+    end
   end
 
   @spec handle_play_message(t(), Play.t(), non_neg_integer()) :: {t(), [Message.t()]}
@@ -355,6 +458,36 @@ defmodule HydraSrt.Rtmp.Session do
   end
 
   def unsubscribe_path(session), do: session
+
+  @doc """
+  Subscribes the calling process to the status topic of every given route id.
+
+  Used by the publish gate so a publisher is notified when any of the (possibly
+  several) routes ingesting its path stop. The topic mirrors `HydraSrt.broadcast_item_status/2`.
+  """
+  @spec subscribe_route_status([String.t()]) :: :ok
+  def subscribe_route_status(route_ids) when is_list(route_ids) do
+    Enum.each(route_ids, fn route_id ->
+      :ok = Phoenix.PubSub.subscribe(HydraSrt.PubSub, route_status_topic(route_id))
+    end)
+
+    :ok
+  end
+
+  @doc """
+  Mirror of `subscribe_route_status/1` for cleanup / rollback.
+  """
+  @spec unsubscribe_route_status([String.t()]) :: :ok
+  def unsubscribe_route_status(route_ids) when is_list(route_ids) do
+    Enum.each(route_ids, fn route_id ->
+      :ok = Phoenix.PubSub.unsubscribe(HydraSrt.PubSub, route_status_topic(route_id))
+    end)
+
+    :ok
+  end
+
+  @spec route_status_topic(String.t()) :: String.t()
+  def route_status_topic(route_id), do: "item:" <> route_id
 
   @spec send_media_chunk(t(), 8 | 9, binary(), non_neg_integer()) :: :ok | {:error, term()}
   def send_media_chunk(%__MODULE__{stream_id: stream_id} = session, type, data, timestamp)

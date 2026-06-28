@@ -10,6 +10,21 @@ defmodule HydraSrt do
   @status_failed "failed"
   @route_status_transition_event [:hydra, :route, :status, :transition]
 
+  # Runtime route statuses considered "live" (mirror of LIVE_ROUTE_STATUSES in
+  # web_app/src/utils/routes.ts). Used by the RTMP publish gate and any backend
+  # logic that needs to treat a route as actively running.
+  @live_route_statuses ~w(started processing starting restarting reconnecting)
+
+  @spec live_route_statuses() :: [String.t()]
+  def live_route_statuses, do: @live_route_statuses
+
+  @spec live_route_status?(String.t() | nil) :: boolean()
+  def live_route_status?(status) when is_binary(status) do
+    status in @live_route_statuses
+  end
+
+  def live_route_status?(_status), do: false
+
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
     DynamicSupervisor.start_child(
