@@ -128,6 +128,16 @@ const Settings = () => {
     return `${days}d ${hours}h ${minutes}m ${seconds}s`;
   };
 
+  const formatBuiltAt = () => {
+    const builtAtMs = new Date(initData.built_at).getTime();
+
+    if (Number.isNaN(builtAtMs)) {
+      return initData.built_at;
+    }
+
+    return new Date(builtAtMs).toLocaleString();
+  };
+
   useEffect(() => {
     const tab = getTabFromPath();
     setActiveTab(tab);
@@ -835,6 +845,12 @@ const Settings = () => {
                 label: 'App version',
                 labelStyle: { width: 260, minWidth: 260 },
                 children: initData.version
+              },
+              {
+                key: 'built-at',
+                label: 'Built at',
+                labelStyle: { width: 260, minWidth: 260 },
+                children: formatBuiltAt()
               },
               {
                 key: 'system',

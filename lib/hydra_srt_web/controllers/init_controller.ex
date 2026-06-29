@@ -1,9 +1,12 @@
 defmodule HydraSrtWeb.InitController do
   use HydraSrtWeb, :controller
 
+  @built_at DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
   def show(conn, _params) do
     json(conn, %{
       version: app_version(),
+      built_at: @built_at,
       system_version: system_version(),
       elixir_version: System.version(),
       erlang_version: erlang_version(),

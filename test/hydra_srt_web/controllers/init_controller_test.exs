@@ -7,6 +7,9 @@ defmodule HydraSrtWeb.InitControllerTest do
 
     assert is_binary(payload["version"])
     assert payload["version"] != ""
+    assert is_binary(payload["built_at"])
+    assert payload["built_at"] != ""
+    assert {:ok, _built_at, 0} = DateTime.from_iso8601(payload["built_at"])
     assert is_binary(payload["system_version"])
     assert payload["system_version"] != ""
     assert is_binary(payload["elixir_version"])

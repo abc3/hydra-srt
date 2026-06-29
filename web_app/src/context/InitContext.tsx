@@ -4,6 +4,7 @@ import { initApi } from '../utils/api';
 
 type InitData = {
   version: string;
+  built_at: string;
   system_version: string;
   elixir_version: string;
   erlang_version: string;
@@ -14,6 +15,7 @@ type InitData = {
 
 const INIT_FALLBACK: InitData = {
   version: 'unknown',
+  built_at: 'unknown',
   system_version: 'unknown',
   elixir_version: 'unknown',
   erlang_version: 'unknown',
