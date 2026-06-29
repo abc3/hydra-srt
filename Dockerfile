@@ -1,6 +1,7 @@
-ARG ELIXIR_VERSION=1.18
+ARG ELIXIR_VERSION=1.18.4
 ARG OTP_VERSION=27.3
-ARG DEBIAN_VERSION=bookworm-20250929-slim
+# Trixie ships GStreamer 1.26.x on amd64 and arm64 (bookworm-backports has no GST for arm64).
+ARG DEBIAN_VERSION=trixie-20260610-slim
 ARG NODE_MAJOR=24
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
@@ -30,19 +31,23 @@ RUN mkdir -p /etc/apt/keyrings \
     && apt-get install -y nodejs \
     && apt-get clean
 
-# Install GStreamer and related libraries for the Rust pipeline
+# GStreamer 1.26 from Trixie (native pipeline build deps).
 RUN apt-get update -y \
-    && apt-get install -y \
+    && apt-get install -y --no-install-recommends \
     libgstreamer1.0-dev \
     libgstreamer-plugins-base1.0-dev \
+    libgstreamer-plugins-bad1.0-dev \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
+    gstreamer1.0-tools \
     libcjson-dev \
     libsrt-openssl-dev \
     libcmocka-dev \
     libglib2.0-dev \
     pkg-config \
-    && apt-get clean
+    && apt-get clean \
+    && gst-launch-1.0 --version 2>&1 | tee /tmp/gst-version.txt \
+    && grep -E '1\.26\.' /tmp/gst-version.txt
 
 # Prepare build directory
 WORKDIR /app
@@ -92,12 +97,11 @@ ENV MIX_ENV="prod"
 ENV ECTO_IPV6 false
 # Use IPv4 instead of IPv6 for Erlang distribution
 ENV ERL_AFLAGS "-proto_dist inet_tcp"
-# Install runtime dependencies
-RUN apt-get update -y && \
-    apt-get install -y \
+# Runtime deps + GStreamer 1.26 from Trixie (install GStreamer after ffmpeg).
+RUN apt-get update -y \
+    && apt-get install -y --no-install-recommends \
     libstdc++6 \
     openssl \
-    libncurses5 \
     locales \
     iptables \
     net-tools \
@@ -105,13 +109,19 @@ RUN apt-get update -y && \
     tini \
     curl \
     ffmpeg \
-    gstreamer1.0-plugins-good \
-    gstreamer1.0-plugins-bad \
     libcjson1 \
     libsrt1.5-openssl \
+    && apt-get install -y --no-install-recommends \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-tools \
     libgstreamer1.0-0 \
     libgstreamer-plugins-base1.0-0 \
-    && apt-get clean && rm -f /var/lib/apt/lists/*_*
+    libgstreamer-plugins-bad1.0-0 \
+    && apt-get clean && rm -f /var/lib/apt/lists/*_* \
+    && gst-launch-1.0 --version 2>&1 | tee /tmp/gst-version.txt \
+    && grep -E '1\.26\.' /tmp/gst-version.txt
 
 # Install DuckDB CLI for local analytics introspection/debugging inside container
 RUN curl -fsSL https://install.duckdb.org | sh
@@ -137,4 +147,4 @@ RUN chmod +x run.sh
 
 # Set the entrypoint
 ENTRYPOINT ["/usr/bin/tini", "-s", "-g", "--", "/app/run.sh"]
-CMD ["/app/bin/server"] 
+CMD ["/app/bin/server"]
