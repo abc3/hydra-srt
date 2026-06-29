@@ -332,17 +332,15 @@ defmodule HydraSrt.Rtmp.Session do
   @spec accept_or_reject_publish(t(), String.t(), non_neg_integer()) ::
           {t(), [Message.t()]}
   defp accept_or_reject_publish(
-         %__MODULE__{publisher_pid: publisher_pid, peer: peer} = session,
+         %__MODULE__{publisher_pid: publisher_pid, peer: peer, app: app, stream_name: stream_name} =
+           session,
          path,
          stream_id
        ) do
     case HydraSrt.Db.find_live_routes_by_rtmp_path(path) do
       [] ->
         :ok = EventLogger.log_publish_rejected(nil, path, "route_not_live")
-
-        Logger.warning(
-          "RtmpServer publish rejected path=#{path} reason=route_not_live peer=#{inspect(peer)}"
-        )
+        log_publish_route_not_live(path, peer, app, stream_name)
 
         {session, [Message.command(OnStatus.publish_bad_stream(), stream_id)]}
 
@@ -358,9 +356,7 @@ defmodule HydraSrt.Rtmp.Session do
           [] ->
             :ok = EventLogger.log_publish_rejected(nil, path, "route_not_live")
 
-            Logger.warning(
-              "RtmpServer publish rejected path=#{path} reason=route_not_live peer=#{inspect(peer)}"
-            )
+            log_publish_route_not_live(path, peer, app, stream_name, stale_matches: matches)
 
             {session, [Message.command(OnStatus.publish_bad_stream(), stream_id)]}
 
@@ -607,6 +603,41 @@ defmodule HydraSrt.Rtmp.Session do
   end
 
   def stream_path(_app, _stream_name), do: nil
+
+  @spec log_publish_route_not_live(
+          String.t(),
+          term(),
+          String.t() | nil,
+          String.t() | nil,
+          keyword()
+        ) ::
+          :ok
+  defp log_publish_route_not_live(path, peer, app, stream_name, opts \\ []) do
+    detail = HydraSrt.Db.describe_rtmp_publish_gate_rejection(path, opts)
+    rtmp_ctx = rtmp_publish_log_context(app, stream_name)
+
+    Logger.warning(
+      "RtmpServer publish rejected path=#{path} reason=route_not_live#{rtmp_ctx} #{detail} peer=#{inspect(peer)}"
+    )
+  end
+
+  @spec rtmp_publish_log_context(String.t() | nil, String.t() | nil) :: String.t()
+  defp rtmp_publish_log_context(app, stream_name) do
+    []
+    |> maybe_append_rtmp_log_field("app", app)
+    |> maybe_append_rtmp_log_field("stream_name", stream_name)
+    |> case do
+      [] -> ""
+      parts -> " " <> Enum.join(parts, " ")
+    end
+  end
+
+  defp maybe_append_rtmp_log_field(parts, _key, nil), do: parts
+  defp maybe_append_rtmp_log_field(parts, _key, ""), do: parts
+
+  defp maybe_append_rtmp_log_field(parts, key, value) when is_binary(value) do
+    parts ++ ["#{key}=#{inspect(value)}"]
+  end
 
   @spec payload_byte_size(iodata()) :: non_neg_integer()
   def payload_byte_size(payload) do

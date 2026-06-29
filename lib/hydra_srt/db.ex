@@ -57,14 +57,13 @@ defmodule HydraSrt.Db do
   Used after subscribing to the route's status topic so the gate can re-verify the
   route is still live: a stop before this read is caught here, a stop after it is
   caught by the subscription just established. Mirrors the liveness rule used by
-  `find_live_routes_by_rtmp_path/1` (`enabled` and `schema_status || status` in the
-  live set).
+  `find_live_routes_by_rtmp_path/1` (`schema_status || status` in the live set).
   """
   @spec route_live?(String.t()) :: boolean()
   def route_live?(route_id) when is_binary(route_id) do
     case Repo.get(Route, route_id) do
-      %Route{enabled: enabled, schema_status: schema_status, status: status} ->
-        enabled == true and HydraSrt.live_route_status?(schema_status || status)
+      %Route{schema_status: schema_status, status: status} ->
+        HydraSrt.live_route_status?(schema_status || status)
 
       nil ->
         false
@@ -240,7 +239,7 @@ defmodule HydraSrt.Db do
     source_type = Endpoint.source_type()
     destination_type = Endpoint.destination_type()
 
-    # A publish to a local RTMP path is owned by a live, enabled route in two shapes:
+    # A publish to a local RTMP path is owned by a live route in two shapes:
     #   - an enabled RTMP *source* whose `path` matches and that is the route's active
     #     source (cold-standby backup sources with a different path must not gate-publish
     #     unless they are the active one); when no active source is recorded the route is
@@ -253,7 +252,6 @@ defmodule HydraSrt.Db do
       where:
         e.schema == "RTMP" and
           e.enabled == true and
-          r.enabled == true and
           (e.type == ^source_type or e.type == ^destination_type),
       order_by: [asc: r.inserted_at, asc: r.id],
       select: %{
@@ -294,6 +292,132 @@ defmodule HydraSrt.Db do
       %{id: id, status: schema_status || status}
     end)
     |> Enum.uniq_by(& &1.id)
+  end
+
+  @doc """
+  Human-readable detail for RTMP publish gate `route_not_live` logging.
+
+  Pass `stale_matches` when `find_live_routes_by_rtmp_path/1` returned candidates but a
+  fresh `route_live?/1` check rejected them all (lookup race).
+  """
+  @spec describe_rtmp_publish_gate_rejection(String.t(), keyword()) :: String.t()
+  def describe_rtmp_publish_gate_rejection(path, opts \\ []) when is_binary(path) do
+    case Keyword.get(opts, :stale_matches) do
+      matches when is_list(matches) and matches != [] ->
+        ids = Enum.map(matches, & &1.id)
+        statuses = Enum.map(matches, & &1.status)
+
+        "detail=stale_live_verify route_ids=#{inspect(ids)} statuses=#{inspect(statuses)} " <>
+          "hint=\"Route stopped between lookup and publish admission\""
+
+      _ ->
+        describe_rtmp_publish_gate_no_live_match(path)
+    end
+  end
+
+  defp describe_rtmp_publish_gate_no_live_match(path) when is_binary(path) do
+    normalized = HydraSrt.Api.Endpoint.normalize_rtmp_path(path)
+    live = MapSet.new(HydraSrt.live_route_statuses())
+    source_type = Endpoint.source_type()
+    destination_type = Endpoint.destination_type()
+    rows = rtmp_publish_gate_candidate_rows(source_type, destination_type)
+
+    hint_start =
+      "hint=\"Start a route with an enabled RTMP source on this path\""
+
+    cond do
+      rows == [] ->
+        "detail=no_rtmp_endpoints normalized_path=#{inspect(normalized)} #{hint_start}"
+
+      true ->
+        matching =
+          Enum.filter(rows, fn row ->
+            rtmp_publish_gate_path_matches?(row, normalized, source_type, destination_type)
+          end)
+
+        if matching == [] do
+          configured =
+            rows
+            |> Enum.map(fn row ->
+              case row.endpoint_type do
+                ^source_type -> row.path
+                ^destination_type -> row.location
+                _ -> nil
+              end
+            end)
+            |> Enum.reject(&is_nil/1)
+            |> Enum.uniq()
+
+          obs_hint =
+            "hint=\"Publish with OBS Server=rtmp://HOST:1935/live and Stream Key=<name>; " <>
+              "do not put the full path in Server with an empty Stream Key\""
+
+          "detail=no_path_match normalized_path=#{inspect(normalized)} " <>
+            "configured_rtmp_paths=#{inspect(configured)} #{obs_hint}"
+        else
+          summaries =
+            Enum.map(matching, fn row ->
+              runtime = row.schema_status || row.route_status
+
+              excluded =
+                cond do
+                  row.endpoint_enabled != true ->
+                    "endpoint_disabled"
+
+                  row.endpoint_type == source_type and row.active_source_id != nil and
+                      row.active_source_id != row.endpoint_id ->
+                    "inactive_backup_source"
+
+                  not MapSet.member?(live, runtime) ->
+                    "status_not_live(#{runtime})"
+
+                  true ->
+                    "eligible"
+                end
+
+              name = row.route_name || row.route_id
+
+              "route=#{inspect(name)} id=#{row.route_id} runtime_status=#{inspect(runtime)} excluded=#{excluded}"
+            end)
+
+          live_list = HydraSrt.live_route_statuses() |> Enum.join(",")
+
+          "detail=no_live_route normalized_path=#{inspect(normalized)} " <>
+            "candidates=[#{Enum.join(summaries, "; ")}] live_statuses=[#{live_list}] #{hint_start}"
+        end
+    end
+  end
+
+  defp rtmp_publish_gate_candidate_rows(source_type, destination_type) do
+    from(e in Endpoint,
+      join: r in Route,
+      on: r.id == e.route_id,
+      where:
+        e.schema == "RTMP" and
+          (e.type == ^source_type or e.type == ^destination_type),
+      order_by: [asc: r.inserted_at, asc: r.id],
+      select: %{
+        route_id: r.id,
+        route_name: r.name,
+        route_status: r.status,
+        schema_status: r.schema_status,
+        active_source_id: r.active_source_id,
+        endpoint_id: e.id,
+        endpoint_enabled: e.enabled,
+        endpoint_type: e.type,
+        path: e.path,
+        location: e.location
+      }
+    )
+    |> Repo.all()
+  end
+
+  defp rtmp_publish_gate_path_matches?(row, normalized, source_type, destination_type) do
+    case row.endpoint_type do
+      ^source_type -> row.path == normalized
+      ^destination_type -> rtmp_location_path_matches?(row.location, normalized)
+      _ -> false
+    end
   end
 
   defp rtmp_location_path_matches?(location, normalized) when is_binary(location) do

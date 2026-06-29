@@ -166,7 +166,7 @@ defmodule HydraSrt.DbRtmpPathLookupTest do
       assert [] = Db.find_live_routes_by_rtmp_path("/live/nope")
     end
 
-    test "excludes a live route whose route.enabled is false" do
+    test "includes a live route when route.enabled is false" do
       route =
         route_fixture(%{
           "status" => "processing",
@@ -177,8 +177,10 @@ defmodule HydraSrt.DbRtmpPathLookupTest do
         })
 
       rtmp_source_fixture(route, %{"path" => "/live/disabled-route"})
+      route_id = route["id"]
 
-      assert [] = Db.find_live_routes_by_rtmp_path("/live/disabled-route")
+      assert [%{id: ^route_id, status: "processing"}] =
+               Db.find_live_routes_by_rtmp_path("/live/disabled-route")
     end
 
     test "excludes a live route whose RTMP source endpoint is disabled" do
@@ -241,6 +243,41 @@ defmodule HydraSrt.DbRtmpPathLookupTest do
       assert [%{id: first_id}, %{id: second_id}] = Db.find_live_routes_by_rtmp_path(path)
       assert first_id == route_a["id"]
       assert second_id == route_b["id"]
+    end
+  end
+
+  describe "describe_rtmp_publish_gate_rejection/2" do
+    test "explains when no route matches the path" do
+      route = route_with_status("processing")
+      rtmp_source_fixture(route, %{"path" => "/live/other"})
+
+      detail = Db.describe_rtmp_publish_gate_rejection("/live/test")
+
+      assert detail =~ "detail=no_path_match"
+      assert detail =~ "normalized_path=\"/live/test\""
+      assert detail =~ "/live/other"
+    end
+
+    test "explains when a matching route is not live" do
+      route = route_with_status("stopped")
+      rtmp_source_fixture(route, %{"path" => "/live/test"})
+
+      detail = Db.describe_rtmp_publish_gate_rejection("/live/test")
+
+      assert detail =~ "detail=no_live_route"
+      assert detail =~ "status_not_live(stopped)"
+      assert detail =~ "hint=\"Start a route"
+    end
+
+    test "explains stale live verify when matches become not live" do
+      detail =
+        Db.describe_rtmp_publish_gate_rejection("/live/test",
+          stale_matches: [%{id: "route-1", status: "processing"}]
+        )
+
+      assert detail =~ "detail=stale_live_verify"
+      assert detail =~ "route-1"
+      assert detail =~ "processing"
     end
   end
 end
