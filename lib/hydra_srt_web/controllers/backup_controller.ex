@@ -2,133 +2,89 @@ defmodule HydraSrtWeb.BackupController do
   use HydraSrtWeb, :controller
 
   alias HydraSrt.Db
+  alias HydraSrt.RouteBackup
 
-  def export(conn, _params) do
-    with {:ok, routes} <- Db.get_all_routes(true) do
+  @spec export_routes(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def export_routes(conn, _params) do
+    with {:ok, backup} <- RouteBackup.export(),
+         {:ok, json} <- Jason.encode(backup, pretty: true) do
+      timestamp = DateTime.utc_now() |> Calendar.strftime("%d%m%y%H%M")
+      filename = "hydra-srt-routes-#{timestamp}.json"
+
       conn
       |> put_resp_content_type("application/json")
       |> put_resp_header(
         "content-disposition",
-        "inline; filename=\"hydra_srt_routes_backup.json\""
+        "attachment; filename=\"#{filename}\""
       )
-      |> json(%{data: routes})
+      |> send_resp(200, json)
     else
       error ->
         conn
         |> put_status(:internal_server_error)
-        |> json(%{error: "Failed to export routes: #{inspect(error)}"})
+        |> json(%{error: "Failed to export route backup: #{inspect(error)}"})
     end
   end
 
-  def create_download_link(conn, _params) do
-    session_id = UUID.uuid4()
-
-    Cachex.put(HydraSrt.Cache, "backup_session:#{session_id}", true, ttl: :timer.minutes(5))
-
-    conn
-    |> put_status(:ok)
-    |> json(%{download_link: "/backup/#{session_id}/download"})
-  end
-
-  def create_backup_download_link(conn, _params) do
-    session_id = UUID.uuid4()
-
-    Cachex.put(HydraSrt.Cache, "backup_binary_session:#{session_id}", true,
-      ttl: :timer.minutes(5)
-    )
-
-    conn
-    |> put_status(:ok)
-    |> json(%{download_link: "/backup/#{session_id}/download_backup"})
-  end
-
-  def download(conn, %{"session_id" => session_id}) do
-    case Cachex.get(HydraSrt.Cache, "backup_session:#{session_id}") do
-      {:ok, true} ->
-        with {:ok, routes} <- Db.get_all_routes(true) do
-          Cachex.del(HydraSrt.Cache, "backup_session:#{session_id}")
-
-          json_data = Jason.encode!(routes, pretty: true)
-
-          now = DateTime.utc_now()
-          formatted_time = Calendar.strftime(now, "%m-%d-%y-%H:%M:%S")
-          filename = "hydra-routes-#{formatted_time}.json"
-
-          conn
-          |> put_resp_content_type("application/json")
-          |> put_resp_header(
-            "content-disposition",
-            "attachment; filename=\"#{filename}\""
-          )
-          |> send_resp(200, json_data)
-        else
-          error ->
-            conn
-            |> put_status(:internal_server_error)
-            |> json(%{error: "Failed to download routes backup: #{inspect(error)}"})
-        end
-
-      _ ->
+  @spec import_routes(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def import_routes(conn, params) do
+    case RouteBackup.import(params) do
+      {:ok, count} ->
         conn
-        |> put_status(:forbidden)
-        |> json(%{error: "Invalid or expired download link"})
-    end
-  end
+        |> put_status(:ok)
+        |> json(%{message: "Route backup imported successfully", routes_created: count})
 
-  def download_backup(conn, %{"session_id" => session_id}) do
-    case Cachex.get(HydraSrt.Cache, "backup_binary_session:#{session_id}") do
-      {:ok, true} ->
-        with {:ok, binary_data} <- Db.backup() do
-          Cachex.del(HydraSrt.Cache, "backup_binary_session:#{session_id}")
-
-          now = DateTime.utc_now()
-          formatted_time = Calendar.strftime(now, "%m-%d-%y-%H:%M:%S")
-          filename = "hydra-srt-#{formatted_time}.db"
-
-          conn
-          |> put_resp_content_type("application/x-sqlite3")
-          |> put_resp_header(
-            "content-disposition",
-            "attachment; filename=\"#{filename}\""
-          )
-          |> send_resp(200, binary_data)
-        else
-          error ->
-            conn
-            |> put_status(:internal_server_error)
-            |> json(%{error: "Failed to download backup: #{inspect(error)}"})
-        end
-
-      _ ->
+      {:error, reason} ->
         conn
-        |> put_status(:forbidden)
-        |> json(%{error: "Invalid or expired download link"})
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: "Failed to import route backup: #{inspect(reason)}"})
     end
   end
 
-  def restore(conn, _params) do
-    try do
-      {:ok, binary_data, _conn} = Plug.Conn.read_body(conn)
-      IO.puts("Received binary data of size: #{byte_size(binary_data)} bytes")
+  @spec download_backup(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def download_backup(conn, _params) do
+    with {:ok, binary_data} <- Db.backup() do
+      filename = "hydra-srt-#{timestamp()}.db"
 
-      case Db.restore_backup(binary_data) do
-        :ok ->
-          conn
-          |> put_status(:ok)
-          |> json(%{message: "Backup restored successfully"})
-
-        {:error, reason} ->
-          conn
-          |> put_status(:internal_server_error)
-          |> json(%{error: "Failed to restore backup: #{inspect(reason)}"})
-      end
-    rescue
-      e ->
-        IO.puts("Error processing backup: #{inspect(e)}")
-
+      conn
+      |> put_resp_content_type("application/octet-stream")
+      |> put_resp_header("content-disposition", "attachment; filename=\"#{filename}\"")
+      |> send_resp(200, binary_data)
+    else
+      error ->
         conn
         |> put_status(:internal_server_error)
-        |> json(%{error: "Failed to process backup: #{inspect(e)}"})
+        |> json(%{error: "Failed to download backup: #{inspect(error)}"})
     end
+  end
+
+  @spec restore(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def restore(conn, _params) do
+    with {:ok, binary_data, conn} <- read_request_body(conn),
+         :ok <- Db.restore_backup(binary_data) do
+      conn
+      |> put_status(:ok)
+      |> json(%{message: "Backup restored successfully"})
+    else
+      {:error, reason} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: "Failed to restore backup: #{inspect(reason)}"})
+    end
+  end
+
+  @spec read_request_body(Plug.Conn.t(), iodata()) ::
+          {:ok, binary(), Plug.Conn.t()} | {:error, term()}
+  def read_request_body(conn, acc \\ []) do
+    case Plug.Conn.read_body(conn, length: 100_000_000, read_length: 1_000_000) do
+      {:ok, chunk, conn} -> {:ok, IO.iodata_to_binary(Enum.reverse([chunk | acc])), conn}
+      {:more, chunk, conn} -> read_request_body(conn, [chunk | acc])
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec timestamp() :: binary()
+  def timestamp do
+    DateTime.utc_now() |> Calendar.strftime("%Y-%m-%dT%H-%M-%SZ")
   end
 end

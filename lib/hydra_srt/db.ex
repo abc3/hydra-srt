@@ -1571,6 +1571,7 @@ defmodule HydraSrt.Db do
       "id" => destination.id,
       "route_id" => destination.route_id,
       "lock_version" => destination.lock_version,
+      "position" => destination.position,
       "alias" => destination.alias,
       "node" => destination.node,
       "started_at" => destination.started_at,

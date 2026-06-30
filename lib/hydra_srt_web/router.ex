@@ -11,11 +11,6 @@ defmodule HydraSrtWeb.Router do
     plug :accepts, ["json"]
   end
 
-  pipeline :api_no_parse do
-    plug :accepts, ["*/*"]
-    plug :check_auth
-  end
-
   pipeline :auth do
     plug :check_auth
   end
@@ -83,10 +78,6 @@ defmodule HydraSrtWeb.Router do
     put "/notifications/telegram", NotificationController, :update_telegram
     post "/notifications/telegram/test", NotificationController, :test_telegram
 
-    get "/backup/export", BackupController, :export
-    get "/backup/create-download-link", BackupController, :create_download_link
-    get "/backup/create-backup-download-link", BackupController, :create_backup_download_link
-
     get "/system/pipelines", SystemController, :list_pipelines
     get "/system/pipelines/detailed", SystemController, :list_pipelines_detailed
     post "/system/pipelines/:pid/kill", SystemController, :kill_pipeline
@@ -100,15 +91,12 @@ defmodule HydraSrtWeb.Router do
     get "/nodes/:id/analytics", NodeController, :analytics
   end
 
-  # TODO: improve this
-  scope "/api", HydraSrtWeb do
-    pipe_through [:api_no_parse]
-    post "/restore", BackupController, :restore
-  end
-
-  scope "/backup", HydraSrtWeb do
-    get "/:session_id/download", BackupController, :download
-    get "/:session_id/download_backup", BackupController, :download_backup
+  scope "/api/backup", HydraSrtWeb do
+    pipe_through [:auth]
+    get "/routes", BackupController, :export_routes
+    post "/routes", BackupController, :import_routes
+    get "/full", BackupController, :download_backup
+    post "/full/restore", BackupController, :restore
   end
 
   scope "/mcp" do

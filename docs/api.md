@@ -282,35 +282,30 @@ Current limitation:
 
 ## Backup & Restore
 
-### Export Routes
+### Routes Backup
 
-*   **Endpoint:** `GET /api/backup/export`
-*   **Description:** Exports all routes configuration as JSON.
+*   **Endpoint:** `GET /api/backup/routes`
+*   **Description:** Downloads a versioned `hydra-srt-routes-<ddMMyyHHmm>.json` file containing portable route, source, destination, and tag configuration.
 
-### Create Download Link (JSON)
+*   **Endpoint:** `POST /api/backup/routes`
+*   **Description:** Validates and imports a routes backup. A successful import replaces all existing routes.
+*   **Payload:** Routes backup JSON.
 
-*   **Endpoint:** `GET /api/backup/create-download-link`
-*   **Description:** Generates a temporary link to download routes as JSON.
+Routes backups include SRT passphrases. Treat backup files as sensitive.
 
-### Create Download Link (Binary Backup)
+### Download Database Backup
 
-*   **Endpoint:** `GET /api/backup/create-backup-download-link`
-*   **Description:** Generates a temporary link to download a full system backup (SQLite `.db` snapshot).
-*   **Security note:** The backup contains notification settings, including Telegram bot tokens stored in the database.
-
-### Download Backup
-
-*   **Endpoint:** `GET /backup/:session_id/download`
-*   **Description:** Downloads the JSON export (requires session ID from create link).
-
-*   **Endpoint:** `GET /backup/:session_id/download_backup`
-*   **Description:** Downloads the SQLite `.db` backup (requires session ID from create link).
+*   **Endpoint:** `GET /api/backup/full`
+*   **Description:** Downloads a consistent SQLite `.db` snapshot for disaster recovery.
+*   **Response Content-Type:** `application/octet-stream`
+*   **Security note:** The database contains route passphrases, notification credentials, tokens, and other system configuration.
 
 ### Restore Backup
 
-*   **Endpoint:** `POST /api/restore`
-*   **Description:** Restores system state from a SQLite `.db` backup snapshot.
+*   **Endpoint:** `POST /api/backup/full/restore`
+*   **Description:** Validates and restores system state from a compatible SQLite `.db` snapshot. Active routes are stopped and restarted from the restored configuration. If restore fails after the database swap, the previous database is restored.
 *   **Payload:** Raw SQLite DB file bytes.
+*   **Compatibility:** The backup must have the same database migration versions as the running Gateway.
 
 ## MCP Tokens
 

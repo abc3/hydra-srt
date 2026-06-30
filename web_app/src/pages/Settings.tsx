@@ -8,6 +8,7 @@ import { ROUTES } from '../utils/constants';
 import { useInit } from '../context/InitContext';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { ChangeEvent } from 'react';
+import { reloadPage } from '../utils/browser';
 
 const { Title } = Typography;
 const ONE_MINUTE_SECONDS = 60;
@@ -54,6 +55,7 @@ const Settings = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [isDownloadingRoutes, setIsDownloadingRoutes] = useState(false);
+  const [isImportingRoutes, setIsImportingRoutes] = useState(false);
   const [tags, setTags] = useState<TagRecord[]>([]);
   const [tagsLoading, setTagsLoading] = useState(false);
   const [tagModalOpen, setTagModalOpen] = useState(false);
@@ -75,6 +77,7 @@ const Settings = () => {
   const [tokenSuffix, setTokenSuffix] = useState<string | null>(null);
   const [uptimeNowMs, setUptimeNowMs] = useState(Date.now());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const routesBackupInputRef = useRef<HTMLInputElement | null>(null);
   const signalFormHydratedRef = useRef<Record<SignalTransport, boolean>>({ srt: false, udp: false, rtp: false, rtmp: false });
   const notificationsFormHydratedRef = useRef(false);
   const [modal, modalContextHolder] = Modal.useModal();
@@ -287,7 +290,7 @@ const Settings = () => {
   const handleRoutesBackupDownload = async () => {
     setIsDownloadingRoutes(true);
     try {
-      await backupApi.download();
+      await backupApi.downloadRoutes();
       messageApi.success({
         content: 'Routes export started',
         icon: <DownloadOutlined />,
@@ -305,13 +308,48 @@ const Settings = () => {
     }
   };
 
+  const handleRoutesBackupFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.json')) {
+      messageApi.error('Select a .json route backup file');
+      e.target.value = '';
+      return;
+    }
+
+    modal.confirm({
+      title: 'Import route backup?',
+      icon: <ExclamationCircleOutlined />,
+      content: 'Importing this backup replaces all existing routes.',
+      okText: 'Import routes',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setIsImportingRoutes(true);
+        try {
+          const result = await backupApi.importRoutes(file);
+          messageApi.success(result.message || `Imported ${result.routes_created} routes`);
+          reloadPage();
+        } catch (error: any) {
+          messageApi.error(`Failed to import route backup: ${error.message}`);
+        } finally {
+          setIsImportingRoutes(false);
+          if (routesBackupInputRef.current) routesBackupInputRef.current.value = '';
+        }
+      },
+      onCancel: () => {
+        if (routesBackupInputRef.current) routesBackupInputRef.current.value = '';
+      },
+    });
+  };
+
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.name.endsWith('.backup')) {
+    if (!file.name.endsWith('.db')) {
       messageApi.error({
-        content: 'You can only upload .backup files!',
+        content: 'Select a .db backup file',
         icon: <CloseCircleOutlined />,
         duration: 5
       });
@@ -366,6 +404,7 @@ const Settings = () => {
               duration: 3
             });
           }
+          reloadPage();
         } catch (error: any) {
           console.error('Error restoring backup:', error);
 
@@ -486,7 +525,7 @@ const Settings = () => {
               ref={fileInputRef}
               onChange={handleFileChange}
               style={{ display: 'none' }}
-              accept=".backup"
+              accept=".db"
               name="backup"
             />
             <Button
@@ -509,8 +548,8 @@ const Settings = () => {
   const RoutesTabContent = () => {
     return (
       <div>
-        <Card title="Export Routes">
-          <p>Export all routes and their destinations as a JSON file.</p>
+        <Card title="Routes Backup">
+          <p>Export or import a portable routes configuration backup.</p>
           <Space direction="vertical" style={{ width: '100%' }}>
             <Button
               type="primary"
@@ -518,10 +557,25 @@ const Settings = () => {
               onClick={handleRoutesBackupDownload}
               loading={isDownloadingRoutes}
             >
-              Export Routes as JSON
+              Export Routes
+            </Button>
+            <input
+              type="file"
+              ref={routesBackupInputRef}
+              onChange={handleRoutesBackupFileChange}
+              style={{ display: 'none' }}
+              accept=".json"
+              name="routes-backup"
+            />
+            <Button
+              icon={<UploadOutlined />}
+              onClick={() => routesBackupInputRef.current?.click()}
+              loading={isImportingRoutes}
+            >
+              Import Routes
             </Button>
             <p style={{ fontSize: '12px', color: 'rgba(255, 255, 255, 0.45)' }}>
-              This will export a JSON file containing all routes with their destinations.
+              Import replaces all existing routes after the backup is validated.
             </p>
           </Space>
         </Card>

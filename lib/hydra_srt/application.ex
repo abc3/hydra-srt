@@ -48,6 +48,7 @@ defmodule HydraSrt.Application do
        keys: :unique, name: HydraSrt.Registry.MsgHandlers, partitions: runtime_schedulers},
       {Registry,
        keys: :unique, name: HydraSrt.Rtmp.PublisherRegistry, partitions: runtime_schedulers},
+      HydraSrt.BackupLock,
       HydraSrt.Repo,
       HydraSrt.AuthCleanup,
       HydraSrt.SignalGenerator,
