@@ -225,4 +225,29 @@ defmodule HydraSrt.Stats.AnalyticsTest do
              }
            ] = Analytics.source_timeline_from_switches(switches, query)
   end
+
+  test "srt_health_points_from_rows maps legacy packet loss metric key" do
+    rows = [
+      %{
+        timestamp: "2026-05-01T12:00:00Z",
+        entity_type: "source",
+        entity_id: "s1",
+        metric_key: "srt_packet_loss",
+        value: 0.25
+      },
+      %{
+        timestamp: "2026-05-01T12:00:00Z",
+        entity_type: "source",
+        entity_id: "s1",
+        metric_key: "srt_packet_loss_percent",
+        value: 0.5
+      }
+    ]
+
+    assert [point] = Analytics.srt_health_points_from_rows(rows)
+    assert point.timestamp == "2026-05-01T12:00:00Z"
+    assert point.entity_type == "source"
+    assert point.entity_id == "s1"
+    assert Map.get(point, "packet_loss_percent") == 0.5
+  end
 end

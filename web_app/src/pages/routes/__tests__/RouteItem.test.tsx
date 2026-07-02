@@ -7,9 +7,11 @@ import { routesApi } from '../../../utils/api';
 
 type RealtimeStatusListener = (payload: { item_id: string; status: string }) => void;
 type RealtimeSourceListener = (payload: { item_id: string; active_source_id: string; last_switch_reason: string }) => void;
+type RealtimeStatsListener = (payload: Record<string, unknown>) => void;
 type RealtimeMockExports = typeof realtime & {
   __emitItemSource: (itemId: string, activeSourceId: string, reason?: string) => void;
   __emitItemStatus: (itemId: string, status: string) => void;
+  __emitStats: (payload: Record<string, unknown>) => void;
   __clearRealtimeMockState: () => void;
 };
 
@@ -93,7 +95,7 @@ vi.mock('../../../utils/api', () => {
 vi.mock('../../../utils/realtime', () => {
   const itemListeners = new Map<string, RealtimeStatusListener[]>();
   const itemSourceListeners = new Map<string, RealtimeSourceListener[]>();
-  const statsListeners = new Set<() => void>();
+  const statsListeners = new Set<RealtimeStatsListener>();
 
   const subscribeToItemStatus = vi.fn((itemId: string, listener: RealtimeStatusListener) => {
     const listeners = itemListeners.get(itemId) || [];
@@ -137,7 +139,10 @@ vi.mock('../../../utils/realtime', () => {
     }));
   };
 
-  const subscribeToStats = vi.fn(() => vi.fn());
+  const subscribeToStats = vi.fn((listener: RealtimeStatsListener) => {
+    statsListeners.add(listener);
+    return vi.fn(() => statsListeners.delete(listener));
+  });
 
   return {
     subscribeToItemSource,
@@ -145,6 +150,9 @@ vi.mock('../../../utils/realtime', () => {
     subscribeToStats,
     __emitItemSource: emitItemSource,
     __emitItemStatus: emitItemStatus,
+    __emitStats: (payload: Record<string, unknown>) => {
+      statsListeners.forEach((listener) => listener(payload));
+    },
     __clearRealtimeMockState: () => {
       itemListeners.clear();
       itemSourceListeners.clear();
@@ -342,6 +350,50 @@ describe('RouteItem', () => {
         expect.objectContaining({ limit: 50, offset: 0 }),
       );
     });
+  });
+
+  it('renders live destination SRT health snapshots', async () => {
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Endpoints');
+    fireEvent.click(screen.getByRole('tab', { name: 'SRT Health' }));
+
+    await waitFor(() => {
+      expect(realtime.subscribeToStats).toHaveBeenCalled();
+    });
+
+    act(() => {
+      realtimeMock.__emitStats({
+        route_id: 'r1',
+        metric: 'snapshot',
+        stats: {
+          source: { bytes_in_per_sec: 1000 },
+          destinations: [{
+            id: 'd2',
+            bytes_out_per_sec: 1000,
+            srt: {
+              'rtt-ms': 18,
+              'negotiated-latency-ms': 120,
+              'bandwidth-mbps': 8,
+              'send-rate-mbps': 2,
+              'packet-loss-percent': 0.5,
+              'retransmitted-packets-per-sec': 3,
+              'dropped-packets-per-sec': 1,
+              'nack-packets-per-sec': 2,
+            },
+          }],
+        },
+      });
+    });
+
+    expect(await screen.findByText('Quality', {}, { timeout: 1500 })).toBeInTheDocument();
+    expect(screen.getByText('Recovery')).toBeInTheDocument();
   });
 
   it('shows route enabled tag under route title', async () => {

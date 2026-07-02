@@ -57,6 +57,7 @@ import { getEndpointAddressString, renderEndpointAddress } from '../../utils/rou
 import SwitchMarkers from './SwitchMarkers';
 import SourceTimeline from './SourceTimeline';
 import PipelineLogsTab from './PipelineLogsTab';
+import SrtHealthTab from './SrtHealthTab';
 import dayjs from 'dayjs';
 import {
   LineChart,
@@ -90,6 +91,7 @@ import {
   RoutePendingAction,
   RouteRecord,
   RuntimeStatusMeta,
+  SrtHealthPoint,
   SwitchEvent,
   TimelineSegment,
   TimeRangeQuery,
@@ -117,6 +119,43 @@ const CHART_GRID_STYLE = {
   stroke: '#4f4f4f',
   strokeWidth: 0.6,
   strokeDasharray: '2 4',
+};
+const SRT_HEALTH_FIELDS = [
+  'rtt_ms',
+  'negotiated_latency_ms',
+  'bandwidth_mbps',
+  'rate_mbps',
+  'packet_loss_percent',
+  'retransmitted_packets_per_sec',
+  'dropped_packets_per_sec',
+  'nack_packets_per_sec',
+] as const;
+
+const snapshotSrtHealthPoint = (
+  timestamp: string,
+  entityType: 'source' | 'destination',
+  entityId: string | undefined,
+  srt: Record<string, unknown> | undefined,
+): SrtHealthPoint | null => {
+  if (!entityId || !srt) return null;
+  const point: SrtHealthPoint = { timestamp, entity_type: entityType, entity_id: entityId };
+  const sourceKeys: Record<(typeof SRT_HEALTH_FIELDS)[number], string> = {
+    rtt_ms: 'rtt-ms',
+    negotiated_latency_ms: 'negotiated-latency-ms',
+    bandwidth_mbps: 'bandwidth-mbps',
+    rate_mbps: entityType === 'source' ? 'receive-rate-mbps' : 'send-rate-mbps',
+    packet_loss_percent: 'packet-loss-percent',
+    retransmitted_packets_per_sec: 'retransmitted-packets-per-sec',
+    dropped_packets_per_sec: 'dropped-packets-per-sec',
+    nack_packets_per_sec: 'nack-packets-per-sec',
+  };
+  let hasValue = false;
+  SRT_HEALTH_FIELDS.forEach((field) => {
+    const value = toNumberOrNull(srt[sourceKeys[field]]);
+    point[field] = value;
+    hasValue ||= value != null;
+  });
+  return hasValue ? point : null;
 };
 
 const ANALYTICS_WINDOW_OPTIONS = [
@@ -284,6 +323,8 @@ const RouteItem = () => {
   const [pipelineLogsLoading, setPipelineLogsLoading] = useState(false);
   const liveSnapshotBufferRef = useRef<LiveSnapshotBuffer>(null);
   const liveSnapshotFlushTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const lastAnalyticsFetchKeyRef = useRef<string | null>(null);
+  const prevAnalyticsCardTabRef = useRef(analyticsCardTab);
   const didInitFromUrlRef = useRef(false);
   const sourceIdsDependency = (routeData?.sources || [])
     .map((source) => source?.id)
@@ -303,7 +344,7 @@ const RouteItem = () => {
   );
 
   const appendLiveZeroPoint = useCallback(() => {
-    if (analyticsWindow !== LIVE_ANALYTICS_WINDOW || analyticsCardTab !== 'bandwidth') {
+    if (analyticsWindow !== LIVE_ANALYTICS_WINDOW) {
       return;
     }
 
@@ -316,6 +357,7 @@ const RouteItem = () => {
 
     const timestamp = alignToSecondIso(new Date());
     const cutoffMs = Date.now() - (LIVE_WINDOW_MINUTES * 60 * 1000);
+
     const zeroDestinations = (routeData?.destinations || []).reduce<Record<string, number>>(
       (acc, destination) => {
         if (destination?.id && destination.enabled !== false) {
@@ -347,12 +389,20 @@ const RouteItem = () => {
         })
         .slice(-MAX_LIVE_POINTS);
 
+      const trimmedSrtHealth = (prev?.srt_health || [])
+        .filter((point) => {
+          const pointMs = Date.parse(String(point.timestamp ?? ''));
+          return !Number.isNaN(pointMs) && pointMs >= cutoffMs;
+        })
+        .slice(-MAX_LIVE_POINTS * Math.max(1, (routeData?.destinations || []).length + 1));
+
       return {
         ...prev,
         points: trimmedPoints,
+        srt_health: trimmedSrtHealth,
       };
     });
-  }, [analyticsWindow, analyticsCardTab, routeData?.destinations]);
+  }, [analyticsWindow, routeData?.destinations]);
 
   // Breadcrumb setup
   useEffect(() => {
@@ -510,9 +560,9 @@ const RouteItem = () => {
     }
   };
 
-  const fetchAnalyticsData = useCallback(async (queryParams: TimeRangeQuery) => {
+  const fetchAnalyticsData = useCallback(async (queryParams: TimeRangeQuery): Promise<boolean> => {
     if (!id) {
-      return;
+      return false;
     }
 
     const normalizePoint = (point: AnalyticsPoint) => {
@@ -531,6 +581,13 @@ const RouteItem = () => {
         destinations: normalizedDestinations,
       };
     };
+    const normalizeSrtHealthPoint = (point: SrtHealthPoint): SrtHealthPoint => {
+      const normalized = { ...point };
+      SRT_HEALTH_FIELDS.forEach((field) => {
+        normalized[field] = toNumberOrNull(point[field]);
+      });
+      return normalized;
+    };
 
     try {
       setAnalyticsLoading(true);
@@ -540,10 +597,13 @@ const RouteItem = () => {
       setAnalyticsData({
         ...nextData,
         points: (nextData.points || []).map(normalizePoint),
+        srt_health: (nextData.srt_health || []).map(normalizeSrtHealthPoint),
       });
+      return true;
     } catch (error) {
       setAnalyticsError(getErrorMessage(error, 'Unknown error') || 'Failed to fetch analytics data');
       setAnalyticsData({ points: [], meta: null });
+      return false;
     } finally {
       setAnalyticsLoading(false);
     }
@@ -573,7 +633,11 @@ const RouteItem = () => {
   }, [analyticsWindow, searchParams, setSearchParams]);
 
   useEffect(() => {
-    if (!id || analyticsCardTab !== 'bandwidth') {
+    if (!id || !['bandwidth', 'srt_health'].includes(analyticsCardTab)) {
+      if (!['bandwidth', 'srt_health'].includes(analyticsCardTab)) {
+        lastAnalyticsFetchKeyRef.current = null;
+      }
+      prevAnalyticsCardTabRef.current = analyticsCardTab;
       return;
     }
 
@@ -597,7 +661,30 @@ const RouteItem = () => {
       queryParams.window = analyticsWindow;
     }
 
-    fetchAnalyticsData(queryParams);
+    const fetchKey = JSON.stringify({
+      id,
+      analyticsWindow,
+      customRangeApplied: customRangeApplied.map((value) => value.toISOString()),
+      analyticsRefreshTick,
+    });
+
+    const previousTab = prevAnalyticsCardTabRef.current;
+    prevAnalyticsCardTabRef.current = analyticsCardTab;
+
+    const isLiveAnalyticsTabSwitch =
+      analyticsWindow === LIVE_ANALYTICS_WINDOW &&
+      ['bandwidth', 'srt_health'].includes(previousTab) &&
+      previousTab !== analyticsCardTab;
+
+    if (isLiveAnalyticsTabSwitch && lastAnalyticsFetchKeyRef.current === fetchKey) {
+      return;
+    }
+
+    void fetchAnalyticsData(queryParams).then((success) => {
+      if (success && analyticsWindow === LIVE_ANALYTICS_WINDOW) {
+        lastAnalyticsFetchKeyRef.current = fetchKey;
+      }
+    });
   }, [
     id,
     analyticsWindow,
@@ -608,7 +695,12 @@ const RouteItem = () => {
   ]);
 
   useEffect(() => {
-    if (!id || analyticsWindow !== LIVE_ANALYTICS_WINDOW || analyticsCardTab !== 'bandwidth') {
+    if (
+      !id ||
+      analyticsWindow !== LIVE_ANALYTICS_WINDOW ||
+      !['bandwidth', 'srt_health'].includes(analyticsCardTab) ||
+      isTerminalRuntimeStatus(routeData?.schema_status || routeData?.status)
+    ) {
       return undefined;
     }
 
@@ -642,22 +734,45 @@ const RouteItem = () => {
           })
           .slice(-MAX_LIVE_POINTS);
 
+        const bufferedEntities = new Set(
+          buffered.srtHealth.map((point) => `${point.entity_type}:${point.entity_id}`),
+        );
+
         return {
           ...prev,
           points: trimmedPoints,
+          srt_health: [
+            ...(prev.srt_health || []).filter((point) => {
+              const pointMs = Date.parse(String(point.timestamp ?? ''));
+              if (Number.isNaN(pointMs) || pointMs < cutoffMs) {
+                return false;
+              }
+
+              if (point.timestamp !== buffered.timestamp) {
+                return true;
+              }
+
+              return !bufferedEntities.has(`${point.entity_type}:${point.entity_id}`);
+            }),
+            ...buffered.srtHealth,
+          ].slice(-MAX_LIVE_POINTS * Math.max(1, (routeData?.destinations || []).length + 1)),
         };
       });
     };
 
-    return subscribeToStats((payload) => {
+    const unsubscribe = subscribeToStats((payload) => {
       if (payload?.route_id !== id || payload?.metric !== 'snapshot' || !payload?.stats) {
         return;
       }
 
       const snapshotTs = alignToSecondIso(new Date());
       const statsPayload = payload?.stats as {
-        source?: { bytes_in_per_sec?: number };
-        destinations?: Array<{ id?: string; bytes_out_per_sec?: number }>;
+        source?: { bytes_in_per_sec?: number; srt?: Record<string, unknown> };
+        destinations?: Array<{
+          id?: string;
+          bytes_out_per_sec?: number;
+          srt?: Record<string, unknown>;
+        }>;
       } | undefined;
       const snapshotSource = toNumberOrNull(statsPayload?.source?.bytes_in_per_sec);
       const snapshotDestinations = (statsPayload?.destinations || [])
@@ -673,6 +788,22 @@ const RouteItem = () => {
         timestamp: snapshotTs,
         source: snapshotSource,
         destinations: snapshotDestinations,
+        srtHealth: [
+          snapshotSrtHealthPoint(
+            snapshotTs,
+            'source',
+            routeData?.active_source_id,
+            statsPayload?.source?.srt,
+          ),
+          ...(statsPayload?.destinations || []).map((destination) =>
+            snapshotSrtHealthPoint(
+              snapshotTs,
+              'destination',
+              destination.id,
+              destination.srt,
+            )
+          ),
+        ].filter((point): point is SrtHealthPoint => point != null),
       };
 
       if (!liveSnapshotFlushTimerRef.current) {
@@ -682,7 +813,26 @@ const RouteItem = () => {
         );
       }
     });
-  }, [id, analyticsWindow, analyticsCardTab]);
+
+    return () => {
+      unsubscribe();
+
+      if (liveSnapshotFlushTimerRef.current) {
+        window.clearTimeout(liveSnapshotFlushTimerRef.current);
+        liveSnapshotFlushTimerRef.current = null;
+      }
+
+      liveSnapshotBufferRef.current = null;
+    };
+  }, [
+    id,
+    analyticsWindow,
+    analyticsCardTab,
+    routeData?.active_source_id,
+    routeData?.destinations,
+    routeData?.schema_status,
+    routeData?.status,
+  ]);
 
   useEffect(
     () => () => {
@@ -1418,7 +1568,8 @@ const RouteItem = () => {
               }}
               loading={analyticsCardTab === 'pipeline_logs' ? pipelineLogsLoading : analyticsLoading}
               disabled={
-                analyticsCardTab === 'bandwidth' && analyticsWindow === LIVE_ANALYTICS_WINDOW
+                analyticsCardTab !== 'pipeline_logs' &&
+                analyticsWindow === LIVE_ANALYTICS_WINDOW
               }
             >
               Refresh
@@ -1471,7 +1622,7 @@ const RouteItem = () => {
                         <Line
                           type="monotone"
                           dataKey="source"
-                          name={`${routeData.name || 'Source'} in`}
+                          name={`${routeData.name || 'Source'} Media In`}
                           stroke={ANALYTICS_COLORS[0]}
                           dot={false}
                           isAnimationActive={false}
@@ -1500,7 +1651,7 @@ const RouteItem = () => {
                             key={destinationId}
                             type="monotone"
                             dataKey={`dest_${destinationId}`}
-                            name={`${destinationNameById[destinationId] || destinationId} out`}
+                            name={`${destinationNameById[destinationId] || destinationId} Media Out`}
                             stroke={ANALYTICS_COLORS[(index + 1) % ANALYTICS_COLORS.length]}
                             dot={false}
                             isAnimationActive={false}
@@ -1517,6 +1668,21 @@ const RouteItem = () => {
                     formatChartTimestamp={formatChartTimestamp}
                   />
                 </Space>
+              ),
+            },
+            {
+              key: 'srt_health',
+              label: 'SRT Health',
+              children: (
+                <SrtHealthTab
+                  sources={routeData?.sources || []}
+                  destinations={routeData?.destinations || []}
+                  activeSourceId={routeData?.active_source_id}
+                  points={analyticsData?.srt_health || []}
+                  loading={analyticsLoading}
+                  error={analyticsError}
+                  routeActive={!isTerminalRuntimeStatus(routeData?.schema_status || routeData?.status)}
+                />
               ),
             },
             {

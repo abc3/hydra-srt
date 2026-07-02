@@ -100,6 +100,20 @@ export type AnalyticsPoint = Record<string, unknown> & {
   destinations?: Record<string, number | null>;
 };
 
+export type SrtHealthPoint = {
+  timestamp?: string;
+  entity_type?: 'source' | 'destination';
+  entity_id?: string;
+  rtt_ms?: number | null;
+  negotiated_latency_ms?: number | null;
+  bandwidth_mbps?: number | null;
+  rate_mbps?: number | null;
+  packet_loss_percent?: number | null;
+  retransmitted_packets_per_sec?: number | null;
+  dropped_packets_per_sec?: number | null;
+  nack_packets_per_sec?: number | null;
+};
+
 export type AnalyticsMeta = Record<string, unknown> | null;
 
 export type AnalyticsData = {
@@ -107,6 +121,8 @@ export type AnalyticsData = {
   meta: AnalyticsMeta;
   switches?: unknown[];
   source_timeline?: unknown[];
+  srt_quality?: unknown[];
+  srt_health?: SrtHealthPoint[];
 };
 
 export type StatusHistoryEvent = Record<string, unknown>;
@@ -156,4 +172,5 @@ export type LiveSnapshotBuffer = {
   timestamp: string;
   source: number | null;
   destinations: Record<string, number | null>;
+  srtHealth: SrtHealthPoint[];
 } | null;

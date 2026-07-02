@@ -12,10 +12,30 @@ defmodule HydraSrt.Stats.MetricSelectorTest do
         "source" => %{
           "bytes_in_per_sec" => 191_572,
           "bytes_in_total" => 39_622_128,
-          "srt" => %{"packet-recv-loss" => 0.01, "rtt-ms" => 12.5}
+          "srt" => %{
+            "packet-recv-loss" => 42,
+            "packet-loss-percent" => 0.01,
+            "rtt-ms" => 12.5,
+            "negotiated-latency-ms" => 120,
+            "bandwidth-mbps" => 8.5,
+            "receive-rate-mbps" => 1.2,
+            "retransmitted-packets-per-sec" => 4,
+            "dropped-packets-per-sec" => 1,
+            "nack-packets-per-sec" => 2
+          }
         },
         "destinations" => [
-          %{"id" => "dest-1", "bytes_out_per_sec" => 186_684, "bytes_out_total" => 39_622_128},
+          %{
+            "id" => "dest-1",
+            "bytes_out_per_sec" => 186_684,
+            "bytes_out_total" => 39_622_128,
+            "srt" => %{
+              "packet-loss-percent" => 0.5,
+              "rtt-ms" => 20.0,
+              "send-rate-mbps" => 1.1,
+              "retransmitted-packets-per-sec" => 3
+            }
+          },
           %{"id" => "dest-2", "bytes_out_per_sec" => 92_000},
           %{"id" => "dest-ignored"},
           %{"bytes_out_per_sec" => 11_111}
@@ -38,7 +58,12 @@ defmodule HydraSrt.Stats.MetricSelectorTest do
 
     assert Enum.any?(rows, fn row ->
              row.entity_type == "source" and row.entity_id == "source-1" and
-               row.metric_key == "srt_packet_loss" and row.value_double == 0.01
+               row.metric_key == "srt_packet_loss" and row.value_double == 42.0
+           end)
+
+    assert Enum.any?(rows, fn row ->
+             row.entity_type == "source" and row.entity_id == "source-1" and
+               row.metric_key == "srt_packet_loss_percent" and row.value_double == 0.01
            end)
 
     assert Enum.any?(rows, fn row ->
@@ -54,6 +79,16 @@ defmodule HydraSrt.Stats.MetricSelectorTest do
     assert Enum.any?(rows, fn row ->
              row.entity_type == "destination" and row.entity_id == "dest-2" and
                row.metric_key == "bytes_out_per_sec" and row.value_double == 92_000.0
+           end)
+
+    assert Enum.any?(rows, fn row ->
+             row.entity_type == "destination" and row.entity_id == "dest-1" and
+               row.metric_key == "srt_packet_loss_percent" and row.value_double == 0.5
+           end)
+
+    assert Enum.any?(rows, fn row ->
+             row.entity_type == "destination" and row.entity_id == "dest-1" and
+               row.metric_key == "srt_retransmitted_packets_per_sec" and row.value_double == 3.0
            end)
   end
 

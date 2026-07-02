@@ -114,8 +114,12 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtToUdpTest do
                15_000
              )
 
-    assert %{"bytes-received-total" => total_bytes} = stats["source"]["srt"]
-    assert is_number(total_bytes)
+    srt = stats["source"]["srt"]
+    assert is_map(srt)
+    assert is_number(srt["rtt-ms"])
+    assert Map.has_key?(srt, "packet-loss-percent")
+    assert is_number(srt["bytes-received"])
+    assert srt["bytes-received"] > 0
     assert is_binary(sender.tag)
   end
 
