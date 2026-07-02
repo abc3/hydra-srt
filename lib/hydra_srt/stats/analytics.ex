@@ -83,6 +83,7 @@ defmodule HydraSrt.Stats.Analytics do
         switches = fetch_route_switches(route_id, query_params, conn)
         initial_source_id = fetch_last_source_before_window(route_id, query_params, conn)
         srt_quality = fetch_route_srt_quality(route_id, query_params, conn)
+        srt_health = fetch_route_srt_health(route_id, query_params, conn)
 
         {:ok,
          %{
@@ -91,6 +92,7 @@ defmodule HydraSrt.Stats.Analytics do
            source_timeline:
              source_timeline_from_switches(switches, query_params, initial_source_id),
            srt_quality: srt_quality,
+           srt_health: srt_health,
            meta: %{
              from: DateTime.to_iso8601(query_params.from),
              to: DateTime.to_iso8601(query_params.to),
@@ -1298,6 +1300,108 @@ defmodule HydraSrt.Stats.Analytics do
       {:error, _reason} ->
         []
     end
+  end
+
+  def fetch_route_srt_health(route_id, query_params, conn) do
+    sql = """
+    WITH sampled AS (
+      SELECT
+        to_timestamp(FLOOR(epoch_ms(ts)::DOUBLE / ?) * ? / 1000.0) AS bucket_ts,
+        entity_type,
+        entity_id,
+        metric_key,
+        avg(value_double) AS metric_value
+      FROM stats_samples
+      WHERE route_id = ?
+        AND entity_type IN ('source', 'destination')
+        AND metric_key IN (
+          'srt_rtt_ms',
+          'srt_negotiated_latency_ms',
+          'srt_bandwidth_mbps',
+          'srt_rate_mbps',
+          'srt_packet_loss',
+          'srt_packet_loss_percent',
+          'srt_retransmitted_packets_per_sec',
+          'srt_dropped_packets_per_sec',
+          'srt_nack_packets_per_sec'
+        )
+        AND ts >= CAST(? AS TIMESTAMP)
+        AND ts <= CAST(? AS TIMESTAMP)
+      GROUP BY 1, 2, 3, 4
+    )
+    SELECT bucket_ts, entity_type, entity_id, metric_key, metric_value
+    FROM sampled
+    ORDER BY bucket_ts ASC, entity_type ASC, entity_id ASC, metric_key ASC
+    """
+
+    params = [
+      query_params.bucket_ms,
+      query_params.bucket_ms,
+      route_id,
+      DateTime.to_iso8601(query_params.from),
+      DateTime.to_iso8601(query_params.to)
+    ]
+
+    case Adbc.Connection.query(conn, sql, params) do
+      {:ok, result} ->
+        result
+        |> Adbc.Result.to_map()
+        |> srt_health_rows_from_columns()
+        |> srt_health_points_from_rows()
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
+  def srt_health_rows_from_columns(columns) when is_map(columns) do
+    length =
+      columns
+      |> Map.values()
+      |> List.first([])
+      |> Kernel.length()
+
+    if length == 0 do
+      []
+    else
+      Enum.map(0..(length - 1), fn index ->
+        %{
+          timestamp: normalize_timestamp(value_at(columns, "bucket_ts", index)),
+          entity_type: value_at(columns, "entity_type", index),
+          entity_id: value_at(columns, "entity_id", index),
+          metric_key: value_at(columns, "metric_key", index),
+          value: number_or_nil(value_at(columns, "metric_value", index))
+        }
+      end)
+      |> Enum.reject(fn row ->
+        is_nil(row.timestamp) or is_nil(row.entity_type) or is_nil(row.entity_id) or
+          is_nil(row.metric_key)
+      end)
+    end
+  end
+
+  def srt_health_points_from_rows(rows) when is_list(rows) do
+    rows
+    |> Enum.reduce(%{}, fn row, acc ->
+      key = {row.timestamp, row.entity_type, row.entity_id}
+
+      point =
+        Map.get(acc, key, %{
+          timestamp: row.timestamp,
+          entity_type: row.entity_type,
+          entity_id: row.entity_id
+        })
+
+      field =
+        case row.metric_key do
+          "srt_packet_loss" -> "packet_loss_percent"
+          metric_key -> String.replace_prefix(metric_key, "srt_", "")
+        end
+
+      Map.put(acc, key, Map.put(point, field, row.value))
+    end)
+    |> Map.values()
+    |> Enum.sort_by(fn point -> {point.timestamp, point.entity_type, point.entity_id} end)
   end
 
   defp quality_rows_from_columns(columns) when is_map(columns) do

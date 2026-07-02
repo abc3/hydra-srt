@@ -230,6 +230,21 @@ defmodule HydraSrtWeb.RouteControllerTest do
     setup [:create_route]
 
     test "returns route analytics from analytics database", %{conn: conn, route: %{id: id}} do
+      :ok =
+        HydraSrt.Stats.Duckdb.insert_rows([
+          %{
+            ts: DateTime.utc_now(),
+            route_id: id,
+            entity_type: "destination",
+            entity_id: "destination-1",
+            metric_key: "srt_rtt_ms",
+            value_type: "double",
+            value_double: 18.5,
+            value_bigint: nil,
+            value_text: nil
+          }
+        ])
+
       conn = get(conn, "/api/routes/#{id}/analytics?window=last_hour")
       response = json_response(conn, 200)
 
@@ -240,6 +255,15 @@ defmodule HydraSrtWeb.RouteControllerTest do
       assert is_list(response["data"]["switches"])
       assert is_list(response["data"]["source_timeline"])
       assert is_list(response["data"]["srt_quality"])
+      assert is_list(response["data"]["srt_health"])
+
+      assert [
+               %{
+                 "entity_type" => "destination",
+                 "entity_id" => "destination-1",
+                 "rtt_ms" => 18.5
+               }
+             ] = response["data"]["srt_health"]
 
       assert Enum.all?(points, fn point ->
                is_binary(point["timestamp"]) and is_map(point["destinations"])
