@@ -19,7 +19,7 @@ defmodule HydraSrt.PromEx.Plugins.PipelineLogs do
           @prefix ++ [:log_lines, :total],
           event_name: PipelineLogTelemetry.stored_event(),
           measurement: :count,
-          description: "Pipeline log lines buffered for DuckDB storage.",
+          description: "Pipeline log lines buffered for VictoriaLogs storage.",
           tags: [:level, :route_id],
           tag_values: &stored_tags/1
         ),

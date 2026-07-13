@@ -4,15 +4,19 @@ defmodule HydraSrt.Stats.PipelineLogger do
   require Logger
 
   alias HydraSrt.PipelineLogTelemetry
-  alias HydraSrt.Stats.Duckdb
+  alias HydraSrt.Stats.VictoriaLogs
 
   @default_flush_interval_ms 5_000
   @default_max_verbose_per_window 200
+  @default_max_buffer_size 20_000
   @verbose_levels ~w(INFO DEBUG FIXME LOG TRACE)
 
   def start_link(opts \\ %{}) when is_map(opts) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Map.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
+
+  def noop_insert(_rows), do: :ok
 
   @impl true
   def init(opts) when is_map(opts) do
@@ -20,6 +24,9 @@ defmodule HydraSrt.Stats.PipelineLogger do
 
     max_verbose_per_window =
       Map.get(opts, :max_verbose_per_window, @default_max_verbose_per_window)
+
+    max_buffer_size = Map.get(opts, :max_buffer_size, @default_max_buffer_size)
+    insert_logs_fun = resolve_insert_logs_fun(Map.get(opts, :insert_logs_fun))
 
     :ok = Phoenix.PubSub.subscribe(HydraSrt.PubSub, "pipeline_logs")
 
@@ -30,7 +37,9 @@ defmodule HydraSrt.Stats.PipelineLogger do
        logs: [],
        rate_counters: %{},
        flush_interval_ms: flush_interval_ms,
-       max_verbose_per_window: max_verbose_per_window
+       max_verbose_per_window: max_verbose_per_window,
+       max_buffer_size: max_buffer_size,
+       insert_logs_fun: insert_logs_fun
      }}
   end
 
@@ -39,11 +48,15 @@ defmodule HydraSrt.Stats.PipelineLogger do
     {logs, rate_counters} =
       maybe_buffer(log, state.logs, state.rate_counters, state.max_verbose_per_window)
 
+    logs = enforce_max_buffer(logs, state.max_buffer_size)
+
     {:noreply, %{state | logs: logs, rate_counters: rate_counters}}
   end
 
   def handle_info(:flush, state) do
-    {logs, rate_counters} = flush_logs(state.logs, state.rate_counters)
+    {logs, rate_counters} =
+      flush_logs(state.logs, state.rate_counters, state.insert_logs_fun, state.max_buffer_size)
+
     schedule_flush(state.flush_interval_ms)
     {:noreply, %{state | logs: logs, rate_counters: rate_counters}}
   end
@@ -51,7 +64,7 @@ defmodule HydraSrt.Stats.PipelineLogger do
   @impl true
   def terminate(_reason, state) do
     {logs, rate_counters} = build_synthetic_dropped_records(state.logs, state.rate_counters)
-    Duckdb.insert_pipeline_logs(Enum.reverse(logs))
+    state.insert_logs_fun.(Enum.reverse(logs))
     _ = rate_counters
     :ok
   end
@@ -61,10 +74,16 @@ defmodule HydraSrt.Stats.PipelineLogger do
     Process.send_after(self(), :flush, flush_interval_ms)
   end
 
-  @spec flush_logs([map()], map(), (list() -> :ok | {:error, term()})) :: {[map()], map()}
-  def flush_logs(logs, rate_counters \\ %{}, insert_fun \\ &Duckdb.insert_pipeline_logs/1)
+  @spec flush_logs([map()], map(), (list() -> :ok | {:error, term()}), pos_integer() | nil) ::
+          {[map()], map()}
+  def flush_logs(
+        logs,
+        rate_counters \\ %{},
+        insert_fun \\ &VictoriaLogs.insert_pipeline_logs/1,
+        max_buffer_size \\ nil
+      )
 
-  def flush_logs(logs, rate_counters, insert_fun)
+  def flush_logs(logs, rate_counters, insert_fun, max_buffer_size)
       when is_list(logs) and is_map(rate_counters) and is_function(insert_fun, 1) do
     {merged_logs, _rate_counters} = build_synthetic_dropped_records(logs, rate_counters)
     rows = Enum.reverse(merged_logs)
@@ -75,9 +94,30 @@ defmodule HydraSrt.Stats.PipelineLogger do
 
       {:error, reason} ->
         Logger.error("PipelineLogger flush failed reason=#{inspect(reason)}")
-        {merged_logs, %{}}
+        {enforce_max_buffer(merged_logs, max_buffer_size), %{}}
     end
   end
+
+  def enforce_max_buffer(logs, max_buffer_size)
+      when is_list(logs) and is_integer(max_buffer_size) and max_buffer_size > 0 and
+             length(logs) > max_buffer_size do
+    dropped = length(logs) - max_buffer_size
+
+    Logger.warning("Pipeline logger dropped #{dropped} buffered log lines due to max_buffer_size")
+
+    Enum.take(logs, max_buffer_size)
+  end
+
+  def enforce_max_buffer(logs, _max_buffer_size) when is_list(logs), do: logs
+
+  def resolve_insert_logs_fun(fun) when is_function(fun, 1), do: fun
+
+  def resolve_insert_logs_fun({module, function, args})
+      when is_atom(module) and is_atom(function) and is_list(args) do
+    fn rows -> apply(module, function, [rows | args]) end
+  end
+
+  def resolve_insert_logs_fun(_), do: &VictoriaLogs.insert_pipeline_logs/1
 
   defp maybe_buffer(log, logs, rate_counters, max_verbose_per_window) do
     if log.level in @verbose_levels do

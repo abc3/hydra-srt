@@ -12,9 +12,9 @@ config :hydra_srt,
   ecto_repos: [HydraSrt.Repo],
   generators: [timestamp_type: :utc_datetime, binary_id: true],
   # Hermes streamable-http transport uses a 5s GenServer.call timeout on tool requests.
-  mcp_probe_timeout_ms: 3_500
-
-config :adbc, :drivers, [:duckdb]
+  mcp_probe_timeout_ms: 3_500,
+  victoria_metrics_url: "http://127.0.0.1:8428",
+  victoria_logs_url: "http://127.0.0.1:9428"
 
 # Configures the endpoint
 config :hydra_srt, HydraSrtWeb.Endpoint,

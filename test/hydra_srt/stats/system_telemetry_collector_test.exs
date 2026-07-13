@@ -4,8 +4,8 @@ defmodule HydraSrt.Stats.SystemTelemetryCollectorTest do
   import ExUnit.CaptureLog
 
   alias HydraSrt.Monitoring.OsMonTelemetry
-  alias HydraSrt.Stats.Duckdb
   alias HydraSrt.Stats.SystemTelemetryCollector
+  alias HydraSrt.Stats.VictoriaMetrics
 
   test "rows_from_telemetry maps cpu mem swap la and net metrics" do
     cpu_rows =
@@ -124,7 +124,15 @@ defmodule HydraSrt.Stats.SystemTelemetryCollectorTest do
     assert Enum.map(database_rows, & &1.value_double) == [2048.0]
   end
 
-  test "telemetry cpu event is persisted to duckdb" do
+  test "telemetry cpu event is persisted to VictoriaMetrics" do
+    test_pid = self()
+    :ok = :meck.new(VictoriaMetrics, [:passthrough])
+
+    :meck.expect(VictoriaMetrics, :insert_rows, fn rows ->
+      send(test_pid, {:inserted_rows, rows})
+      :ok
+    end)
+
     start_supervised!(
       {SystemTelemetryCollector,
        enabled: true,
@@ -135,17 +143,17 @@ defmodule HydraSrt.Stats.SystemTelemetryCollectorTest do
        handler_prefix: "stats-osmon-test-#{System.unique_integer([:positive])}"}
     )
 
-    :ok = Duckdb.ensure_schema()
-
     expected = 42.5
     :telemetry.execute(OsMonTelemetry.cpu_util_event(), %{cpu: expected}, %{})
 
-    assert eventually(fn ->
-             case fetch_latest_cpu_util() do
-               {:ok, value} -> abs(value - expected) < 0.0001
-               _ -> false
-             end
+    assert_receive {:inserted_rows, rows}, 500
+
+    assert Enum.any?(rows, fn row ->
+             row.entity_type == "node" and row.metric_key == "cpu_util" and
+               abs(row.value_double - expected) < 0.0001
            end)
+  after
+    :meck.unload(VictoriaMetrics)
   end
 
   test "enforces max_buffer_size by dropping old rows" do
@@ -179,40 +187,5 @@ defmodule HydraSrt.Stats.SystemTelemetryCollectorTest do
     state = :sys.get_state(pid)
     assert state.row_count == 5
     assert Enum.map(state.rows, & &1.value_double) == [10.0, 9.0, 8.0, 7.0, 6.0]
-  end
-
-  defp fetch_latest_cpu_util do
-    sql = """
-    SELECT value_double
-    FROM stats_samples
-    WHERE entity_type = 'node' AND metric_key = 'cpu_util'
-    ORDER BY ts DESC
-    LIMIT 1
-    """
-
-    case Adbc.Connection.query(HydraSrt.AnalyticsConn, sql, []) do
-      {:ok, result} ->
-        columns = Adbc.Result.to_map(result)
-
-        case Map.get(columns, "value_double", []) do
-          [value | _] when is_number(value) -> {:ok, value * 1.0}
-          _ -> :not_found
-        end
-
-      {:error, _reason} ->
-        :not_found
-    end
-  end
-
-  defp eventually(fun, attempts \\ 40)
-  defp eventually(_fun, 0), do: false
-
-  defp eventually(fun, attempts) when is_function(fun, 0) and attempts > 0 do
-    if fun.() do
-      true
-    else
-      Process.sleep(50)
-      eventually(fun, attempts - 1)
-    end
   end
 end

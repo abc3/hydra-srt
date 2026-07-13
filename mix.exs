@@ -48,7 +48,6 @@ defmodule HydraSrt.MixProject do
       # Database
       {:ecto_sql, "~> 3.10"},
       {:ecto_sqlite3, ">= 0.0.0"},
-      {:adbc, "~> 0.1"},
 
       # Telemetry and observability
       {:telemetry_metrics, "~> 1.0"},

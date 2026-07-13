@@ -5,7 +5,7 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
 
   alias HydraSrt.Monitoring.NetIfMetrics
   alias HydraSrt.Monitoring.OsMonTelemetry
-  alias HydraSrt.Stats.Duckdb
+  alias HydraSrt.Stats.VictoriaMetrics
 
   @event_cpu_util OsMonTelemetry.cpu_util_event()
   @event_ram_usage OsMonTelemetry.ram_usage_event()
@@ -291,7 +291,7 @@ defmodule HydraSrt.Stats.SystemTelemetryCollector do
        when is_list(rows) and is_integer(row_count) and row_count >= 0 do
     to_insert = Enum.reverse(rows)
 
-    case Duckdb.insert_rows(to_insert) do
+    case VictoriaMetrics.insert_rows(to_insert) do
       :ok -> {[], 0, :ok}
       {:error, reason} -> {rows, row_count, {:error, reason}}
     end

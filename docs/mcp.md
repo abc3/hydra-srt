@@ -26,7 +26,7 @@ flowchart LR
   McpAuth -->|hash lookup in DB| Hermes[Hermes StreamableHTTP]
   Hermes --> Server[HydraSrt.Mcp.Server]
   Server --> Registry[HydraSrt.Mcp.ToolRegistry]
-  Registry --> Db[(SQLite / DuckDB analytics)]
+  Registry --> Db[(SQLite / VictoriaMetrics / VictoriaLogs)]
 ```
 
 1. **Phoenix** accepts requests at `/mcp`.

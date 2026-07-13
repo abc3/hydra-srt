@@ -1,9 +1,213 @@
 defmodule HydraSrt.Stats.AnalyticsTest do
-  use ExUnit.Case, async: true
+  # DataCase (SQL sandbox) is needed because a few functions under test call
+  # Db.get_all_routes/1 before touching the metrics backend.
+  use HydraSrt.DataCase, async: true
 
   alias HydraSrt.Monitoring.OsMon
   alias HydraSrt.Stats.Analytics
-  alias HydraSrt.Stats.Duckdb
+  alias HydraSrt.Stats.VictoriaMetrics
+
+  defmodule FakeVictoriaMetrics do
+    def query_range(_query, _from, _to, _step) do
+      node_id = "storage-test-node"
+      mountpoint = "/tmp/hydra-storage-test"
+      unix_ts = DateTime.to_unix(~U[2026-06-16 12:00:00Z], :second)
+
+      series =
+        [
+          {"storage", "#{node_id}:#{mountpoint}", "storage_total_bytes", "1000.0"},
+          {"storage", "#{node_id}:#{mountpoint}", "storage_used_bytes", "400.0"},
+          {"storage", "#{node_id}:#{mountpoint}", "storage_free_bytes", "600.0"},
+          {"storage", "#{node_id}:#{mountpoint}", "storage_used_percent", "40.0"},
+          {"database", "#{node_id}:metadata_database", "database_size_bytes", "2048.0"}
+        ]
+        |> Enum.map(fn {entity_type, entity_id, metric_key, value} ->
+          %{
+            "metric" => %{
+              "route_id" => "",
+              "entity_type" => entity_type,
+              "entity_id" => entity_id,
+              "metric_key" => metric_key
+            },
+            "values" => [[unix_ts, value]]
+          }
+        end)
+
+      {:ok, series}
+    end
+  end
+
+  defmodule MatchCapture do
+    def export_series(match_expr, _from, _to) do
+      send(self(), {:match_expr, match_expr})
+
+      {:ok,
+       [
+         %{
+           "metric" => %{
+             "route_id" => "route-1",
+             "event_type" => "source_switch",
+             "to_source_id" => "s2"
+           },
+           "timestamps" => [1_767_225_600_000]
+         }
+       ]}
+    end
+  end
+
+  defmodule FakeExportDown do
+    def export_series(_match_expr, _from, _to), do: {:error, :backend_down}
+  end
+
+  test "fetch_events_result propagates backend errors as tagged tuples" do
+    from = ~U[2026-01-01 00:00:00Z]
+    to = ~U[2026-01-01 01:00:00Z]
+
+    assert {:error, :backend_down} =
+             Analytics.fetch_events_result(nil, from, to, FakeExportDown)
+
+    assert {:error, :backend_down} =
+             Analytics.fetch_events_result("route-1", from, to, FakeExportDown)
+  end
+
+  test "fetch_events legacy wrapper swallows backend errors as an empty list" do
+    from = ~U[2026-01-01 00:00:00Z]
+    to = ~U[2026-01-01 01:00:00Z]
+
+    assert Analytics.fetch_events("route-1", from, to, FakeExportDown) == []
+  end
+
+  test "fetch_events_result returns parsed rows on success" do
+    from = ~U[2026-01-01 00:00:00Z]
+    to = ~U[2026-01-01 01:00:00Z]
+
+    assert {:ok, [event]} = Analytics.fetch_events_result("route-1", from, to, MatchCapture)
+    assert event["route_id"] == "route-1"
+    assert event["event_type"] == "source_switch"
+  end
+
+  test "fetch_route_switches pushes event_type into the export match expression" do
+    query_params = %{from: ~U[2026-01-01 00:00:00Z], to: ~U[2026-01-01 01:00:00Z]}
+
+    Analytics.fetch_route_switches("route-1", query_params, MatchCapture)
+
+    assert_received {:match_expr, match_expr}
+    assert match_expr =~ ~s(event_type="source_switch")
+    assert match_expr =~ ~s(route_id="route-1")
+  end
+
+  test "fetch_route_switches swallows backend export errors as an empty list" do
+    query_params = %{from: ~U[2026-01-01 00:00:00Z], to: ~U[2026-01-01 01:00:00Z]}
+
+    assert Analytics.fetch_route_switches("route-1", query_params, FakeExportDown) == []
+  end
+
+  test "fetch_routes_status_timeseries propagates backend export errors" do
+    {:ok, query_params} = Analytics.build_query_params(%{"window" => "last_hour"})
+
+    # A backend outage must surface as {:error, _} so Dashboard availability is
+    # false rather than being masked as an empty (but successful) timeseries.
+    assert {:error, :backend_down} =
+             Analytics.fetch_routes_status_timeseries(query_params, FakeExportDown)
+  end
+
+  test "fetch_routes_status_history propagates backend export errors" do
+    {:ok, query_params} = Analytics.build_query_params(%{"window" => "last_hour"})
+
+    assert {:error, :backend_down} =
+             Analytics.fetch_routes_status_history(query_params, %{}, FakeExportDown)
+  end
+
+  test "fetch_routes_status_history pushes route_id filter into the export match expression" do
+    {:ok, query_params} = Analytics.build_query_params(%{"window" => "last_hour"})
+
+    assert {:ok, _payload} =
+             Analytics.fetch_routes_status_history(
+               query_params,
+               %{"route_id" => "route-1"},
+               MatchCapture
+             )
+
+    assert_received {:match_expr, match_expr}
+    assert match_expr =~ ~s(event_type="route_status_change")
+    assert match_expr =~ ~s(route_id="route-1")
+  end
+
+  test "fetch_routes_status_history omits route_id matcher when no filter is given" do
+    {:ok, query_params} = Analytics.build_query_params(%{"window" => "last_hour"})
+
+    assert {:ok, _payload} =
+             Analytics.fetch_routes_status_history(query_params, %{}, MatchCapture)
+
+    assert_received {:match_expr, match_expr}
+    assert match_expr =~ ~s(event_type="route_status_change")
+    refute match_expr =~ "route_id="
+  end
+
+  test "fetch_route_events propagates backend export errors instead of an empty page" do
+    assert {:error, :backend_down} =
+             Analytics.fetch_route_events("route-1", %{"window" => "last_hour"}, FakeExportDown)
+  end
+
+  test "fetch_route_events returns a successful page on backend success" do
+    assert {:ok, %{events: events, meta: meta}} =
+             Analytics.fetch_route_events("route-1", %{"window" => "last_hour"}, MatchCapture)
+
+    assert [%{"route_id" => "route-1", "event_type" => "source_switch"}] = events
+    assert meta.total == 1
+  end
+
+  test "fetch_events_for_route_ids builds a regex selector and returns parsed rows" do
+    from = ~U[2026-01-01 00:00:00Z]
+    to = ~U[2026-01-01 01:00:00Z]
+
+    assert {:ok, [event]} =
+             Analytics.fetch_events_for_route_ids(["route-1", "route-2"], from, to, MatchCapture)
+
+    assert event["route_id"] == "route-1"
+
+    assert_received {:match_expr, match_expr}
+    assert match_expr == VictoriaMetrics.event_selector_for_route_ids(["route-1", "route-2"])
+  end
+
+  test "fetch_events_for_route_ids propagates backend export errors" do
+    from = ~U[2026-01-01 00:00:00Z]
+    to = ~U[2026-01-01 01:00:00Z]
+
+    assert {:error, :backend_down} =
+             Analytics.fetch_events_for_route_ids(["route-1"], from, to, FakeExportDown)
+  end
+
+  test "event_row_from_labels prefers the stored details_json label verbatim" do
+    details = Jason.encode!(%{"reason" => "publish_rejected", "peer" => "10.0.0.5"})
+
+    labels = %{
+      "route_id" => "route-1",
+      "event_type" => "publisher_rejected",
+      "details_json" => details,
+      "old_status" => "",
+      "new_status" => ""
+    }
+
+    row = Analytics.event_row_from_labels(labels, 1_767_225_600_000)
+    assert row["details_json"] == details
+  end
+
+  test "event_row_from_labels reconstructs details_json from status labels when absent" do
+    labels = %{
+      "route_id" => "route-1",
+      "event_type" => "route_status_change",
+      "old_status" => "starting",
+      "new_status" => "processing"
+    }
+
+    row = Analytics.event_row_from_labels(labels, 1_767_225_600_000)
+
+    assert Jason.decode!(row["details_json"]) == %{
+             "old_status" => "starting",
+             "new_status" => "processing"
+           }
+  end
 
   test "build_query_params resolves known window" do
     assert {:ok, params} = Analytics.build_query_params(%{"window" => "last_hour"})
@@ -63,57 +267,22 @@ defmodule HydraSrt.Stats.AnalyticsTest do
   end
 
   test "fetch_node_timeseries returns storage and database points and metadata" do
-    :ok = Duckdb.ensure_schema()
-
-    node_id = "storage-test-#{System.unique_integer([:positive])}"
+    node_id = "storage-test-node"
     mountpoint = "/tmp/hydra-storage-test"
     storage_id = HydraSrt.Monitoring.OsMon.storage_id(mountpoint)
     ts = ~U[2026-06-16 12:00:00Z]
 
-    storage_rows =
-      [
-        {"storage_total_bytes", 1000.0},
-        {"storage_used_bytes", 400.0},
-        {"storage_free_bytes", 600.0},
-        {"storage_used_percent", 40.0}
-      ]
-      |> Enum.map(fn {metric_key, value} ->
-        %{
-          ts: ts,
-          route_id: nil,
-          entity_type: "storage",
-          entity_id: "#{node_id}:#{mountpoint}",
-          metric_key: metric_key,
-          value_type: "double",
-          value_double: value,
-          value_bigint: nil,
-          value_text: nil
-        }
-      end)
-
-    database_rows = [
-      %{
-        ts: ts,
-        route_id: nil,
-        entity_type: "database",
-        entity_id: "#{node_id}:metadata_database",
-        metric_key: "database_size_bytes",
-        value_type: "double",
-        value_double: 2048.0,
-        value_bigint: nil,
-        value_text: nil
-      }
-    ]
-
-    assert :ok = Duckdb.insert_rows(storage_rows ++ database_rows)
-
     assert {:ok, payload} =
-             Analytics.fetch_node_timeseries(node_id, %{
-               from: DateTime.add(ts, -60, :second),
-               to: DateTime.add(ts, 60, :second),
-               window: "custom",
-               bucket_ms: 10_000
-             })
+             Analytics.fetch_node_timeseries(
+               node_id,
+               %{
+                 from: DateTime.add(ts, -60, :second),
+                 to: DateTime.add(ts, 60, :second),
+                 window: "custom",
+                 bucket_ms: 10_000
+               },
+               FakeVictoriaMetrics
+             )
 
     assert %{
              id: "metadata_database",

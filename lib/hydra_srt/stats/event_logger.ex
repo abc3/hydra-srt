@@ -3,14 +3,18 @@ defmodule HydraSrt.Stats.EventLogger do
   use GenServer
   require Logger
 
-  alias HydraSrt.Stats.Duckdb
+  alias HydraSrt.Stats.VictoriaMetrics
 
   @default_flush_interval_ms 5_000
   @default_max_batch_size 1_000
+  @default_max_buffer_size 5_000
 
   def start_link(opts \\ %{}) when is_map(opts) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Map.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
+
+  def noop_insert(_rows), do: :ok
 
   def log_source_switch(route_id, from_source_id, to_source_id, reason, details \\ %{}) do
     severity =
@@ -209,17 +213,27 @@ defmodule HydraSrt.Stats.EventLogger do
   def init(opts) when is_map(opts) do
     flush_interval_ms = opts[:flush_interval_ms] || @default_flush_interval_ms
     max_batch_size = opts[:max_batch_size] || @default_max_batch_size
+    max_buffer_size = opts[:max_buffer_size] || @default_max_buffer_size
+    insert_events_fun = resolve_insert_events_fun(opts[:insert_events_fun])
     schedule_flush(flush_interval_ms)
 
-    {:ok, %{events: [], flush_interval_ms: flush_interval_ms, max_batch_size: max_batch_size}}
+    {:ok,
+     %{
+       events: [],
+       flush_interval_ms: flush_interval_ms,
+       max_batch_size: max_batch_size,
+       max_buffer_size: max_buffer_size,
+       insert_events_fun: insert_events_fun
+     }}
   end
 
   @impl true
   def handle_info({:ingest_event, event}, state) do
-    events = [event | state.events]
+    events = enforce_max_buffer([event | state.events], state)
 
     if length(events) >= state.max_batch_size do
-      {events_after_flush, result} = flush_events(events)
+      {events_after_flush, result} = flush_events(events, state.insert_events_fun)
+      events_after_flush = enforce_max_buffer(events_after_flush, state)
       log_flush_error(result)
       {:noreply, %{state | events: events_after_flush}}
     else
@@ -228,7 +242,8 @@ defmodule HydraSrt.Stats.EventLogger do
   end
 
   def handle_info(:flush, state) do
-    {events_after_flush, result} = flush_events(state.events)
+    {events_after_flush, result} = flush_events(state.events, state.insert_events_fun)
+    events_after_flush = enforce_max_buffer(events_after_flush, state)
     log_flush_error(result)
     schedule_flush(state.flush_interval_ms)
     {:noreply, %{state | events: events_after_flush}}
@@ -236,10 +251,11 @@ defmodule HydraSrt.Stats.EventLogger do
 
   @impl true
   def handle_cast({:ingest_event, event}, state) do
-    events = [event | state.events]
+    events = enforce_max_buffer([event | state.events], state)
 
     if length(events) >= state.max_batch_size do
-      {events_after_flush, result} = flush_events(events)
+      {events_after_flush, result} = flush_events(events, state.insert_events_fun)
+      events_after_flush = enforce_max_buffer(events_after_flush, state)
       log_flush_error(result)
       {:noreply, %{state | events: events_after_flush}}
     else
@@ -249,12 +265,12 @@ defmodule HydraSrt.Stats.EventLogger do
 
   @impl true
   def terminate(_reason, state) do
-    {_events, result} = flush_events(state.events)
+    {_events, result} = flush_events(state.events, state.insert_events_fun)
     log_flush_error(result)
     :ok
   end
 
-  def flush_events(events, insert_fun \\ &Duckdb.insert_events/1)
+  def flush_events(events, insert_fun \\ &VictoriaMetrics.insert_events/1)
   def flush_events([], _insert_fun), do: {[], :ok}
 
   def flush_events(events, insert_fun) when is_list(events) and is_function(insert_fun, 1) do
@@ -270,6 +286,27 @@ defmodule HydraSrt.Stats.EventLogger do
       when is_integer(flush_interval_ms) and flush_interval_ms > 0 do
     Process.send_after(self(), :flush, flush_interval_ms)
   end
+
+  def enforce_max_buffer(events, %{max_buffer_size: max_buffer_size})
+      when is_list(events) and is_integer(max_buffer_size) and max_buffer_size > 0 and
+             length(events) > max_buffer_size do
+    dropped = length(events) - max_buffer_size
+
+    Logger.warning("Event logger dropped #{dropped} buffered events due to max_buffer_size")
+
+    Enum.take(events, max_buffer_size)
+  end
+
+  def enforce_max_buffer(events, _state) when is_list(events), do: events
+
+  def resolve_insert_events_fun(fun) when is_function(fun, 1), do: fun
+
+  def resolve_insert_events_fun({module, function, args})
+      when is_atom(module) and is_atom(function) and is_list(args) do
+    fn rows -> apply(module, function, [rows | args]) end
+  end
+
+  def resolve_insert_events_fun(_), do: &VictoriaMetrics.insert_events/1
 
   defp enrich(event) do
     Map.merge(

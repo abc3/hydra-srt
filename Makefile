@@ -21,7 +21,6 @@ dev:
 	METRICS_JWT_SECRET=dev \
 	API_AUTH_USERNAME=${user} \
 	API_AUTH_PASSWORD=${pass} \
-	ANALYTICS_DATABASE_PATH=./hydra_srt_analytics.duckdb \
 	DEMO_DATA=true \
 	ERL_AFLAGS="-kernel shell_history enabled +zdbbl 2097151" \
 	iex --name hydra@127.0.0.1 --cookie cookie -S mix phx.server --no-halt
@@ -242,4 +241,8 @@ test_ci_local:
 
 .PHONY: drop_analytics_db
 drop_analytics_db:
-	rm -f hydra_srt_analytics.*
+	@echo "Stopping VictoriaMetrics and VictoriaLogs (if running via compose)..."
+	@docker compose stop victoria-metrics victoria-logs 2>/dev/null || true
+	@echo "Removing analytics data directories (./data/victoria-metrics, ./data/victoria-logs)..."
+	rm -rf ./data/victoria-metrics ./data/victoria-logs
+	@echo "Analytics stores cleared. Restart with: docker compose up -d victoria-metrics victoria-logs"
