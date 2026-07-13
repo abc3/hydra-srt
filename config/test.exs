@@ -60,12 +60,21 @@ config :hydra_srt, HydraSrt.Repo,
   busy_timeout: if(shared_http_e2e_mode?, do: 15_000, else: 2_000)
 
 config :hydra_srt,
-  analytics_database_path:
-    Path.join(
-      System.tmp_dir!(),
-      "hydra_srt_analytics_test_#{System.unique_integer([:positive])}.duckdb"
-    ),
-  system_metrics_history: [enabled: false]
+  victoria_metrics_url: "http://127.0.0.1:8428",
+  victoria_logs_url: "http://127.0.0.1:9428",
+  system_metrics_history: [enabled: false],
+  stats_collector: [
+    flush_interval_ms: 86_400_000,
+    insert_rows_fun: {HydraSrt.Stats.Collector, :noop_insert, []}
+  ],
+  event_logger: [
+    flush_interval_ms: 86_400_000,
+    insert_events_fun: {HydraSrt.Stats.EventLogger, :noop_insert, []}
+  ],
+  pipeline_logger: [
+    flush_interval_ms: 86_400_000,
+    insert_logs_fun: {HydraSrt.Stats.PipelineLogger, :noop_insert, []}
+  ]
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.

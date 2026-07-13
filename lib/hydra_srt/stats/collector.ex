@@ -3,17 +3,22 @@ defmodule HydraSrt.Stats.Collector do
   use GenServer
   require Logger
 
-  alias HydraSrt.Stats.Duckdb
   alias HydraSrt.Stats.MetricSelector
+  alias HydraSrt.Stats.VictoriaMetrics
 
   @default_flush_interval_ms 15_000
   @default_max_batch_size 10_000
+  @default_max_buffer_size 10_000
   @default_downsample_interval_ms 10_000
 
   @spec start_link(map()) :: GenServer.on_start()
   def start_link(opts \\ %{}) when is_map(opts) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Map.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
+
+  @spec noop_insert([map()]) :: :ok
+  def noop_insert(_rows), do: :ok
 
   @spec ingest(binary(), map(), map()) :: :ok
   def ingest(route_id, stats, metadata \\ %{})
@@ -26,24 +31,22 @@ defmodule HydraSrt.Stats.Collector do
   def init(opts) when is_map(opts) do
     flush_interval_ms = opts[:flush_interval_ms] || @default_flush_interval_ms
     max_batch_size = opts[:max_batch_size] || @default_max_batch_size
+    max_buffer_size = opts[:max_buffer_size] || @default_max_buffer_size
     downsample_interval_ms = opts[:downsample_interval_ms] || @default_downsample_interval_ms
+    insert_rows_fun = resolve_insert_rows_fun(opts[:insert_rows_fun])
 
-    case Duckdb.ensure_schema() do
-      :ok ->
-        schedule_flush(flush_interval_ms)
+    schedule_flush(flush_interval_ms)
 
-        {:ok,
-         %{
-           rows_by_bucket_and_series: %{},
-           row_count: 0,
-           flush_interval_ms: flush_interval_ms,
-           max_batch_size: max_batch_size,
-           downsample_interval_ms: downsample_interval_ms
-         }}
-
-      {:error, reason} ->
-        {:stop, {:duckdb_schema_bootstrap_failed, reason}}
-    end
+    {:ok,
+     %{
+       rows_by_bucket_and_series: %{},
+       row_count: 0,
+       flush_interval_ms: flush_interval_ms,
+       max_batch_size: max_batch_size,
+       max_buffer_size: max_buffer_size,
+       downsample_interval_ms: downsample_interval_ms,
+       insert_rows_fun: insert_rows_fun
+     }}
   end
 
   @impl true
@@ -67,9 +70,15 @@ defmodule HydraSrt.Stats.Collector do
 
     row_count = map_size(rows_by_bucket_and_series)
 
+    {rows_by_bucket_and_series, row_count} =
+      enforce_max_buffer(rows_by_bucket_and_series, row_count, state)
+
     if row_count >= state.max_batch_size do
       {rows_after_flush, row_count_after_flush, flush_result} =
-        flush_rows(rows_by_bucket_and_series, row_count)
+        flush_rows(rows_by_bucket_and_series, row_count, state.insert_rows_fun)
+
+      {rows_after_flush, row_count_after_flush} =
+        enforce_max_buffer(rows_after_flush, row_count_after_flush, state)
 
       log_flush_error(flush_result)
 
@@ -83,7 +92,10 @@ defmodule HydraSrt.Stats.Collector do
 
   def handle_info(:flush, state) do
     {rows_after_flush, row_count_after_flush, flush_result} =
-      flush_rows(state.rows_by_bucket_and_series, state.row_count)
+      flush_rows(state.rows_by_bucket_and_series, state.row_count, state.insert_rows_fun)
+
+    {rows_after_flush, row_count_after_flush} =
+      enforce_max_buffer(rows_after_flush, row_count_after_flush, state)
 
     log_flush_error(flush_result)
     schedule_flush(state.flush_interval_ms)
@@ -95,7 +107,7 @@ defmodule HydraSrt.Stats.Collector do
   @impl true
   def terminate(_reason, state) do
     {_rows_after_flush, _row_count_after_flush, flush_result} =
-      flush_rows(state.rows_by_bucket_and_series, state.row_count)
+      flush_rows(state.rows_by_bucket_and_series, state.row_count, state.insert_rows_fun)
 
     log_flush_error(flush_result)
     :ok
@@ -160,7 +172,11 @@ defmodule HydraSrt.Stats.Collector do
 
   @spec flush_rows(map(), non_neg_integer(), ([map()] -> :ok | {:error, term()})) ::
           {map(), non_neg_integer(), :ok | {:error, term()}}
-  def flush_rows(rows_by_bucket_and_series, row_count, insert_rows_fun \\ &Duckdb.insert_rows/1)
+  def flush_rows(
+        rows_by_bucket_and_series,
+        row_count,
+        insert_rows_fun \\ &VictoriaMetrics.insert_rows/1
+      )
 
   def flush_rows(rows_by_bucket_and_series, 0, _insert_rows_fun)
       when is_map(rows_by_bucket_and_series) and map_size(rows_by_bucket_and_series) == 0 do
@@ -196,4 +212,33 @@ defmodule HydraSrt.Stats.Collector do
     Logger.error("Stats collector flush failed reason=#{inspect(reason)}")
     :ok
   end
+
+  @spec enforce_max_buffer(map(), non_neg_integer(), map()) :: {map(), non_neg_integer()}
+  def enforce_max_buffer(rows_by_bucket_and_series, row_count, %{max_buffer_size: max_buffer_size})
+      when is_map(rows_by_bucket_and_series) and is_integer(row_count) and row_count >= 0 and
+             is_integer(max_buffer_size) and max_buffer_size > 0 and row_count > max_buffer_size do
+    dropped = row_count - max_buffer_size
+
+    Logger.warning("Stats collector dropped #{dropped} buffered rows due to max_buffer_size")
+
+    kept =
+      rows_by_bucket_and_series
+      |> Enum.sort_by(fn {_key, row} -> row_ts_unix_ms(row) end, :desc)
+      |> Enum.take(max_buffer_size)
+      |> Map.new()
+
+    {kept, map_size(kept)}
+  end
+
+  def enforce_max_buffer(rows_by_bucket_and_series, row_count, _state),
+    do: {rows_by_bucket_and_series, row_count}
+
+  def resolve_insert_rows_fun(fun) when is_function(fun, 1), do: fun
+
+  def resolve_insert_rows_fun({module, function, args})
+      when is_atom(module) and is_atom(function) and is_list(args) do
+    fn rows -> apply(module, function, [rows | args]) end
+  end
+
+  def resolve_insert_rows_fun(_), do: &VictoriaMetrics.insert_rows/1
 end

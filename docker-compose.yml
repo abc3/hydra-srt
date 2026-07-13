@@ -7,6 +7,7 @@ services:
     # Linux-first default for streaming workloads: share the host network namespace.
     # If your Docker Engine cannot use Linux host networking, add docker-compose.ports.yml.
     network_mode: "host"
+    # VictoriaMetrics/VictoriaLogs are optional; Hydra boots even when analytics is down.
     environment:
       - NODE_IP=127.0.0.1
       - HYDRA_DEFAULT_BIND_IP=0.0.0.0
@@ -18,10 +19,46 @@ services:
       - API_AUTH_USERNAME=${API_AUTH_USERNAME:-admin}
       - API_AUTH_PASSWORD=${API_AUTH_PASSWORD:-password123}
       - DATABASE_PATH=${DATABASE_PATH:-/app/db/hydra_srt.db}
-      - ANALYTICS_DATABASE_PATH=${ANALYTICS_DATABASE_PATH:-/app/db/hydra_srt_analytics.duckdb}
+      - VICTORIA_METRICS_URL=${VICTORIA_METRICS_URL:-http://127.0.0.1:8428}
+      - VICTORIA_LOGS_URL=${VICTORIA_LOGS_URL:-http://127.0.0.1:9428}
       - DEMO_DATA=${DEMO_DATA:-false}
       - POOL_SIZE=${POOL_SIZE:-1}
       - RLIMIT_NOFILE=65536
     volumes:
       - ./data/backup:/app/backup
       - ./data/db:/app/db
+
+  victoria-metrics:
+    image: victoriametrics/victoria-metrics:latest
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/victoria-metrics-data
+      - -retentionPeriod=3d
+    ports:
+      - "127.0.0.1:8428:8428"
+    volumes:
+      - ./data/victoria-metrics:/victoria-metrics-data
+    healthcheck:
+      test: ["CMD", "/victoria-metrics-prod", "-version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  victoria-logs:
+    image: victoriametrics/victoria-logs:latest
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/victoria-logs-data
+      - -retentionPeriod=3d
+    ports:
+      - "127.0.0.1:9428:9428"
+    volumes:
+      - ./data/victoria-logs:/victoria-logs-data
+    # Scratch image: see victoria-metrics healthcheck comment.
+    healthcheck:
+      test: ["CMD", "/victoria-logs-prod", "-version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

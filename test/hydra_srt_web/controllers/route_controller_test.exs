@@ -229,59 +229,83 @@ defmodule HydraSrtWeb.RouteControllerTest do
   describe "analytics" do
     setup [:create_route]
 
-    test "returns route analytics from analytics database", %{conn: conn, route: %{id: id}} do
-      :ok =
-        HydraSrt.Stats.Duckdb.insert_rows([
-          %{
-            ts: DateTime.utc_now(),
-            route_id: id,
-            entity_type: "destination",
-            entity_id: "destination-1",
-            metric_key: "srt_rtt_ms",
-            value_type: "double",
-            value_double: 18.5,
-            value_bigint: nil,
-            value_text: nil
-          }
-        ])
+    test "returns route analytics from VictoriaMetrics", %{conn: conn, route: %{id: id}} do
+      :ok = :meck.new(HydraSrt.Stats.VictoriaMetrics, [:passthrough])
 
-      conn = get(conn, "/api/routes/#{id}/analytics?window=last_hour")
-      response = json_response(conn, 200)
+      :meck.expect(HydraSrt.Stats.VictoriaMetrics, :query_range, fn _query, _from, _to, _step ->
+        {:ok,
+         [
+           %{
+             "metric" => %{
+               "route_id" => id,
+               "entity_type" => "destination",
+               "entity_id" => "destination-1",
+               "metric_key" => "srt_rtt_ms"
+             },
+             "values" => [[DateTime.utc_now() |> DateTime.to_unix(:second), "18.5"]]
+           }
+         ]}
+      end)
 
-      assert %{"data" => %{"meta" => meta, "points" => points}} = response
-      assert meta["window"] == "last_hour"
-      assert is_integer(meta["bucket_ms"])
-      assert is_list(points)
-      assert is_list(response["data"]["switches"])
-      assert is_list(response["data"]["source_timeline"])
-      assert is_list(response["data"]["srt_quality"])
-      assert is_list(response["data"]["srt_health"])
+      :meck.expect(HydraSrt.Stats.VictoriaMetrics, :export_series, fn _match, _from, _to ->
+        {:ok, []}
+      end)
 
-      assert [
-               %{
-                 "entity_type" => "destination",
-                 "entity_id" => "destination-1",
-                 "rtt_ms" => 18.5
-               }
-             ] = response["data"]["srt_health"]
+      try do
+        conn = get(conn, "/api/routes/#{id}/analytics?window=last_hour")
+        response = json_response(conn, 200)
 
-      assert Enum.all?(points, fn point ->
-               is_binary(point["timestamp"]) and is_map(point["destinations"])
-             end)
+        assert %{"data" => %{"meta" => meta, "points" => points}} = response
+        assert meta["window"] == "last_hour"
+        assert is_integer(meta["bucket_ms"])
+        assert is_list(points)
+        assert is_list(response["data"]["switches"])
+        assert is_list(response["data"]["source_timeline"])
+        assert is_list(response["data"]["srt_quality"])
+        assert is_list(response["data"]["srt_health"])
+
+        assert [
+                 %{
+                   "entity_type" => "destination",
+                   "entity_id" => "destination-1",
+                   "rtt_ms" => 18.5
+                 }
+               ] = response["data"]["srt_health"]
+
+        assert Enum.all?(points, fn point ->
+                 is_binary(point["timestamp"]) and is_map(point["destinations"])
+               end)
+      after
+        :meck.unload(HydraSrt.Stats.VictoriaMetrics)
+      end
     end
   end
 
   describe "statuses analytics" do
     test "returns route status analytics payload", %{conn: conn} do
-      conn = get(conn, "/api/routes/statuses/analytics?window=last_hour")
-      response = json_response(conn, 200)
+      :ok = :meck.new(HydraSrt.Stats.VictoriaMetrics, [:passthrough])
 
-      assert %{"data" => %{"meta" => meta, "points" => points}} = response
-      assert meta["window"] == "last_hour"
-      assert is_integer(meta["bucket_ms"])
-      assert is_binary(meta["from"])
-      assert is_binary(meta["to"])
-      assert is_list(points)
+      :meck.expect(HydraSrt.Stats.VictoriaMetrics, :export_series, fn _match, _from, _to ->
+        {:ok, []}
+      end)
+
+      :meck.expect(HydraSrt.Stats.VictoriaMetrics, :export_series, fn _match, _from, _to ->
+        {:ok, []}
+      end)
+
+      try do
+        conn = get(conn, "/api/routes/statuses/analytics?window=last_hour")
+        response = json_response(conn, 200)
+
+        assert %{"data" => %{"meta" => meta, "points" => points}} = response
+        assert meta["window"] == "last_hour"
+        assert is_integer(meta["bucket_ms"])
+        assert is_binary(meta["from"])
+        assert is_binary(meta["to"])
+        assert is_list(points)
+      after
+        :meck.unload(HydraSrt.Stats.VictoriaMetrics)
+      end
     end
   end
 
@@ -289,15 +313,42 @@ defmodule HydraSrtWeb.RouteControllerTest do
     setup [:create_route]
 
     test "returns route events payload", %{conn: conn, route: %{id: id}} do
-      conn = get(conn, "/api/routes/#{id}/events?window=last_hour&limit=10&offset=0")
-      response = json_response(conn, 200)
+      :ok = :meck.new(HydraSrt.Stats.VictoriaMetrics, [:passthrough])
 
-      assert %{"data" => %{"events" => events, "meta" => meta}} = response
-      assert is_list(events)
-      assert meta["window"] == "last_hour"
-      assert meta["limit"] == 10
-      assert meta["offset"] == 0
-      assert is_integer(meta["total"])
+      :meck.expect(HydraSrt.Stats.VictoriaMetrics, :export_series, fn _match, _from, _to ->
+        {:ok, []}
+      end)
+
+      try do
+        conn = get(conn, "/api/routes/#{id}/events?window=last_hour&limit=10&offset=0")
+        response = json_response(conn, 200)
+
+        assert %{"data" => %{"events" => events, "meta" => meta}} = response
+        assert is_list(events)
+        assert meta["window"] == "last_hour"
+        assert meta["limit"] == 10
+        assert meta["offset"] == 0
+        assert is_integer(meta["total"])
+      after
+        :meck.unload(HydraSrt.Stats.VictoriaMetrics)
+      end
+    end
+
+    test "returns an error status when the metrics backend fails", %{conn: conn, route: %{id: id}} do
+      :ok = :meck.new(HydraSrt.Stats.VictoriaMetrics, [:passthrough])
+
+      :meck.expect(HydraSrt.Stats.VictoriaMetrics, :export_series, fn _match, _from, _to ->
+        {:error, :backend_down}
+      end)
+
+      try do
+        conn = get(conn, "/api/routes/#{id}/events?window=last_hour&limit=10&offset=0")
+
+        # A backend outage must surface as a server error, not an empty success page.
+        assert json_response(conn, 500)["error"] == "Failed to fetch events"
+      after
+        :meck.unload(HydraSrt.Stats.VictoriaMetrics)
+      end
     end
   end
 
@@ -305,23 +356,43 @@ defmodule HydraSrtWeb.RouteControllerTest do
     setup [:create_route]
 
     test "returns route pipeline logs payload", %{conn: conn, route: %{id: id}} do
-      conn = get(conn, "/api/routes/#{id}/pipeline-logs?window=last_hour&limit=10&offset=0")
-      response = json_response(conn, 200)
+      :ok = :meck.new(HydraSrt.Stats.VictoriaLogs, [:passthrough])
 
-      assert %{"data" => %{"logs" => logs, "meta" => meta}} = response
-      assert is_list(logs)
-      assert meta["window"] == "last_hour"
-      assert meta["limit"] == 10
-      assert meta["offset"] == 0
-      assert is_integer(meta["total"])
+      :meck.expect(HydraSrt.Stats.VictoriaLogs, :query_route_logs, fn _route_id, _params ->
+        {:ok, %{logs: [], total: 0}}
+      end)
+
+      try do
+        conn = get(conn, "/api/routes/#{id}/pipeline-logs?window=last_hour&limit=10&offset=0")
+        response = json_response(conn, 200)
+
+        assert %{"data" => %{"logs" => logs, "meta" => meta}} = response
+        assert is_list(logs)
+        assert meta["window"] == "last_hour"
+        assert meta["limit"] == 10
+        assert meta["offset"] == 0
+        assert is_integer(meta["total"])
+      after
+        :meck.unload(HydraSrt.Stats.VictoriaLogs)
+      end
     end
 
     test "returns distinct pipeline log values for column=level", %{conn: conn, route: %{id: id}} do
-      conn = get(conn, "/api/routes/#{id}/pipeline-logs/distinct?column=level")
-      response = json_response(conn, 200)
+      :ok = :meck.new(HydraSrt.Stats.VictoriaLogs, [:passthrough])
 
-      assert %{"data" => values} = response
-      assert is_list(values)
+      :meck.expect(HydraSrt.Stats.VictoriaLogs, :distinct_route_values, fn _route_id, "level" ->
+        {:ok, ["ERROR", "WARN"]}
+      end)
+
+      try do
+        conn = get(conn, "/api/routes/#{id}/pipeline-logs/distinct?column=level")
+        response = json_response(conn, 200)
+
+        assert %{"data" => values} = response
+        assert values == ["ERROR", "WARN"]
+      after
+        :meck.unload(HydraSrt.Stats.VictoriaLogs)
+      end
     end
 
     test "returns 400 when distinct column is missing", %{conn: conn, route: %{id: id}} do

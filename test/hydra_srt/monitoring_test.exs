@@ -209,7 +209,7 @@ defmodule HydraSrt.MonitoringTest do
     assert is_map(stats.storage)
     assert is_map(stats.databases)
     assert Map.has_key?(stats.databases, "metadata_database")
-    assert Map.has_key?(stats.databases, "metrics_logs_database")
+    refute Map.has_key?(stats.databases, "metrics_logs_database")
   end
 
   test "NodeStats.all_nodes returns current node stats" do

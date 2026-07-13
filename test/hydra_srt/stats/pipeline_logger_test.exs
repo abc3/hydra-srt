@@ -3,17 +3,12 @@ defmodule HydraSrt.Stats.PipelineLoggerTest do
 
   import ExUnit.CaptureLog
 
-  alias HydraSrt.Stats.Duckdb
   alias HydraSrt.Stats.PipelineLogger
 
-  setup do
-    :ok = Duckdb.ensure_schema()
-    :ok
-  end
-
-  test "flush_logs persists buffered rows to duckdb" do
+  test "flush_logs persists buffered rows to VictoriaLogs insert callback" do
     route_id = unique_route_id()
     ts = DateTime.utc_now() |> DateTime.truncate(:second)
+    test_pid = self()
 
     logs = [
       %{
@@ -25,18 +20,21 @@ defmodule HydraSrt.Stats.PipelineLoggerTest do
       }
     ]
 
-    assert {[], %{}} = PipelineLogger.flush_logs(logs)
+    assert {[], %{}} =
+             PipelineLogger.flush_logs(logs, %{}, fn rows ->
+               send(test_pid, {:inserted_logs, rows})
+               :ok
+             end)
 
-    assert eventually(fn ->
-             case fetch_latest_message(route_id) do
-               {:ok, "persisted error"} -> true
-               _ -> false
-             end
-           end)
+    assert_receive {:inserted_logs, [row]}, 500
+    assert row.route_id == route_id
+    assert row.message == "persisted error"
+    assert row.ts == ts
   end
 
   test "flush_logs writes synthetic WARN row when verbose lines were rate limited" do
     route_id = unique_route_id()
+    test_pid = self()
 
     logs = [
       %{
@@ -50,21 +48,16 @@ defmodule HydraSrt.Stats.PipelineLoggerTest do
 
     rate_counters = %{route_id => %{count: 200, dropped: 7}}
 
-    assert {[], %{}} = PipelineLogger.flush_logs(logs, rate_counters)
+    assert {[], %{}} =
+             PipelineLogger.flush_logs(logs, rate_counters, fn rows ->
+               send(test_pid, {:inserted_logs, rows})
+               :ok
+             end)
 
-    assert eventually(fn ->
-             case fetch_latest_message(route_id) do
-               {:ok, "rate limited: dropped 7 lines"} -> true
-               _ -> false
-             end
-           end)
-
-    assert eventually(fn ->
-             case fetch_latest_level(route_id) do
-               {:ok, "WARN"} -> true
-               _ -> false
-             end
-           end)
+    assert_receive {:inserted_logs, rows}, 500
+    synthetic = Enum.find(rows, &(&1.message == "rate limited: dropped 7 lines"))
+    assert synthetic.level == "WARN"
+    assert synthetic.route_id == route_id
   end
 
   test "flush_logs keeps logs when insert fails" do
@@ -78,7 +71,7 @@ defmodule HydraSrt.Stats.PipelineLoggerTest do
     ]
 
     assert {kept_logs, %{}} =
-             PipelineLogger.flush_logs(logs, %{}, fn _rows -> {:error, :duckdb_down} end)
+             PipelineLogger.flush_logs(logs, %{}, fn _rows -> {:error, :victoria_logs_down} end)
 
     assert length(kept_logs) == 1
     assert hd(kept_logs).message == "boom"
@@ -86,86 +79,129 @@ defmodule HydraSrt.Stats.PipelineLoggerTest do
     log =
       capture_log(fn ->
         assert {^kept_logs, %{}} =
-                 PipelineLogger.flush_logs(kept_logs, %{}, fn _rows -> {:error, :duckdb_down} end)
+                 PipelineLogger.flush_logs(kept_logs, %{}, fn _rows ->
+                   {:error, :victoria_logs_down}
+                 end)
       end)
 
     assert log =~ "PipelineLogger flush failed"
   end
 
-  test "GenServer flush persists logs via duckdb" do
+  test "enforces max_buffer_size by dropping oldest log lines" do
+    name = :"pipeline_logger_limit_test_#{System.unique_integer([:positive])}"
+
+    pid =
+      start_supervised!(
+        {PipelineLogger,
+         %{
+           name: name,
+           flush_interval_ms: 100_000,
+           max_buffer_size: 5,
+           insert_logs_fun: fn _rows -> {:error, :victoria_logs_down} end
+         }}
+      )
+
+    log =
+      capture_log(fn ->
+        for i <- 1..10 do
+          send(name, {
+            :pipeline_log,
+            %{
+              route_id: "route-1",
+              level: "ERROR",
+              category: "srt",
+              message: "line #{i}"
+            }
+          })
+        end
+
+        _ = :sys.get_state(pid)
+      end)
+
+    assert log =~ "dropped"
+    assert log =~ "max_buffer_size"
+
+    state = :sys.get_state(pid)
+    assert length(state.logs) == 5
+
+    assert Enum.map(state.logs, & &1.message) == [
+             "line 10",
+             "line 9",
+             "line 8",
+             "line 7",
+             "line 6"
+           ]
+  end
+
+  test "flush_logs enforces max_buffer_size after insert failure" do
+    logs =
+      1..10
+      |> Enum.map(fn i ->
+        %{
+          route_id: "route-1",
+          level: "ERROR",
+          category: "srt",
+          message: "line #{i}",
+          ts: DateTime.add(~U[2026-01-01 00:00:00Z], i, :second)
+        }
+      end)
+      |> Enum.reverse()
+
+    log =
+      capture_log(fn ->
+        {kept_logs, %{}} =
+          PipelineLogger.flush_logs(
+            logs,
+            %{},
+            fn _rows -> {:error, :victoria_logs_down} end,
+            5
+          )
+
+        assert length(kept_logs) == 5
+
+        assert Enum.map(kept_logs, & &1.message) == [
+                 "line 10",
+                 "line 9",
+                 "line 8",
+                 "line 7",
+                 "line 6"
+               ]
+      end)
+
+    assert log =~ "Pipeline logger dropped 5 buffered log lines due to max_buffer_size"
+  end
+
+  test "GenServer flush persists logs via injected insert callback" do
     route_id = unique_route_id()
+    test_pid = self()
+    name = :"pipeline_logger_flush_test_#{System.unique_integer([:positive])}"
+
+    _pid =
+      start_supervised!(
+        {PipelineLogger,
+         %{
+           name: name,
+           flush_interval_ms: 100_000,
+           insert_logs_fun: fn rows ->
+             send(test_pid, {:inserted_logs, rows})
+             :ok
+           end
+         }}
+      )
 
     send(
-      PipelineLogger,
+      name,
       {:pipeline_log,
        %{route_id: route_id, level: "ERROR", category: "srt", message: "via genserver"}}
     )
 
-    send(PipelineLogger, :flush)
+    send(name, :flush)
 
-    assert eventually(fn ->
-             case fetch_latest_message(route_id) do
-               {:ok, "via genserver"} -> true
-               _ -> false
-             end
-           end)
+    assert_receive {:inserted_logs, rows}, 500
+    assert Enum.any?(rows, &(&1.route_id == route_id and &1.message == "via genserver"))
   end
 
   defp unique_route_id do
     "route-pl-logger-#{System.unique_integer([:positive])}"
-  end
-
-  defp fetch_latest_message(route_id) do
-    sql = """
-    SELECT message
-    FROM pipeline_logs
-    WHERE route_id = ?
-    ORDER BY ts DESC
-    LIMIT 1
-    """
-
-    case Adbc.Connection.query(HydraSrt.AnalyticsConn, sql, [route_id]) do
-      {:ok, result} ->
-        case Adbc.Result.to_map(result)["message"] do
-          [message | _] -> {:ok, message}
-          _ -> :not_found
-        end
-
-      {:error, _} ->
-        :not_found
-    end
-  end
-
-  defp fetch_latest_level(route_id) do
-    sql = """
-    SELECT level
-    FROM pipeline_logs
-    WHERE route_id = ?
-    ORDER BY ts DESC
-    LIMIT 1
-    """
-
-    case Adbc.Connection.query(HydraSrt.AnalyticsConn, sql, [route_id]) do
-      {:ok, result} ->
-        case Adbc.Result.to_map(result)["level"] do
-          [level | _] -> {:ok, level}
-          _ -> :not_found
-        end
-
-      {:error, _} ->
-        :not_found
-    end
-  end
-
-  defp eventually(fun, attempts \\ 40)
-  defp eventually(_fun, 0), do: false
-
-  defp eventually(fun, attempts) when is_function(fun, 0) and attempts > 0 do
-    if fun.() do
-      true
-    else
-      Process.sleep(50)
-      eventually(fun, attempts - 1)
-    end
   end
 end

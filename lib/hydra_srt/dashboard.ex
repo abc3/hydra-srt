@@ -4,6 +4,7 @@ defmodule HydraSrt.Dashboard do
   alias HydraSrt.Db
   alias HydraSrt.Monitoring.NodeStats
   alias HydraSrt.Stats.Analytics
+  alias HydraSrt.Stats.VictoriaLogs
 
   @healthy_statuses ~w(processing started stopped)
   @attention_statuses ~w(starting reconnecting restarting failed)
@@ -19,8 +20,13 @@ defmodule HydraSrt.Dashboard do
       node_history = node_history(node_id, query_params)
       route_ids = Enum.map(routes, & &1["id"])
       event_summary = event_summary(route_ids)
+      log_summary = log_summary(route_ids)
 
       generated_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+      analytics_available =
+        status_history.available and node_history.available and
+          event_summary.available and log_summary.available
 
       {:ok,
        %{
@@ -28,11 +34,11 @@ defmodule HydraSrt.Dashboard do
          system: system_summary(node),
          routes: route_summary(routes),
          failover: failover_summary(routes, event_summary),
-         logs: log_summary(route_ids),
+         logs: log_summary.summary,
          network_series: network_series(node_history.points),
          status_series: reconcile_status_series(status_history.points, routes, generated_at),
          attention: attention_rows(routes, event_summary.latest_by_route),
-         analytics_available: status_history.available and node_history.available
+         analytics_available: analytics_available
        }}
     end
   end
@@ -219,50 +225,20 @@ defmodule HydraSrt.Dashboard do
     end)
   end
 
-  @spec log_summary([binary()], GenServer.server()) :: map()
-  def log_summary(route_ids, conn \\ HydraSrt.AnalyticsConn)
+  @spec log_summary([binary()]) :: %{available: boolean(), summary: map()}
+  def log_summary(route_ids)
 
-  def log_summary([], _conn), do: empty_log_summary()
+  def log_summary([]), do: %{available: true, summary: empty_log_summary()}
 
-  def log_summary(route_ids, conn) when is_list(route_ids) do
-    placeholders = placeholders(route_ids)
-
-    sql = """
-    SELECT
-      COUNT(*) FILTER (WHERE UPPER(level) IN ('ERROR', 'FATAL')) AS errors,
-      COUNT(*) FILTER (WHERE UPPER(level) IN ('WARN', 'WARNING')) AS warnings,
-      COUNT(*) FILTER (WHERE UPPER(level) = 'INFO') AS info
-    FROM pipeline_logs
-    WHERE route_id IN (#{placeholders})
-      AND ts >= CURRENT_TIMESTAMP - INTERVAL '5 MINUTES'
-    """
-
-    latest_error_sql = """
-    SELECT ts, route_id, message
-    FROM pipeline_logs
-    WHERE route_id IN (#{placeholders})
-      AND UPPER(level) IN ('ERROR', 'FATAL')
-      AND ts >= CURRENT_TIMESTAMP - INTERVAL '5 MINUTES'
-    ORDER BY ts DESC
-    LIMIT 1
-    """
-
-    with {:ok, counts_result} <- Adbc.Connection.query(conn, sql, route_ids),
-         {:ok, latest_result} <- Adbc.Connection.query(conn, latest_error_sql, route_ids) do
-      counts = Adbc.Result.to_map(counts_result)
-      latest = Adbc.Result.to_map(latest_result)
-
-      %{
-        errors: first_integer(counts, "errors"),
-        warnings: first_integer(counts, "warnings"),
-        info: first_integer(counts, "info"),
-        last_error_at: latest |> first_value("ts") |> timestamp_to_iso8601(),
-        last_error_route_id: first_value(latest, "route_id"),
-        last_error_message: first_value(latest, "message")
-      }
-    else
-      {:error, _reason} -> empty_log_summary()
+  def log_summary(route_ids) when is_list(route_ids) do
+    case VictoriaLogs.summary_result(route_ids) do
+      {:ok, summary} -> %{available: true, summary: summary}
+      {:error, _reason} -> %{available: false, summary: empty_log_summary()}
     end
+  rescue
+    _error -> %{available: false, summary: empty_log_summary()}
+  catch
+    _kind, _reason -> %{available: false, summary: empty_log_summary()}
   end
 
   @spec empty_log_summary() :: map()
@@ -277,56 +253,102 @@ defmodule HydraSrt.Dashboard do
     }
   end
 
-  @spec event_summary([binary()], GenServer.server()) :: map()
-  def event_summary(route_ids, conn \\ HydraSrt.AnalyticsConn)
+  @spec event_summary([binary()]) :: map()
+  def event_summary(route_ids)
 
-  def event_summary([], _conn),
-    do: %{last_failover_at: nil, failbacks_today: 0, latest_by_route: %{}}
+  def event_summary([]), do: empty_event_summary(true)
 
-  def event_summary(route_ids, conn) when is_list(route_ids) do
-    placeholders = placeholders(route_ids)
+  def event_summary(route_ids) when is_list(route_ids) do
+    now = DateTime.utc_now()
+    from_24h = DateTime.add(now, -24 * 60 * 60, :second)
+    today = DateTime.new!(Date.utc_today(), ~T[00:00:00], "Etc/UTC")
 
-    latest_switch_sql = """
-    SELECT ts
-    FROM events
-    WHERE route_id IN (#{placeholders})
-      AND event_type = 'source_switch'
-      AND COALESCE(reason, '') != 'manual'
-    ORDER BY ts DESC
-    LIMIT 1
-    """
+    # One or more export calls scoped to route batches (regex matcher), then a
+    # defensive in-memory filter.
+    case fetch_event_summary_events(route_ids, from_24h, now) do
+      {:ok, all_events} ->
+        route_id_set = MapSet.new(route_ids)
 
-    failback_sql = """
-    SELECT COUNT(*) AS total
-    FROM events
-    WHERE route_id IN (#{placeholders})
-      AND event_type = 'source_switch'
-      AND reason = 'primary_recovered'
-      AND ts >= DATE_TRUNC('day', CURRENT_TIMESTAMP)
-    """
+        events =
+          all_events
+          |> Enum.filter(&MapSet.member?(route_id_set, &1["route_id"]))
+          |> Enum.sort_by(& &1["ts"], :desc)
 
-    latest_events_sql = """
-    SELECT ts, route_id, event_type, severity, reason, message
-    FROM events
-    WHERE route_id IN (#{placeholders})
-      AND ts >= CURRENT_TIMESTAMP - INTERVAL '24 HOURS'
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY route_id ORDER BY ts DESC) = 1
-    """
+        latest_switch =
+          Enum.find(events, fn event ->
+            event["event_type"] == "source_switch" and event["reason"] != "manual"
+          end)
 
-    with {:ok, switch_result} <- Adbc.Connection.query(conn, latest_switch_sql, route_ids),
-         {:ok, failback_result} <- Adbc.Connection.query(conn, failback_sql, route_ids),
-         {:ok, latest_result} <- Adbc.Connection.query(conn, latest_events_sql, route_ids) do
-      switch_columns = Adbc.Result.to_map(switch_result)
-      failback_columns = Adbc.Result.to_map(failback_result)
-      latest_columns = Adbc.Result.to_map(latest_result)
+        failbacks_today =
+          Enum.count(events, fn event ->
+            event["event_type"] == "source_switch" and event["reason"] == "primary_recovered" and
+              timestamp_on_or_after?(event["ts"], today)
+          end)
 
-      %{
-        last_failover_at: switch_columns |> first_value("ts") |> timestamp_to_iso8601(),
-        failbacks_today: first_integer(failback_columns, "total"),
-        latest_by_route: latest_events_by_route(latest_columns)
-      }
-    else
-      {:error, _reason} -> %{last_failover_at: nil, failbacks_today: 0, latest_by_route: %{}}
+        %{
+          last_failover_at: latest_switch && latest_switch["ts"],
+          failbacks_today: failbacks_today,
+          latest_by_route: latest_events_by_route_rows(events),
+          available: true
+        }
+
+      {:error, _reason} ->
+        empty_event_summary(false)
+    end
+  rescue
+    _error -> empty_event_summary(false)
+  catch
+    _kind, _reason -> empty_event_summary(false)
+  end
+
+  # Above this many routes the regex-alternation selector grows too long, so we
+  # chunk route ids and issue one constrained export per batch.
+  @max_route_ids_for_regex 50
+
+  @spec fetch_event_summary_events([binary()], DateTime.t(), DateTime.t()) ::
+          {:ok, [map()]} | {:error, term()}
+  defp fetch_event_summary_events(route_ids, from, to) when is_list(route_ids) do
+    route_ids
+    |> Enum.chunk_every(@max_route_ids_for_regex)
+    |> Enum.reduce_while({:ok, []}, fn batch, {:ok, acc} ->
+      case Analytics.fetch_events_for_route_ids(batch, from, to) do
+        {:ok, events} -> {:cont, {:ok, acc ++ events}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  @spec empty_event_summary(boolean()) :: map()
+  def empty_event_summary(available) when is_boolean(available) do
+    %{last_failover_at: nil, failbacks_today: 0, latest_by_route: %{}, available: available}
+  end
+
+  @spec latest_events_by_route_rows([map()]) :: map()
+  def latest_events_by_route_rows(events) when is_list(events) do
+    Enum.reduce(events, %{}, fn event, acc ->
+      route_id = event["route_id"]
+
+      if is_binary(route_id) and not Map.has_key?(acc, route_id) do
+        Map.put(acc, route_id, %{
+          ts: event["ts"],
+          event_type: event["event_type"],
+          severity: event["severity"],
+          reason: event["reason"],
+          message: event["message"]
+        })
+      else
+        acc
+      end
+    end)
+  end
+
+  @spec timestamp_on_or_after?(binary() | nil, DateTime.t()) :: boolean()
+  def timestamp_on_or_after?(nil, _datetime), do: false
+
+  def timestamp_on_or_after?(timestamp, datetime) when is_binary(timestamp) do
+    case DateTime.from_iso8601(timestamp) do
+      {:ok, parsed, _offset} -> DateTime.compare(parsed, datetime) in [:eq, :gt]
+      _ -> false
     end
   end
 

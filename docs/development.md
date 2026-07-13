@@ -37,16 +37,6 @@ Install:
    ```
    This command should print linker flags. If it errors, install the missing GStreamer/SRT packages.
 
-6. **DuckDB CLI** (used for analytics inspection/debugging):
-
-   ```bash
-   # Ubuntu/Debian and most Linux distributions
-   curl -fsSL https://install.duckdb.org | sh
-
-   # macOS (using Homebrew)
-   brew install duckdb
-   ```
-
 ## Local Development
 
 `make dev` starts Phoenix and the Vite dev server.
@@ -225,8 +215,6 @@ Use `start_iex` when you want an interactive shell.
 
 ## Running with Docker
 
-> `duckdb` CLI is installed in the Docker image during build.
-
 The repository includes Compose files for the recommended Docker workflow.
 
 ### Quick Start with Docker Compose
@@ -245,7 +233,7 @@ docker compose up
 
 On first start (fresh `./data/db` volume), the container will automatically run DB migrations.
 To disable auto-migrations, set `RUN_MIGRATIONS=false`.
-`docker-compose.yml` uses `DATABASE_PATH=/app/db/hydra_srt.db`, `ANALYTICS_DATABASE_PATH=/app/db/hydra_srt_analytics.duckdb`, and mounts `./data/db`.
+`docker-compose.yml` uses `DATABASE_PATH=/app/db/hydra_srt.db`, stores route metadata under `./data/db`, and starts VictoriaMetrics plus VictoriaLogs with 3-day retention for historical metrics, events, and pipeline logs.
 
 The default Compose file uses `network_mode: "host"` so HydraSRT can bind directly to the host network. This is intended for native Linux, including WSL2 only when Docker Engine runs inside the WSL distro.
 
@@ -333,7 +321,8 @@ docker run --rm --network host \
   -v "$(pwd)/data/db:/app/db" \
   -e PHX_SERVER=true \
   -e DATABASE_PATH=/app/db/hydra_srt.db \
-  -e ANALYTICS_DATABASE_PATH=/app/db/hydra_srt_analytics.duckdb \
+  -e VICTORIA_METRICS_URL=http://127.0.0.1:8428 \
+  -e VICTORIA_LOGS_URL=http://127.0.0.1:9428 \
   -e API_AUTH_USERNAME=admin \
   -e API_AUTH_PASSWORD=password123 \
   streamband/hydra-srt:latest
@@ -348,7 +337,8 @@ docker run --rm -p 4000:4000 \
   -v "$(pwd)/data/db:/app/db" \
   -e PHX_SERVER=true \
   -e DATABASE_PATH=/app/db/hydra_srt.db \
-  -e ANALYTICS_DATABASE_PATH=/app/db/hydra_srt_analytics.duckdb \
+  -e VICTORIA_METRICS_URL=http://host.docker.internal:8428 \
+  -e VICTORIA_LOGS_URL=http://host.docker.internal:9428 \
   -e API_AUTH_USERNAME=admin \
   -e API_AUTH_PASSWORD=password123 \
   streamband/hydra-srt:latest

@@ -226,7 +226,7 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
 
     assert bytes_after > bytes_before
 
-    # EventLogger flushes to DuckDB on a ~5s timer; polling until the window ends
+    # EventLogger flushes historical events on a ~5s timer; polling until the window ends
     # avoids returning the first partial batch (see wait_for_route_events/4).
     events = wait_for_route_events(base_url, token, route_id, 14_000)
 

@@ -1,6 +1,8 @@
 defmodule HydraSrt.Stats.CollectorTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias HydraSrt.Stats.Collector
 
   @interval_ms 10_000
@@ -71,6 +73,76 @@ defmodule HydraSrt.Stats.CollectorTest do
     assert length(rows) == 2
     assert Enum.any?(rows, &(&1.entity_id == "dest-1" and &1.value_double == 200.0))
     assert Enum.any?(rows, &(&1.entity_id == "dest-2" and &1.value_double == 300.0))
+  end
+
+  test "enforce_max_buffer keeps newest rows by timestamp" do
+    state = %{max_buffer_size: 5, downsample_interval_ms: @interval_ms}
+
+    rows_by_bucket_and_series =
+      Enum.reduce(1..10, %{}, fn i, acc ->
+        row =
+          sample_row(
+            DateTime.add(~U[2026-01-01 00:00:00Z], i, :second),
+            "dest-#{i}",
+            i * 1.0
+          )
+
+        Collector.merge_rows(acc, [row], @interval_ms)
+      end)
+
+    log =
+      capture_log(fn ->
+        {kept, count} = Collector.enforce_max_buffer(rows_by_bucket_and_series, 10, state)
+        assert count == 5
+
+        kept_ids =
+          kept |> Map.values() |> Enum.map(& &1.entity_id) |> Enum.sort()
+
+        assert kept_ids == ["dest-10", "dest-6", "dest-7", "dest-8", "dest-9"]
+      end)
+
+    assert log =~ "Stats collector dropped 5 buffered rows due to max_buffer_size"
+  end
+
+  test "caps buffer after failed flush in GenServer" do
+    name = :"collector_limit_test_#{System.unique_integer([:positive])}"
+
+    pid =
+      start_supervised!(
+        {Collector,
+         %{
+           name: name,
+           flush_interval_ms: 100_000,
+           max_batch_size: 100,
+           max_buffer_size: 5,
+           insert_rows_fun: fn _rows -> {:error, :victoria_metrics_down} end,
+           downsample_interval_ms: @interval_ms
+         }}
+      )
+
+    log =
+      capture_log(fn ->
+        for i <- 1..10 do
+          send(name, {
+            :ingest_route_stats,
+            "route-1",
+            %{
+              "destinations" => [
+                %{"id" => "dest-#{i}", "bytes_out_per_sec" => i * 1.0}
+              ]
+            },
+            %{}
+          })
+        end
+
+        _ = :sys.get_state(pid)
+      end)
+
+    assert log =~ "dropped"
+    assert log =~ "max_buffer_size"
+
+    state = :sys.get_state(pid)
+    assert state.row_count == 5
   end
 
   def sample_row(ts, destination_id, value) do

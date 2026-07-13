@@ -53,23 +53,17 @@ defmodule HydraSrt.Application do
       HydraSrt.AuthCleanup,
       HydraSrt.SignalGenerator,
       {Task.Supervisor, name: HydraSrt.TaskSupervisor},
-      {Adbc.Database,
-       driver: :duckdb,
-       path: Application.fetch_env!(:hydra_srt, :analytics_database_path),
-       process_options: [name: HydraSrt.AnalyticsDb]},
-      {Adbc.Connection,
-       database: HydraSrt.AnalyticsDb, process_options: [name: HydraSrt.AnalyticsConn]},
-      {HydraSrt.Stats.Collector, %{}},
+      {HydraSrt.Stats.Collector, stats_collector_opts()},
       {HydraSrt.Stats.SystemTelemetryCollector,
        Application.get_env(:hydra_srt, :system_metrics_history, [])},
-      {HydraSrt.Stats.EventLogger, %{}},
+      {HydraSrt.Stats.EventLogger, event_logger_opts()},
       HydraSrt.Stats.Cleaner,
       # {Ecto.Migrator,
       #  repos: Application.fetch_env!(:hydra_srt, :ecto_repos), skip: skip_migrations?()},
       {Phoenix.PubSub, name: HydraSrt.PubSub, partitions: runtime_schedulers},
       Hermes.Server.Registry,
       {HydraSrt.Mcp.Server, transport: {:streamable_http, start: true}, request_timeout: 20_000},
-      {HydraSrt.Stats.PipelineLogger, %{}},
+      {HydraSrt.Stats.PipelineLogger, pipeline_logger_opts()},
       {HydraSrt.Notifications.Telegram, %{}},
       rtmp_server_listener,
       HydraSrtWeb.Endpoint
@@ -176,5 +170,45 @@ defmodule HydraSrt.Application do
           "Startup route recovery failed to start enabled route route_id=#{route.id} reason=#{inspect(reason)}"
         )
     end
+  end
+
+  @test_sink_override_keys [
+    :insert_rows_fun,
+    :insert_events_fun,
+    :insert_logs_fun,
+    :flush_interval_ms
+  ]
+
+  defp stats_collector_opts do
+    :hydra_srt
+    |> Application.get_env(:stats_collector, [])
+    |> maybe_drop_test_sink_overrides()
+    |> Enum.into(%{})
+  end
+
+  defp event_logger_opts do
+    :hydra_srt
+    |> Application.get_env(:event_logger, [])
+    |> maybe_drop_test_sink_overrides()
+    |> Enum.into(%{})
+  end
+
+  defp pipeline_logger_opts do
+    :hydra_srt
+    |> Application.get_env(:pipeline_logger, [])
+    |> maybe_drop_test_sink_overrides()
+    |> Enum.into(%{})
+  end
+
+  defp maybe_drop_test_sink_overrides(opts) when is_list(opts) do
+    if e2e_mode?() do
+      Keyword.drop(opts, @test_sink_override_keys)
+    else
+      opts
+    end
+  end
+
+  defp e2e_mode? do
+    System.get_env("E2E") == "true" or System.get_env("E2E_MCP") == "true"
   end
 end

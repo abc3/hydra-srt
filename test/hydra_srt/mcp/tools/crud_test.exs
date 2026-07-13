@@ -91,18 +91,31 @@ defmodule HydraSrt.Mcp.Tools.CrudTest do
 
   test "get_route_analytics accepts time window and returns JSON-safe payload" do
     route = route_fixture()
+    :ok = :meck.new(HydraSrt.Stats.VictoriaMetrics, [:passthrough])
 
-    assert {:ok, response} =
-             ToolRegistry.dispatch("get_route_analytics", %{
-               "route_id" => route["id"],
-               "window" => "last_hour"
-             })
+    :meck.expect(HydraSrt.Stats.VictoriaMetrics, :query_range, fn _query, _from, _to, _step ->
+      {:ok, []}
+    end)
 
-    assert response.isError == false
+    :meck.expect(HydraSrt.Stats.VictoriaMetrics, :export_series, fn _match, _from, _to ->
+      {:ok, []}
+    end)
 
-    data = response.structured_content["data"]
-    assert data["meta"]["window"] == "last_hour"
-    assert is_list(data["points"])
-    assert Jason.encode!(response.structured_content)
+    try do
+      assert {:ok, response} =
+               ToolRegistry.dispatch("get_route_analytics", %{
+                 "route_id" => route["id"],
+                 "window" => "last_hour"
+               })
+
+      assert response.isError == false
+
+      data = response.structured_content["data"]
+      assert data["meta"]["window"] == "last_hour"
+      assert is_list(data["points"])
+      assert Jason.encode!(response.structured_content)
+    after
+      :meck.unload(HydraSrt.Stats.VictoriaMetrics)
+    end
   end
 end

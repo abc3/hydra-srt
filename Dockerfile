@@ -123,9 +123,6 @@ RUN apt-get update -y \
     && gst-launch-1.0 --version 2>&1 | tee /tmp/gst-version.txt \
     && grep -E '1\.26\.' /tmp/gst-version.txt
 
-# Install DuckDB CLI for local analytics introspection/debugging inside container
-RUN curl -fsSL https://install.duckdb.org | sh
-
 # Set the locale
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
 

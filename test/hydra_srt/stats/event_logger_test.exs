@@ -1,6 +1,8 @@
 defmodule HydraSrt.Stats.EventLoggerTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias HydraSrt.Stats.EventLogger
 
   test "flush_events preserves insertion order" do
@@ -22,8 +24,54 @@ defmodule HydraSrt.Stats.EventLoggerTest do
   test "flush_events keeps events when insert fails" do
     events = [%{route_id: "route-1", event_type: "pipeline_failed", ts: ~U[2026-01-01 00:00:01Z]}]
 
-    assert {^events, {:error, :duckdb_down}} =
-             EventLogger.flush_events(events, fn _rows -> {:error, :duckdb_down} end)
+    assert {^events, {:error, :victoria_metrics_down}} =
+             EventLogger.flush_events(events, fn _rows -> {:error, :victoria_metrics_down} end)
+  end
+
+  test "enforces max_buffer_size by dropping oldest events" do
+    name = :"event_logger_limit_test_#{System.unique_integer([:positive])}"
+
+    pid =
+      start_supervised!(
+        {EventLogger,
+         %{
+           name: name,
+           flush_interval_ms: 100_000,
+           max_batch_size: 100,
+           max_buffer_size: 5,
+           insert_events_fun: fn _rows -> {:error, :victoria_metrics_down} end
+         }}
+      )
+
+    log =
+      capture_log(fn ->
+        for i <- 1..10 do
+          GenServer.cast(name, {
+            :ingest_event,
+            %{
+              route_id: "route-1",
+              event_type: "event_#{i}",
+              ts: DateTime.add(~U[2026-01-01 00:00:00Z], i, :second)
+            }
+          })
+        end
+
+        _ = :sys.get_state(pid)
+      end)
+
+    assert log =~ "dropped"
+    assert log =~ "max_buffer_size"
+
+    state = :sys.get_state(pid)
+    assert length(state.events) == 5
+
+    assert Enum.map(state.events, & &1.event_type) == [
+             "event_10",
+             "event_9",
+             "event_8",
+             "event_7",
+             "event_6"
+           ]
   end
 
   test "broadcast_event publishes to route-specific topic" do

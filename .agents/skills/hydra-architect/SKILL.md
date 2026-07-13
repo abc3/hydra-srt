@@ -1,6 +1,6 @@
 ---
 name: hydra-architect
-description: Use when designing or evolving Hydra platform architecture across Elixir/Phoenix, SQLite, DuckDB analytics, native/Rust, and runtime boundaries.
+description: Use when designing or evolving Hydra platform architecture across Elixir/Phoenix, SQLite, VictoriaMetrics/VictoriaLogs analytics, native/Rust, and runtime boundaries.
 ---
 
 # Hydra Architect
@@ -15,7 +15,7 @@ Use this skill for architecture/design work in Hydra:
 
 ## Hydra-specific defaults
 - Primary source of truth: `SQLite` via Ecto (`ecto_sqlite3`).
-- Analytics/time-series sink: `DuckDB` (not transactional source of truth).
+- Analytics sink: external `VictoriaMetrics` (route stats samples and route events over HTTP `:8428`) and `VictoriaLogs` (pipeline logs over HTTP `:9428`) — not transactional source of truth.
 - Control plane: Elixir/Phoenix.
 - Media/runtime work may involve native components and GStreamer.
 - Prefer incremental evolution over big-bang rewrites.
@@ -38,7 +38,7 @@ Use this skill for architecture/design work in Hydra:
 
 2. Map current system touchpoints
 - Read impacted modules, schemas, migrations, supervisors, API handlers, and tests.
-- Identify SQLite tables and any DuckDB analytics coupling.
+- Identify SQLite tables and any VictoriaMetrics/VictoriaLogs analytics coupling.
 
 3. Propose 1-2 viable designs
 - For each option: data flow, transaction boundaries, failure modes, observability, and cost.
@@ -58,11 +58,11 @@ Use this skill for architecture/design work in Hydra:
 - Validate constraints at DB and changeset layers.
 - For backups/restore-sensitive changes, call out integrity implications explicitly.
 
-## DuckDB guidance (Hydra)
-- Use DuckDB for analytics/history, not transactional correctness.
-- Writes to DuckDB should be resilient to delay/retry.
-- If analytics ingestion fails, control-plane operations should remain healthy unless explicitly required otherwise.
-- Keep analytics schema evolution explicit and versioned.
+## Victoria analytics guidance (Hydra)
+- Use VictoriaMetrics for historical route stats (`hydra_srt_stats_sample`) and route events (`hydra_srt_route_event`) via Prometheus remote-write style import and PromQL/Export APIs.
+- Use VictoriaLogs for pipeline log history via JSON-line ingest and LogSQL query APIs.
+- Analytics writes should be resilient to delay/retry; ingestion failures must not take down control-plane operations unless explicitly required.
+- VictoriaLogs retention is governed by server-side `-retentionPeriod`; there is no per-request delete API — plan resets around data-dir clears or retention changes.
 
 ## OTP and runtime boundaries
 - GenServers are for orchestration, caches, buffering, and lifecycle control.
@@ -79,7 +79,7 @@ For substantial architecture work, produce these artifacts (keep concise):
 5. `Validation`: tests, telemetry checks, and rollback strategy.
 
 ## Review checklist
-- Clear ownership of authoritative state (SQLite vs in-memory vs DuckDB).
+- Clear ownership of authoritative state (SQLite vs in-memory vs Victoria analytics stores).
 - Transaction boundaries are explicit and safe.
 - Failure/retry/idempotency paths are defined.
 - Migration and rollback path are realistic.
@@ -87,7 +87,7 @@ For substantial architecture work, produce these artifacts (keep concise):
 - Operational signals (logs/metrics) are sufficient for debugging.
 
 ## Anti-patterns to avoid
-- Treating DuckDB as system-of-record.
+- Treating Victoria analytics stores as system-of-record.
 - Hiding domain mutations in controllers/web layer.
 - Long blocking work in request path when async boundary is appropriate.
 - Large refactors without staged verification.

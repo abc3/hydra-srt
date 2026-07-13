@@ -179,6 +179,15 @@ jobs:
   elixir_e2e_test:
     name: Elixir E2E Tests
     runs-on: ubuntu-latest
+    services:
+      victoria-metrics:
+        image: victoriametrics/victoria-metrics:v1.115.0
+        ports:
+          - 8428:8428
+      victoria-logs:
+        image: victoriametrics/victoria-logs:v1.51.0
+        ports:
+          - 9428:9428
     env:
       MIX_ENV: test
       E2E: true
@@ -217,6 +226,15 @@ jobs:
   elixir_e2e_mcp_test:
     name: Elixir MCP E2E Tests
     runs-on: ubuntu-latest
+    services:
+      victoria-metrics:
+        image: victoriametrics/victoria-metrics:v1.115.0
+        ports:
+          - 8428:8428
+      victoria-logs:
+        image: victoriametrics/victoria-logs:v1.51.0
+        ports:
+          - 9428:9428
     env:
       MIX_ENV: test
       E2E_MCP: true

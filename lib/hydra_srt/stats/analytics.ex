@@ -2,6 +2,8 @@ defmodule HydraSrt.Stats.Analytics do
   @moduledoc false
   alias HydraSrt.Db
   alias HydraSrt.Monitoring.OsMon
+  alias HydraSrt.Stats.VictoriaLogs
+  alias HydraSrt.Stats.VictoriaMetrics
 
   @window_to_seconds %{
     "last_30_min" => 30 * 60,
@@ -46,221 +48,119 @@ defmodule HydraSrt.Stats.Analytics do
     end
   end
 
-  @spec fetch_route_timeseries(binary(), query_params(), GenServer.server()) ::
+  @spec fetch_route_timeseries(binary(), query_params(), module()) ::
           {:ok, map()} | {:error, term()}
-  def fetch_route_timeseries(route_id, query_params, conn \\ HydraSrt.AnalyticsConn)
+  def fetch_route_timeseries(route_id, query_params, client \\ VictoriaMetrics)
       when is_binary(route_id) and is_map(query_params) do
-    sql = """
-    WITH sampled AS (
-      SELECT
-        to_timestamp(FLOOR(epoch_ms(ts)::DOUBLE / ?) * ? / 1000.0) AS bucket_ts,
-        entity_type,
-        entity_id,
-        avg(value_double) AS metric_value
-      FROM stats_samples
-      WHERE route_id = ?
-        AND metric_key IN ('bytes_in_per_sec', 'bytes_out_per_sec')
-        AND ts >= CAST(? AS TIMESTAMP)
-        AND ts <= CAST(? AS TIMESTAMP)
-      GROUP BY 1, 2, 3
-    )
-    SELECT bucket_ts, entity_type, entity_id, metric_value
-    FROM sampled
-    ORDER BY bucket_ts ASC, entity_type ASC, entity_id ASC
-    """
+    with {:ok, rows} <-
+           fetch_stats_rows(
+             client,
+             %{"route_id" => route_id},
+             ["bytes_in_per_sec", "bytes_out_per_sec"],
+             query_params
+           ) do
+      switches = fetch_route_switches(route_id, query_params, client)
+      initial_source_id = fetch_last_source_before_window(route_id, query_params, client)
+      srt_quality = fetch_route_srt_quality(route_id, query_params, client)
+      srt_health = fetch_route_srt_health(route_id, query_params, client)
 
-    params = [
-      query_params.bucket_ms,
-      query_params.bucket_ms,
-      route_id,
-      DateTime.to_iso8601(query_params.from),
-      DateTime.to_iso8601(query_params.to)
-    ]
-
-    case Adbc.Connection.query(conn, sql, params) do
-      {:ok, result} ->
-        rows = result |> Adbc.Result.to_map() |> rows_from_columns()
-        switches = fetch_route_switches(route_id, query_params, conn)
-        initial_source_id = fetch_last_source_before_window(route_id, query_params, conn)
-        srt_quality = fetch_route_srt_quality(route_id, query_params, conn)
-        srt_health = fetch_route_srt_health(route_id, query_params, conn)
-
-        {:ok,
-         %{
-           points: points_from_rows(rows),
-           switches: switches,
-           source_timeline:
-             source_timeline_from_switches(switches, query_params, initial_source_id),
-           srt_quality: srt_quality,
-           srt_health: srt_health,
-           meta: %{
-             from: DateTime.to_iso8601(query_params.from),
-             to: DateTime.to_iso8601(query_params.to),
-             window: query_params.window,
-             bucket_ms: query_params.bucket_ms
-           }
-         }}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok,
+       %{
+         points: points_from_rows(rows),
+         switches: switches,
+         source_timeline:
+           source_timeline_from_switches(switches, query_params, initial_source_id),
+         srt_quality: srt_quality,
+         srt_health: srt_health,
+         meta: analytics_meta(query_params)
+       }}
     end
   end
 
-  @spec fetch_node_timeseries(binary(), query_params(), GenServer.server()) ::
+  @spec fetch_node_timeseries(binary(), query_params(), module()) ::
           {:ok, map()} | {:error, term()}
-  def fetch_node_timeseries(node_id, query_params, conn \\ HydraSrt.AnalyticsConn)
+  def fetch_node_timeseries(node_id, query_params, client \\ VictoriaMetrics)
       when is_binary(node_id) and is_map(query_params) do
-    node_entity_prefix = "#{node_id}:%"
+    node_entity_prefix = "#{node_id}:"
 
-    sql = """
-    WITH sampled AS (
-      SELECT
-        to_timestamp(FLOOR(epoch_ms(ts)::DOUBLE / ?) * ? / 1000.0) AS bucket_ts,
-        entity_type,
-        entity_id,
-        metric_key,
-        avg(value_double) AS metric_value
-      FROM stats_samples
-      WHERE route_id IS NULL
-        AND (
-          (entity_type = 'node' AND entity_id = ? AND metric_key IN ('cpu_util', 'ram_usage', 'swap_usage', 'cpu_la_avg1', 'cpu_la_avg5', 'cpu_la_avg15'))
-          OR
-          (entity_type = 'net_if' AND entity_id LIKE ? AND metric_key IN ('net_rx_bytes_per_sec', 'net_tx_bytes_per_sec'))
-          OR
-          (entity_type = 'storage' AND entity_id LIKE ? AND metric_key IN ('storage_total_bytes', 'storage_used_bytes', 'storage_free_bytes', 'storage_used_percent'))
-          OR
-          (entity_type = 'database' AND entity_id LIKE ? AND metric_key IN ('database_size_bytes'))
-        )
-        AND ts >= CAST(? AS TIMESTAMP)
-        AND ts <= CAST(? AS TIMESTAMP)
-      GROUP BY 1, 2, 3, 4
-    )
-    SELECT bucket_ts, entity_type, entity_id, metric_key, metric_value
-    FROM sampled
-    ORDER BY bucket_ts ASC, entity_type ASC, entity_id ASC, metric_key ASC
-    """
+    metric_keys =
+      ~w(cpu_util ram_usage swap_usage cpu_la_avg1 cpu_la_avg5 cpu_la_avg15 net_rx_bytes_per_sec net_tx_bytes_per_sec storage_total_bytes storage_used_bytes storage_free_bytes storage_used_percent database_size_bytes)
 
-    params = [
-      query_params.bucket_ms,
-      query_params.bucket_ms,
-      node_id,
-      node_entity_prefix,
-      node_entity_prefix,
-      node_entity_prefix,
-      DateTime.to_iso8601(query_params.from),
-      DateTime.to_iso8601(query_params.to)
-    ]
+    with {:ok, rows} <- fetch_stats_rows(client, %{"route_id" => ""}, metric_keys, query_params) do
+      filtered_rows =
+        Enum.filter(rows, fn row ->
+          cond do
+            row.entity_type == "node" ->
+              row.entity_id == node_id
 
-    case Adbc.Connection.query(conn, sql, params) do
-      {:ok, result} ->
-        rows = result |> Adbc.Result.to_map() |> node_rows_from_columns()
+            row.entity_type in ["net_if", "storage", "database"] ->
+              String.starts_with?(to_string(row.entity_id), node_entity_prefix)
 
-        {:ok,
-         %{
-           points: node_points_from_rows(rows),
-           meta: %{
-             from: DateTime.to_iso8601(query_params.from),
-             to: DateTime.to_iso8601(query_params.to),
-             window: query_params.window,
-             bucket_ms: query_params.bucket_ms,
-             storages: storage_meta_from_rows(rows),
-             databases: database_meta_from_rows(rows),
-             default_storage_id: default_storage_id(rows)
-           }
-         }}
+            true ->
+              false
+          end
+        end)
 
-      {:error, reason} ->
-        {:error, reason}
+      {:ok,
+       %{
+         points: node_points_from_rows(filtered_rows),
+         meta:
+           Map.merge(analytics_meta(query_params), %{
+             storages: storage_meta_from_rows(filtered_rows),
+             databases: database_meta_from_rows(filtered_rows),
+             default_storage_id: default_storage_id(filtered_rows)
+           })
+       }}
     end
   end
 
-  @spec fetch_route_events(binary(), map(), GenServer.server()) :: {:ok, map()} | {:error, term()}
-  def fetch_route_events(route_id, params, conn \\ HydraSrt.AnalyticsConn)
+  @spec fetch_route_events(binary(), map(), module()) :: {:ok, map()} | {:error, term()}
+  def fetch_route_events(route_id, params, client \\ VictoriaMetrics)
       when is_binary(route_id) and is_map(params) do
     limit = parse_int_param(Map.get(params, "limit"), 100)
     offset = parse_int_param(Map.get(params, "offset"), 0)
     type_filter = Map.get(params, "type")
 
-    with {:ok, range} <- parse_range(params) do
-      sql = """
-      SELECT ts, route_id, event_type, severity, source_id, from_source_id, to_source_id, reason, message, details_json
-      FROM events
-      WHERE route_id = ?
-        AND ts >= CAST(? AS TIMESTAMP)
-        AND ts <= CAST(? AS TIMESTAMP)
-        AND (? IS NULL OR event_type = ?)
-      ORDER BY ts DESC
-      LIMIT ?
-      OFFSET ?
-      """
+    with {:ok, range} <- parse_range(params),
+         {:ok, events} <- fetch_events_result(route_id, range.from, range.to, client) do
+      rows =
+        events
+        |> filter_event_type(type_filter)
+        |> Enum.sort_by(& &1["ts"], :desc)
 
-      query_params = [
-        route_id,
-        DateTime.to_iso8601(range.from),
-        DateTime.to_iso8601(range.to),
-        type_filter,
-        type_filter,
-        limit,
-        offset
-      ]
-
-      case Adbc.Connection.query(conn, sql, query_params) do
-        {:ok, result} ->
-          rows = result |> Adbc.Result.to_map() |> event_rows_from_columns()
-          total = fetch_route_events_total(route_id, range, type_filter, conn)
-
-          {:ok,
-           %{
-             events: rows,
-             meta: %{
-               from: DateTime.to_iso8601(range.from),
-               to: DateTime.to_iso8601(range.to),
-               window: range.window,
-               limit: limit,
-               offset: offset,
-               type: type_filter,
-               total: total
-             }
-           }}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      {:ok,
+       %{
+         events: rows |> Enum.drop(offset) |> Enum.take(limit),
+         meta: %{
+           from: DateTime.to_iso8601(range.from),
+           to: DateTime.to_iso8601(range.to),
+           window: range.window,
+           limit: limit,
+           offset: offset,
+           type: type_filter,
+           total: length(rows)
+         }
+       }}
     end
   end
 
   @allowed_distinct_columns ~w(level category)
 
-  @spec fetch_route_pipeline_log_distinct(binary(), binary(), GenServer.server()) ::
+  @spec fetch_route_pipeline_log_distinct(binary(), binary(), module()) ::
           {:ok, [binary()]} | {:error, term()}
-  def fetch_route_pipeline_log_distinct(route_id, column, conn \\ HydraSrt.AnalyticsConn)
+  def fetch_route_pipeline_log_distinct(route_id, column, client \\ VictoriaLogs)
 
-  def fetch_route_pipeline_log_distinct(route_id, column, conn)
+  def fetch_route_pipeline_log_distinct(route_id, column, client)
       when is_binary(route_id) and column in @allowed_distinct_columns do
-    sql =
-      "SELECT DISTINCT #{column} FROM pipeline_logs WHERE route_id = ? AND #{column} IS NOT NULL ORDER BY #{column} ASC"
-
-    case Adbc.Connection.query(conn, sql, [route_id]) do
-      {:ok, result} ->
-        values =
-          result
-          |> Adbc.Result.to_map()
-          |> Map.get(column, [])
-          |> Enum.reject(&is_nil/1)
-
-        {:ok, values}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    client.distinct_route_values(route_id, column)
   end
 
-  def fetch_route_pipeline_log_distinct(_route_id, _column, _conn),
+  def fetch_route_pipeline_log_distinct(_route_id, _column, _client),
     do: {:error, {:bad_request, "Invalid column"}}
 
-  @spec fetch_route_pipeline_logs(binary(), map(), GenServer.server()) ::
+  @spec fetch_route_pipeline_logs(binary(), map(), module()) ::
           {:ok, map()} | {:error, term()}
-  def fetch_route_pipeline_logs(route_id, params, conn \\ HydraSrt.AnalyticsConn)
+  def fetch_route_pipeline_logs(route_id, params, client \\ VictoriaLogs)
       when is_binary(route_id) and is_map(params) do
     limit = parse_limit_param(Map.get(params, "limit"), @default_history_limit)
     offset = parse_int_param(Map.get(params, "offset"), 0)
@@ -269,57 +169,15 @@ defmodule HydraSrt.Stats.Analytics do
     category_filters = parse_csv_param(Map.get(params, "categories", ""))
 
     with {:ok, range} <- parse_range(params) do
-      {level_clause, level_params} = build_in_clause("level", level_filters)
-      {category_clause, category_params} = build_in_clause("category", category_filters)
-
-      base_params = [
-        route_id,
-        DateTime.to_iso8601(range.from),
-        DateTime.to_iso8601(range.to)
-      ]
-
-      sql = """
-      SELECT ts, route_id, gst_ts, pid, thread_id, level, category, element,
-             file, line, function, message, dropped_count
-      FROM pipeline_logs
-      WHERE route_id = ?
-        AND ts >= CAST(? AS TIMESTAMP)
-        AND ts <= CAST(? AS TIMESTAMP)
-        #{level_clause}
-        #{category_clause}
-      ORDER BY ts DESC
-      LIMIT ?
-      OFFSET ?
-      """
-
-      count_sql = """
-      SELECT COUNT(*) AS total
-      FROM pipeline_logs
-      WHERE route_id = ?
-        AND ts >= CAST(? AS TIMESTAMP)
-        AND ts <= CAST(? AS TIMESTAMP)
-        #{level_clause}
-        #{category_clause}
-      """
-
-      query_params = base_params ++ level_params ++ category_params ++ [limit, offset]
-      count_params = base_params ++ level_params ++ category_params
-
-      with {:ok, rows_result} <- Adbc.Connection.query(conn, sql, query_params),
-           {:ok, count_result} <- Adbc.Connection.query(conn, count_sql, count_params) do
-        rows = rows_result |> Adbc.Result.to_map() |> pipeline_log_rows_from_columns()
-
-        total =
-          count_result
-          |> Adbc.Result.to_map()
-          |> Map.get("total", [0])
-          |> List.first(0)
-          |> case do
-            value when is_integer(value) -> value
-            value when is_float(value) -> trunc(value)
-            _ -> 0
-          end
-
+      with {:ok, %{logs: rows, total: total}} <-
+             client.query_route_logs(route_id, %{
+               from: range.from,
+               to: range.to,
+               limit: limit,
+               offset: offset,
+               levels: level_filters,
+               categories: category_filters
+             }) do
         {:ok,
          %{
            logs: rows,
@@ -338,13 +196,13 @@ defmodule HydraSrt.Stats.Analytics do
     end
   end
 
-  @spec fetch_routes_status_timeseries(query_params(), GenServer.server()) ::
+  @spec fetch_routes_status_timeseries(query_params(), module()) ::
           {:ok, map()} | {:error, term()}
-  def fetch_routes_status_timeseries(query_params, conn \\ HydraSrt.AnalyticsConn)
+  def fetch_routes_status_timeseries(query_params, client \\ VictoriaMetrics)
       when is_map(query_params) do
     with {:ok, routes} <- Db.get_all_routes(false),
-         {:ok, seed_rows} <- fetch_route_status_seed_rows(query_params, conn),
-         {:ok, event_rows} <- fetch_route_status_event_rows(query_params, conn) do
+         {:ok, seed_rows} <- fetch_route_status_seed_rows(query_params, client),
+         {:ok, event_rows} <- fetch_route_status_event_rows(query_params, client) do
       route_statuses = initial_route_statuses(routes, seed_rows)
       allowed_route_ids = MapSet.new(routes, & &1["id"])
 
@@ -371,61 +229,27 @@ defmodule HydraSrt.Stats.Analytics do
     end
   end
 
-  @spec fetch_routes_status_history(query_params(), map(), GenServer.server()) ::
+  @spec fetch_routes_status_history(query_params(), map(), module()) ::
           {:ok, map()} | {:error, term()}
-  def fetch_routes_status_history(query_params, params, conn \\ HydraSrt.AnalyticsConn)
+  def fetch_routes_status_history(query_params, params, client \\ VictoriaMetrics)
       when is_map(query_params) and is_map(params) do
     limit = parse_limit_param(Map.get(params, "limit"), @default_history_limit)
     offset = parse_int_param(Map.get(params, "offset"), 0)
     route_id_filter = Map.get(params, "route_id")
     status_filter = Map.get(params, "status")
-
-    sql = """
-    SELECT ts, route_id, details_json
-    FROM events
-    WHERE event_type = 'route_status_change'
-      AND ts >= CAST(? AS TIMESTAMP)
-      AND ts <= CAST(? AS TIMESTAMP)
-      AND (? IS NULL OR route_id = ?)
-      AND (? IS NULL OR json_extract_string(details_json, '$.new_status') = ?)
-    ORDER BY ts DESC
-    LIMIT ?
-    OFFSET ?
-    """
-
-    query_args = [
-      DateTime.to_iso8601(query_params.from),
-      DateTime.to_iso8601(query_params.to),
-      route_id_filter,
-      route_id_filter,
-      status_filter,
-      status_filter,
-      limit,
-      offset
-    ]
-
-    count_sql = """
-    SELECT COUNT(*) AS total
-    FROM events
-    WHERE event_type = 'route_status_change'
-      AND ts >= CAST(? AS TIMESTAMP)
-      AND ts <= CAST(? AS TIMESTAMP)
-      AND (? IS NULL OR route_id = ?)
-      AND (? IS NULL OR json_extract_string(details_json, '$.new_status') = ?)
-    """
-
-    count_args = [
-      DateTime.to_iso8601(query_params.from),
-      DateTime.to_iso8601(query_params.to),
-      route_id_filter,
-      route_id_filter,
-      status_filter,
-      status_filter
-    ]
+    # Push a concrete route filter into the export matcher so VictoriaMetrics
+    # returns only that route's status changes instead of every route's.
+    route_matcher = if is_binary(route_id_filter), do: route_id_filter, else: nil
 
     with {:ok, routes} <- Db.get_all_routes(false),
-         {:ok, rows_result} <- Adbc.Connection.query(conn, sql, query_args),
-         {:ok, total_result} <- Adbc.Connection.query(conn, count_sql, count_args) do
+         {:ok, raw_rows} <-
+           fetch_events_by_type(
+             route_matcher,
+             "route_status_change",
+             query_params.from,
+             query_params.to,
+             client
+           ) do
       route_name_by_id =
         Enum.reduce(routes, %{}, fn route, acc ->
           route_id = route["id"]
@@ -438,10 +262,19 @@ defmodule HydraSrt.Stats.Analytics do
           end
         end)
 
-      rows = rows_result |> Adbc.Result.to_map() |> route_status_history_rows_from_columns()
+      rows =
+        raw_rows
+        |> Enum.filter(fn row ->
+          (is_nil(route_id_filter) or row["route_id"] == route_id_filter) and
+            (is_nil(status_filter) or row["new_status"] == status_filter)
+        end)
+        |> Enum.sort_by(& &1["ts"], :desc)
 
       events =
-        Enum.map(rows, fn row ->
+        rows
+        |> Enum.drop(offset)
+        |> Enum.take(limit)
+        |> Enum.map(fn row ->
           route_id = row["route_id"]
 
           %{
@@ -452,17 +285,6 @@ defmodule HydraSrt.Stats.Analytics do
             "new_status" => row["new_status"]
           }
         end)
-
-      total =
-        total_result
-        |> Adbc.Result.to_map()
-        |> Map.get("total", [0])
-        |> List.first(0)
-        |> case do
-          value when is_integer(value) -> value
-          value when is_float(value) -> trunc(value)
-          _ -> 0
-        end
 
       {:ok,
        %{
@@ -475,7 +297,7 @@ defmodule HydraSrt.Stats.Analytics do
            offset: offset,
            route_id: route_id_filter,
            status: status_filter,
-           total: total
+           total: length(rows)
          }
        }}
     end
@@ -582,29 +404,6 @@ defmodule HydraSrt.Stats.Analytics do
 
   defp parse_max_points(_value, default), do: default
 
-  @spec rows_from_columns(map()) :: [map()]
-  def rows_from_columns(columns) when is_map(columns) do
-    length =
-      columns
-      |> Map.values()
-      |> List.first([])
-      |> Kernel.length()
-
-    if length == 0 do
-      []
-    else
-      Enum.map(0..(length - 1), fn index ->
-        %{
-          bucket_ts: value_at(columns, "bucket_ts", index),
-          entity_type: value_at(columns, "entity_type", index),
-          entity_id: value_at(columns, "entity_id", index),
-          metric_value: value_at(columns, "metric_value", index)
-        }
-      end)
-      |> Enum.reject(&is_nil(&1.bucket_ts))
-    end
-  end
-
   @spec value_at(map(), binary(), integer()) :: term()
   def value_at(columns, key, index)
       when is_map(columns) and is_binary(key) and is_integer(index) do
@@ -661,30 +460,229 @@ defmodule HydraSrt.Stats.Analytics do
   def number_or_nil(value) when is_float(value), do: value
   def number_or_nil(_value), do: nil
 
-  @spec fetch_route_switches(binary(), query_params(), GenServer.server()) :: [map()]
-  def fetch_route_switches(route_id, query_params, conn)
+  @spec analytics_meta(query_params()) :: map()
+  def analytics_meta(query_params) when is_map(query_params) do
+    %{
+      from: DateTime.to_iso8601(query_params.from),
+      to: DateTime.to_iso8601(query_params.to),
+      window: query_params.window,
+      bucket_ms: query_params.bucket_ms
+    }
+  end
+
+  @spec fetch_stats_rows(module(), map(), [binary()], query_params()) ::
+          {:ok, [map()]} | {:error, term()}
+  def fetch_stats_rows(client, labels, metric_keys, query_params)
+      when is_atom(client) and is_map(labels) and is_list(metric_keys) and is_map(query_params) do
+    bucket_seconds = max(div(query_params.bucket_ms, 1_000), 1)
+    selector = stats_selector(labels, metric_keys)
+    query = "avg_over_time(#{selector}[#{bucket_seconds}s])"
+
+    case client.query_range(query, query_params.from, query_params.to, bucket_seconds) do
+      {:ok, series} -> {:ok, stats_rows_from_series(series)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec stats_selector(map(), [binary()]) :: binary()
+  def stats_selector(labels, metric_keys) when is_map(labels) and is_list(metric_keys) do
+    matchers =
+      labels
+      |> Enum.map(fn {key, value} -> "#{key}=#{VictoriaMetrics.inspect_label_value(value)}" end)
+      |> Kernel.++([metric_key_matcher(metric_keys)])
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(",")
+
+    "#{VictoriaMetrics.stats_metric()}{#{matchers}}"
+  end
+
+  @spec metric_key_matcher([binary()]) :: binary() | nil
+  def metric_key_matcher([]), do: nil
+  def metric_key_matcher([key]), do: "metric_key=#{VictoriaMetrics.inspect_label_value(key)}"
+
+  def metric_key_matcher(keys) when is_list(keys) do
+    escaped = keys |> Enum.map(&Regex.escape/1) |> Enum.join("|")
+    "metric_key=~#{VictoriaMetrics.inspect_label_value(escaped)}"
+  end
+
+  @spec stats_rows_from_series([map()]) :: [map()]
+  def stats_rows_from_series(series) when is_list(series) do
+    Enum.flat_map(series, fn %{"metric" => labels, "values" => values} ->
+      Enum.map(values || [], fn [unix_ts, value] ->
+        %{
+          bucket_ts: unix_to_datetime(unix_ts),
+          entity_type: Map.get(labels, "entity_type"),
+          entity_id: Map.get(labels, "entity_id"),
+          metric_key: Map.get(labels, "metric_key"),
+          metric_value: parse_float(value)
+        }
+      end)
+    end)
+  end
+
+  @spec unix_to_datetime(number()) :: DateTime.t()
+  def unix_to_datetime(value) when is_integer(value), do: DateTime.from_unix!(value, :second)
+  def unix_to_datetime(value) when is_float(value), do: DateTime.from_unix!(trunc(value), :second)
+
+  @spec parse_float(term()) :: float() | nil
+  def parse_float(value) when is_float(value), do: value
+  def parse_float(value) when is_integer(value), do: value * 1.0
+
+  def parse_float(value) when is_binary(value) do
+    case Float.parse(value) do
+      {parsed, _rest} -> parsed
+      :error -> nil
+    end
+  end
+
+  def parse_float(_value), do: nil
+
+  @spec fetch_events_result(binary() | nil, DateTime.t(), DateTime.t(), module()) ::
+          {:ok, [map()]} | {:error, term()}
+  def fetch_events_result(route_id, from, to, client \\ VictoriaMetrics) do
+    fetch_events_with_labels(event_labels(route_id), from, to, client)
+  end
+
+  # Exports events for a specific set of route ids in a single HTTP call using a
+  # regex-alternation matcher (route_id=~"^(id1|id2|...)$"). Callers with a small,
+  # bounded route set use this to avoid exporting every route's events.
+  @spec fetch_events_for_route_ids([binary()], DateTime.t(), DateTime.t(), module()) ::
+          {:ok, [map()]} | {:error, term()}
+  def fetch_events_for_route_ids(route_ids, from, to, client \\ VictoriaMetrics)
+      when is_list(route_ids) do
+    match_expr = VictoriaMetrics.event_selector_for_route_ids(route_ids)
+
+    case client.export_series(match_expr, from, to) do
+      {:ok, series} -> {:ok, event_rows_from_export(series)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Legacy wrapper: returns [] on backend errors. Callers that need to
+  # distinguish "no events" from "backend down" should use fetch_events_result/4.
+  @spec fetch_events(binary() | nil, DateTime.t(), DateTime.t(), module()) :: [map()]
+  def fetch_events(route_id, from, to, client \\ VictoriaMetrics) do
+    case fetch_events_result(route_id, from, to, client) do
+      {:ok, events} -> events
+      {:error, _reason} -> []
+    end
+  end
+
+  # Returns {:ok, events} | {:error, reason}. Callers that feed Dashboard
+  # availability (status seed/event rows, status history) must propagate the
+  # error so a backend outage cannot masquerade as an empty result. Callers that
+  # only decorate an already-guarded payload (route timeseries switches/initial
+  # source) may collapse errors to their empty value locally.
+  @spec fetch_events_by_type(binary() | nil, binary(), DateTime.t(), DateTime.t(), module()) ::
+          {:ok, [map()]} | {:error, term()}
+  defp fetch_events_by_type(route_id, event_type, from, to, client) do
+    labels = route_id |> event_labels() |> Map.put("event_type", event_type)
+    fetch_events_with_labels(labels, from, to, client)
+  end
+
+  defp fetch_events_with_labels(labels, from, to, client) when is_map(labels) do
+    match_expr = VictoriaMetrics.selector(VictoriaMetrics.event_metric(), labels)
+
+    case client.export_series(match_expr, from, to) do
+      {:ok, series} -> {:ok, event_rows_from_export(series)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp event_labels(nil), do: %{}
+  defp event_labels(route_id), do: %{"route_id" => route_id}
+
+  @spec event_rows_from_export([map()]) :: [map()]
+  def event_rows_from_export(series) when is_list(series) do
+    Enum.flat_map(series, fn %{"metric" => labels, "timestamps" => timestamps} ->
+      Enum.map(timestamps || [], fn ts_ms ->
+        event_row_from_labels(labels, normalize_export_ts_ms(ts_ms))
+      end)
+    end)
+  end
+
+  @spec normalize_export_ts_ms(term()) :: integer()
+  def normalize_export_ts_ms(value) when is_integer(value), do: value
+  def normalize_export_ts_ms(value) when is_float(value), do: trunc(value)
+
+  def normalize_export_ts_ms(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, _rest} -> parsed
+      :error -> DateTime.utc_now() |> DateTime.to_unix(:millisecond)
+    end
+  end
+
+  def normalize_export_ts_ms(_value), do: DateTime.utc_now() |> DateTime.to_unix(:millisecond)
+
+  @spec event_row_from_labels(map(), integer()) :: map()
+  def event_row_from_labels(labels, ts_ms) when is_map(labels) do
+    old_status = empty_to_nil(Map.get(labels, "old_status"))
+    new_status = empty_to_nil(Map.get(labels, "new_status"))
+
+    # Prefer the full details_json label written on the event path. Fall back to
+    # reconstructing it from old_status/new_status for events stored before the
+    # details_json label existed.
+    details_json =
+      empty_to_nil(Map.get(labels, "details_json")) ||
+        status_details_json(old_status, new_status)
+
+    %{
+      "ts" => ms_to_iso8601(ts_ms),
+      "route_id" => empty_to_nil(Map.get(labels, "route_id")),
+      "event_type" => empty_to_nil(Map.get(labels, "event_type")) || "unknown",
+      "severity" => empty_to_nil(Map.get(labels, "severity")) || "info",
+      "source_id" => empty_to_nil(Map.get(labels, "source_id")),
+      "from_source_id" => empty_to_nil(Map.get(labels, "from_source_id")),
+      "to_source_id" => empty_to_nil(Map.get(labels, "to_source_id")),
+      "reason" => empty_to_nil(Map.get(labels, "reason")),
+      "message" => empty_to_nil(Map.get(labels, "message")),
+      "details_json" => details_json,
+      "old_status" => old_status,
+      "new_status" => new_status
+    }
+  end
+
+  @spec status_details_json(binary() | nil, binary() | nil) :: binary() | nil
+  def status_details_json(old_status, new_status)
+      when is_binary(old_status) or is_binary(new_status) do
+    Jason.encode!(%{"old_status" => old_status, "new_status" => new_status})
+  end
+
+  def status_details_json(_old_status, _new_status), do: nil
+
+  @spec empty_to_nil(term()) :: term() | nil
+  def empty_to_nil(""), do: nil
+  def empty_to_nil(value), do: value
+
+  @spec filter_event_type([map()], binary() | nil) :: [map()]
+  def filter_event_type(rows, nil), do: rows
+  def filter_event_type(rows, ""), do: rows
+
+  def filter_event_type(rows, type_filter) when is_list(rows) and is_binary(type_filter) do
+    Enum.filter(rows, &(&1["event_type"] == type_filter))
+  end
+
+  @spec fetch_route_switches(binary(), query_params(), module()) :: [map()]
+  def fetch_route_switches(route_id, query_params, client)
       when is_binary(route_id) and is_map(query_params) do
-    sql = """
-    SELECT ts, from_source_id, to_source_id, reason
-    FROM events
-    WHERE route_id = ?
-      AND event_type = 'source_switch'
-      AND ts >= CAST(? AS TIMESTAMP)
-      AND ts <= CAST(? AS TIMESTAMP)
-    ORDER BY ts ASC
-    """
-
-    params = [
-      route_id,
-      DateTime.to_iso8601(query_params.from),
-      DateTime.to_iso8601(query_params.to)
-    ]
-
-    case Adbc.Connection.query(conn, sql, params) do
-      {:ok, result} ->
-        result
-        |> Adbc.Result.to_map()
-        |> switch_rows_from_columns()
+    case fetch_events_by_type(
+           route_id,
+           "source_switch",
+           query_params.from,
+           query_params.to,
+           client
+         ) do
+      {:ok, events} ->
+        events
+        |> Enum.map(fn row ->
+          %{
+            "ts" => row["ts"],
+            "from_source_id" => row["from_source_id"],
+            "to_source_id" => row["to_source_id"],
+            "reason" => row["reason"]
+          }
+        end)
+        |> Enum.sort_by(& &1["ts"])
 
       {:error, _reason} ->
         []
@@ -766,109 +764,22 @@ defmodule HydraSrt.Stats.Analytics do
     |> Enum.reject(fn segment -> is_nil(segment["source_id"]) end)
   end
 
-  defp fetch_last_source_before_window(route_id, query_params, conn) do
-    sql = """
-    SELECT to_source_id
-    FROM events
-    WHERE route_id = ?
-      AND event_type = 'source_switch'
-      AND ts < CAST(? AS TIMESTAMP)
-    ORDER BY ts DESC
-    LIMIT 1
-    """
-
-    params = [route_id, DateTime.to_iso8601(query_params.from)]
-
-    case Adbc.Connection.query(conn, sql, params) do
-      {:ok, result} ->
-        result
-        |> Adbc.Result.to_map()
-        |> Map.get("to_source_id", [])
-        |> List.first()
+  defp fetch_last_source_before_window(route_id, query_params, client) do
+    case fetch_events_by_type(
+           route_id,
+           "source_switch",
+           seed_start_before(query_params.from),
+           query_params.from,
+           client
+         ) do
+      {:ok, events} ->
+        events
+        |> Enum.sort_by(& &1["ts"], :desc)
+        |> List.first(%{})
+        |> Map.get("to_source_id")
 
       {:error, _reason} ->
         nil
-    end
-  end
-
-  defp event_rows_from_columns(columns) when is_map(columns) do
-    length =
-      columns
-      |> Map.values()
-      |> List.first([])
-      |> Kernel.length()
-
-    if length == 0 do
-      []
-    else
-      Enum.map(0..(length - 1), fn index ->
-        %{
-          "ts" => normalize_timestamp(value_at(columns, "ts", index)),
-          "route_id" => value_at(columns, "route_id", index),
-          "event_type" => value_at(columns, "event_type", index),
-          "severity" => value_at(columns, "severity", index),
-          "source_id" => value_at(columns, "source_id", index),
-          "from_source_id" => value_at(columns, "from_source_id", index),
-          "to_source_id" => value_at(columns, "to_source_id", index),
-          "reason" => value_at(columns, "reason", index),
-          "message" => value_at(columns, "message", index),
-          "details_json" => value_at(columns, "details_json", index)
-        }
-      end)
-      |> Enum.reject(&is_nil(&1["ts"]))
-    end
-  end
-
-  defp pipeline_log_rows_from_columns(columns) when is_map(columns) do
-    length =
-      columns
-      |> Map.values()
-      |> List.first([])
-      |> Kernel.length()
-
-    if length == 0 do
-      []
-    else
-      Enum.map(0..(length - 1), fn index ->
-        %{
-          "ts" => normalize_timestamp(value_at(columns, "ts", index)),
-          "route_id" => value_at(columns, "route_id", index),
-          "gst_ts" => value_at(columns, "gst_ts", index),
-          "pid" => value_at(columns, "pid", index),
-          "thread_id" => value_at(columns, "thread_id", index),
-          "level" => value_at(columns, "level", index),
-          "category" => value_at(columns, "category", index),
-          "element" => value_at(columns, "element", index),
-          "file" => value_at(columns, "file", index),
-          "line" => value_at(columns, "line", index),
-          "function" => value_at(columns, "function", index),
-          "message" => value_at(columns, "message", index),
-          "dropped_count" => value_at(columns, "dropped_count", index)
-        }
-      end)
-      |> Enum.reject(&is_nil(&1["ts"]))
-    end
-  end
-
-  defp switch_rows_from_columns(columns) when is_map(columns) do
-    length =
-      columns
-      |> Map.values()
-      |> List.first([])
-      |> Kernel.length()
-
-    if length == 0 do
-      []
-    else
-      Enum.map(0..(length - 1), fn index ->
-        %{
-          "ts" => normalize_timestamp(value_at(columns, "ts", index)),
-          "from_source_id" => value_at(columns, "from_source_id", index),
-          "to_source_id" => value_at(columns, "to_source_id", index),
-          "reason" => value_at(columns, "reason", index)
-        }
-      end)
-      |> Enum.reject(&is_nil(&1["ts"]))
     end
   end
 
@@ -910,122 +821,80 @@ defmodule HydraSrt.Stats.Analytics do
     |> Enum.reject(&(&1 == ""))
   end
 
-  defp build_in_clause(_column, []), do: {"", []}
+  defp fetch_route_status_seed_rows(query_params, client) do
+    case fetch_events_by_type(
+           nil,
+           "route_status_change",
+           seed_start_before(query_params.from),
+           query_params.from,
+           client
+         ) do
+      {:ok, events} ->
+        rows =
+          events
+          |> Enum.reject(&is_nil(&1["new_status"]))
+          |> Enum.group_by(& &1["route_id"])
+          |> Enum.map(fn {_route_id, grouped_events} ->
+            grouped_events
+            |> Enum.sort_by(& &1["ts"], :desc)
+            |> List.first()
+            |> route_status_row_from_event()
+          end)
+          |> Enum.reject(&is_nil/1)
 
-  defp build_in_clause(column, values) when is_list(values) and length(values) > 0 do
-    placeholders = Enum.map_join(values, ", ", fn _ -> "?" end)
-    {"AND #{column} IN (#{placeholders})", values}
-  end
-
-  defp fetch_route_status_seed_rows(query_params, conn) do
-    sql = """
-    WITH ranked AS (
-      SELECT
-        route_id,
-        ts,
-        details_json,
-        ROW_NUMBER() OVER (PARTITION BY route_id ORDER BY ts DESC) AS rn
-      FROM events
-      WHERE event_type = 'route_status_change'
-        AND ts < CAST(? AS TIMESTAMP)
-    )
-    SELECT route_id, ts, details_json
-    FROM ranked
-    WHERE rn = 1
-    ORDER BY route_id ASC
-    """
-
-    params = [DateTime.to_iso8601(query_params.from)]
-
-    case Adbc.Connection.query(conn, sql, params) do
-      {:ok, result} ->
-        {:ok,
-         route_status_rows_from_columns(
-           Adbc.Result.to_map(result),
-           &extract_new_status_from_details/1
-         )}
+        {:ok, rows}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp fetch_route_status_event_rows(query_params, conn) do
-    sql = """
-    SELECT route_id, ts, details_json
-    FROM events
-    WHERE event_type = 'route_status_change'
-      AND ts >= CAST(? AS TIMESTAMP)
-      AND ts <= CAST(? AS TIMESTAMP)
-    ORDER BY ts ASC, route_id ASC
-    """
+  defp seed_start_before(%DateTime{} = window_start) do
+    retention_start =
+      DateTime.utc_now()
+      |> DateTime.add(-analytics_retention_seconds(), :second)
 
-    params = [
-      DateTime.to_iso8601(query_params.from),
-      DateTime.to_iso8601(query_params.to)
-    ]
+    case DateTime.compare(retention_start, window_start) do
+      :lt -> retention_start
+      _ -> window_start
+    end
+  end
 
-    case Adbc.Connection.query(conn, sql, params) do
-      {:ok, result} ->
-        {:ok,
-         route_status_rows_from_columns(
-           Adbc.Result.to_map(result),
-           &extract_new_status_from_details/1
-         )}
+  defp analytics_retention_seconds do
+    Application.get_env(:hydra_srt, :analytics_retention_seconds, 3 * 24 * 60 * 60)
+  end
+
+  defp fetch_route_status_event_rows(query_params, client) do
+    case fetch_events_by_type(
+           nil,
+           "route_status_change",
+           query_params.from,
+           query_params.to,
+           client
+         ) do
+      {:ok, events} ->
+        rows =
+          events
+          |> Enum.map(&route_status_row_from_event/1)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.sort_by(fn row -> {row["ts_ms"], row["route_id"]} end)
+
+        {:ok, rows}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp route_status_rows_from_columns(columns, status_parser)
-       when is_map(columns) and is_function(status_parser, 1) do
-    length =
-      columns
-      |> Map.values()
-      |> List.first([])
-      |> Kernel.length()
+  defp route_status_row_from_event(nil), do: nil
 
-    if length == 0 do
-      []
-    else
-      Enum.map(0..(length - 1), fn index ->
-        %{
-          "route_id" => value_at(columns, "route_id", index),
-          "ts_ms" => value_at(columns, "ts", index) |> timestamp_to_ms(),
-          "status" => value_at(columns, "details_json", index) |> status_parser.()
-        }
-      end)
-      |> Enum.reject(fn row ->
-        is_nil(row["route_id"]) or is_nil(row["ts_ms"]) or is_nil(row["status"])
-      end)
-    end
-  end
+  defp route_status_row_from_event(event) when is_map(event) do
+    route_id = event["route_id"]
+    ts_ms = timestamp_to_ms(event["ts"])
+    status = event["new_status"] || extract_new_status_from_details(event["details_json"])
 
-  defp route_status_history_rows_from_columns(columns) when is_map(columns) do
-    length =
-      columns
-      |> Map.values()
-      |> List.first([])
-      |> Kernel.length()
-
-    if length == 0 do
-      []
-    else
-      Enum.map(0..(length - 1), fn index ->
-        details = value_at(columns, "details_json", index)
-        {old_status, new_status} = extract_status_transition_from_details(details)
-
-        %{
-          "ts" => normalize_timestamp(value_at(columns, "ts", index)),
-          "route_id" => value_at(columns, "route_id", index),
-          "old_status" => old_status,
-          "new_status" => new_status
-        }
-      end)
-      |> Enum.reject(fn row ->
-        is_nil(row["ts"]) or is_nil(row["route_id"]) or is_nil(row["new_status"])
-      end)
+    if is_binary(route_id) and is_integer(ts_ms) and is_binary(status) do
+      %{"route_id" => route_id, "ts_ms" => ts_ms, "status" => status}
     end
   end
 
@@ -1172,19 +1041,6 @@ defmodule HydraSrt.Stats.Analytics do
 
   defp extract_new_status_from_details(_value), do: nil
 
-  defp extract_status_transition_from_details(details_json) when is_binary(details_json) do
-    case Jason.decode(details_json) do
-      {:ok, %{"old_status" => old_status, "new_status" => new_status}}
-      when is_binary(old_status) and is_binary(new_status) ->
-        {old_status, new_status}
-
-      _ ->
-        {nil, nil}
-    end
-  end
-
-  defp extract_status_transition_from_details(_value), do: {nil, nil}
-
   defp timestamp_to_ms(%DateTime{} = value), do: DateTime.to_unix(value, :millisecond)
 
   defp timestamp_to_ms(%NaiveDateTime{} = value) do
@@ -1229,154 +1085,53 @@ defmodule HydraSrt.Stats.Analytics do
 
   defp normalize_route_status(_status), do: "other"
 
-  defp fetch_route_events_total(route_id, range, type_filter, conn) do
-    sql = """
-    SELECT COUNT(*) AS total
-    FROM events
-    WHERE route_id = ?
-      AND ts >= CAST(? AS TIMESTAMP)
-      AND ts <= CAST(? AS TIMESTAMP)
-      AND (? IS NULL OR event_type = ?)
-    """
-
-    params = [
-      route_id,
-      DateTime.to_iso8601(range.from),
-      DateTime.to_iso8601(range.to),
-      type_filter,
-      type_filter
-    ]
-
-    case Adbc.Connection.query(conn, sql, params) do
-      {:ok, result} ->
-        result
-        |> Adbc.Result.to_map()
-        |> Map.get("total", [0])
-        |> List.first(0)
-        |> case do
-          value when is_integer(value) -> value
-          value when is_float(value) -> trunc(value)
-          _ -> 0
-        end
-
-      {:error, _reason} ->
-        0
-    end
-  end
-
-  defp fetch_route_srt_quality(route_id, query_params, conn) do
-    sql = """
-    WITH sampled AS (
-      SELECT
-        to_timestamp(FLOOR(epoch_ms(ts)::DOUBLE / ?) * ? / 1000.0) AS bucket_ts,
-        entity_id AS source_id,
-        metric_key,
-        avg(value_double) AS metric_value
-      FROM stats_samples
-      WHERE route_id = ?
-        AND entity_type = 'source'
-        AND metric_key IN ('srt_packet_loss', 'srt_rtt_ms')
-        AND ts >= CAST(? AS TIMESTAMP)
-        AND ts <= CAST(? AS TIMESTAMP)
-      GROUP BY 1, 2, 3
-    )
-    SELECT bucket_ts, source_id, metric_key, metric_value
-    FROM sampled
-    ORDER BY bucket_ts ASC, source_id ASC, metric_key ASC
-    """
-
-    params = [
-      query_params.bucket_ms,
-      query_params.bucket_ms,
-      route_id,
-      DateTime.to_iso8601(query_params.from),
-      DateTime.to_iso8601(query_params.to)
-    ]
-
-    case Adbc.Connection.query(conn, sql, params) do
-      {:ok, result} ->
-        quality_rows_from_columns(Adbc.Result.to_map(result))
+  defp fetch_route_srt_quality(route_id, query_params, client) do
+    case fetch_stats_rows(
+           client,
+           %{"route_id" => route_id, "entity_type" => "source"},
+           ["srt_packet_loss", "srt_rtt_ms"],
+           query_params
+         ) do
+      {:ok, rows} ->
+        rows
+        |> Enum.map(fn row ->
+          %{
+            "timestamp" => normalize_timestamp(row.bucket_ts),
+            "source_id" => row.entity_id,
+            "metric_key" => row.metric_key,
+            "value" => number_or_nil(row.metric_value)
+          }
+        end)
+        |> Enum.reject(fn row ->
+          is_nil(row["timestamp"]) or is_nil(row["source_id"]) or is_nil(row["metric_key"])
+        end)
 
       {:error, _reason} ->
         []
     end
   end
 
-  def fetch_route_srt_health(route_id, query_params, conn) do
-    sql = """
-    WITH sampled AS (
-      SELECT
-        to_timestamp(FLOOR(epoch_ms(ts)::DOUBLE / ?) * ? / 1000.0) AS bucket_ts,
-        entity_type,
-        entity_id,
-        metric_key,
-        avg(value_double) AS metric_value
-      FROM stats_samples
-      WHERE route_id = ?
-        AND entity_type IN ('source', 'destination')
-        AND metric_key IN (
-          'srt_rtt_ms',
-          'srt_negotiated_latency_ms',
-          'srt_bandwidth_mbps',
-          'srt_rate_mbps',
-          'srt_packet_loss',
-          'srt_packet_loss_percent',
-          'srt_retransmitted_packets_per_sec',
-          'srt_dropped_packets_per_sec',
-          'srt_nack_packets_per_sec'
-        )
-        AND ts >= CAST(? AS TIMESTAMP)
-        AND ts <= CAST(? AS TIMESTAMP)
-      GROUP BY 1, 2, 3, 4
-    )
-    SELECT bucket_ts, entity_type, entity_id, metric_key, metric_value
-    FROM sampled
-    ORDER BY bucket_ts ASC, entity_type ASC, entity_id ASC, metric_key ASC
-    """
+  def fetch_route_srt_health(route_id, query_params, client \\ VictoriaMetrics) do
+    metric_keys =
+      ~w(srt_rtt_ms srt_negotiated_latency_ms srt_bandwidth_mbps srt_rate_mbps srt_packet_loss srt_packet_loss_percent srt_retransmitted_packets_per_sec srt_dropped_packets_per_sec srt_nack_packets_per_sec)
 
-    params = [
-      query_params.bucket_ms,
-      query_params.bucket_ms,
-      route_id,
-      DateTime.to_iso8601(query_params.from),
-      DateTime.to_iso8601(query_params.to)
-    ]
-
-    case Adbc.Connection.query(conn, sql, params) do
-      {:ok, result} ->
-        result
-        |> Adbc.Result.to_map()
-        |> srt_health_rows_from_columns()
+    case fetch_stats_rows(client, %{"route_id" => route_id}, metric_keys, query_params) do
+      {:ok, rows} ->
+        rows
+        |> Enum.filter(&(&1.entity_type in ["source", "destination"]))
+        |> Enum.map(fn row ->
+          %{
+            timestamp: normalize_timestamp(row.bucket_ts),
+            entity_type: row.entity_type,
+            entity_id: row.entity_id,
+            metric_key: row.metric_key,
+            value: number_or_nil(row.metric_value)
+          }
+        end)
         |> srt_health_points_from_rows()
 
       {:error, _reason} ->
         []
-    end
-  end
-
-  def srt_health_rows_from_columns(columns) when is_map(columns) do
-    length =
-      columns
-      |> Map.values()
-      |> List.first([])
-      |> Kernel.length()
-
-    if length == 0 do
-      []
-    else
-      Enum.map(0..(length - 1), fn index ->
-        %{
-          timestamp: normalize_timestamp(value_at(columns, "bucket_ts", index)),
-          entity_type: value_at(columns, "entity_type", index),
-          entity_id: value_at(columns, "entity_id", index),
-          metric_key: value_at(columns, "metric_key", index),
-          value: number_or_nil(value_at(columns, "metric_value", index))
-        }
-      end)
-      |> Enum.reject(fn row ->
-        is_nil(row.timestamp) or is_nil(row.entity_type) or is_nil(row.entity_id) or
-          is_nil(row.metric_key)
-      end)
     end
   end
 
@@ -1402,53 +1157,6 @@ defmodule HydraSrt.Stats.Analytics do
     end)
     |> Map.values()
     |> Enum.sort_by(fn point -> {point.timestamp, point.entity_type, point.entity_id} end)
-  end
-
-  defp quality_rows_from_columns(columns) when is_map(columns) do
-    length =
-      columns
-      |> Map.values()
-      |> List.first([])
-      |> Kernel.length()
-
-    if length == 0 do
-      []
-    else
-      Enum.map(0..(length - 1), fn index ->
-        %{
-          "timestamp" => normalize_timestamp(value_at(columns, "bucket_ts", index)),
-          "source_id" => value_at(columns, "source_id", index),
-          "metric_key" => value_at(columns, "metric_key", index),
-          "value" => number_or_nil(value_at(columns, "metric_value", index))
-        }
-      end)
-      |> Enum.reject(fn row ->
-        is_nil(row["timestamp"]) or is_nil(row["source_id"]) or is_nil(row["metric_key"])
-      end)
-    end
-  end
-
-  defp node_rows_from_columns(columns) when is_map(columns) do
-    length =
-      columns
-      |> Map.values()
-      |> List.first([])
-      |> Kernel.length()
-
-    if length == 0 do
-      []
-    else
-      Enum.map(0..(length - 1), fn index ->
-        %{
-          bucket_ts: value_at(columns, "bucket_ts", index),
-          entity_type: value_at(columns, "entity_type", index),
-          entity_id: value_at(columns, "entity_id", index),
-          metric_key: value_at(columns, "metric_key", index),
-          metric_value: value_at(columns, "metric_value", index)
-        }
-      end)
-      |> Enum.reject(&is_nil(&1.bucket_ts))
-    end
   end
 
   defp node_points_from_rows(rows) when is_list(rows) do
@@ -1631,7 +1339,7 @@ defmodule HydraSrt.Stats.Analytics do
   end
 
   def default_storage_anchor_paths do
-    expand_anchor_paths([OsMon.repo_database_path(), OsMon.analytics_database_path()])
+    expand_anchor_paths([OsMon.repo_database_path()])
   end
 
   def expand_anchor_paths(paths) when is_list(paths) do
@@ -1661,7 +1369,6 @@ defmodule HydraSrt.Stats.Analytics do
   def database_name(_entity_id), do: nil
 
   def database_display_name("metadata_database"), do: "Metadata Database"
-  def database_display_name("metrics_logs_database"), do: "Metrics and Logs Database"
   def database_display_name(database) when is_binary(database), do: database
 
   def path_within_mountpoint?(path, "/") when is_binary(path), do: String.starts_with?(path, "/")

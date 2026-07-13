@@ -1,7 +1,8 @@
 defmodule HydraSrt.DashboardTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias HydraSrt.Dashboard
+  alias HydraSrt.Stats.VictoriaMetrics
 
   test "route_summary uses runtime statuses and endpoint schemas" do
     routes = [
@@ -113,5 +114,74 @@ defmodule HydraSrt.DashboardTest do
              stopped: 0,
              other: 0
            } = Dashboard.route_status_counts(routes)
+  end
+
+  test "event_summary returns an available empty summary for no routes" do
+    assert %{available: true, last_failover_at: nil, failbacks_today: 0, latest_by_route: %{}} =
+             Dashboard.event_summary([])
+  end
+
+  describe "event_summary server-side narrowing" do
+    test "scopes the export to the requested routes with a regex matcher" do
+      test_pid = self()
+      :ok = :meck.new(HydraSrt.Stats.VictoriaMetrics, [:passthrough])
+
+      :meck.expect(HydraSrt.Stats.VictoriaMetrics, :export_series, fn match_expr, _from, _to ->
+        send(test_pid, {:match_expr, match_expr})
+        {:ok, []}
+      end)
+
+      try do
+        assert %{available: true} = Dashboard.event_summary(["route-1", "route-2"])
+
+        assert_received {:match_expr, match_expr}
+        assert match_expr == VictoriaMetrics.event_selector_for_route_ids(["route-1", "route-2"])
+      after
+        :meck.unload(HydraSrt.Stats.VictoriaMetrics)
+      end
+    end
+
+    test "chunks large route sets into regex-constrained exports" do
+      test_pid = self()
+      route_ids = Enum.map(1..51, &"route-#{&1}")
+      batch1_ids = Enum.map(1..50, &"route-#{&1}")
+      batch2_ids = ["route-51"]
+      :ok = :meck.new(HydraSrt.Stats.VictoriaMetrics, [:passthrough])
+
+      :meck.expect(HydraSrt.Stats.VictoriaMetrics, :export_series, fn match_expr, _from, _to ->
+        send(test_pid, {:match_expr, match_expr})
+        {:ok, []}
+      end)
+
+      try do
+        assert %{available: true} = Dashboard.event_summary(route_ids)
+
+        assert_received {:match_expr, batch1_expr}
+        assert_received {:match_expr, batch2_expr}
+        refute_received {:match_expr, _}
+
+        assert batch1_expr == VictoriaMetrics.event_selector_for_route_ids(batch1_ids)
+        assert batch2_expr == VictoriaMetrics.event_selector_for_route_ids(batch2_ids)
+        refute batch1_expr == "hydra_srt_route_event"
+        refute batch2_expr == "hydra_srt_route_event"
+      after
+        :meck.unload(HydraSrt.Stats.VictoriaMetrics)
+      end
+    end
+
+    test "propagates export errors from any chunked batch" do
+      route_ids = Enum.map(1..51, &"route-#{&1}")
+      :ok = :meck.new(HydraSrt.Stats.VictoriaMetrics, [:passthrough])
+
+      :meck.expect(HydraSrt.Stats.VictoriaMetrics, :export_series, fn _match_expr, _from, _to ->
+        {:error, :timeout}
+      end)
+
+      try do
+        assert %{available: false} = Dashboard.event_summary(route_ids)
+      after
+        :meck.unload(HydraSrt.Stats.VictoriaMetrics)
+      end
+    end
   end
 end

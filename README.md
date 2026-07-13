@@ -71,7 +71,8 @@ flowchart LR
   Control -->|spawns & monitors| Pipeline2[Rust Pipeline 2]
   Control -->|spawns & monitors| PipelineN[Rust Pipeline N]
   Control --> SQLite[(SQLite Config)]
-  Control --> DuckDB[(DuckDB Analytics)]
+  Control --> VictoriaMetrics[(VictoriaMetrics)]
+  Control --> VictoriaLogs[(VictoriaLogs)]
 ```
 
 **Management & Control (Elixir/OTP)**
@@ -132,7 +133,8 @@ Setup, deployment, and troubleshooting: [docs/development.md](docs/development.m
 - SRT authentication with passphrase and stream ID support
 - Source failover with primary + backup sources, automatic failover, and manual source switching
 - System metrics via Prometheus `/metrics`
-- Historical analytics and pipeline logs stored in DuckDB
+- Historical analytics and route events stored in VictoriaMetrics
+- Historical pipeline logs stored in VictoriaLogs
 - Real-time route status updates over WebSocket
 
 ## Documentation

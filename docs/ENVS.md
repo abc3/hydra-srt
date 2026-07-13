@@ -31,7 +31,6 @@ All environment variables recognised by Hydra SRT, grouped by purpose.
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `DATABASE_PATH` | **prod** (optional in dev) | `hydra_srt_dev.db` (dev) | Absolute path to the SQLite main database file. Example: `/etc/hydra_srt/hydra_srt.db`. |
-| `ANALYTICS_DATABASE_PATH` | **prod + dev** | `hydra_srt_analytics.duckdb` next to `config/` (dev) | Absolute path to the DuckDB analytics database file. Example: `/etc/hydra_srt/hydra_srt_analytics.duckdb`. |
 | `POOL_SIZE` | No | `5` | Ecto database connection pool size. |
 
 ---
@@ -42,8 +41,10 @@ All environment variables recognised by Hydra SRT, grouped by purpose.
 |---|---|---|---|
 | `METRICS_SECRET` | No | — | Bearer token required to access the `/metrics` endpoint. If unset, the endpoint is unauthenticated. |
 | `PROM_POLL_RATE` | No | `5000` | Interval in milliseconds between Prometheus metric polls. |
-| `SYSTEM_METRICS_HISTORY_ENABLED` | No | `true` | Enables background persistence of system telemetry samples to DuckDB. |
-| `SYSTEM_METRICS_HISTORY_INTERVAL_MS` | No | `5000` | Flush interval in milliseconds for writing buffered system telemetry rows to DuckDB. |
+| `VICTORIA_METRICS_URL` | No | `http://127.0.0.1:8428` | VictoriaMetrics base URL for historical metrics and route events. |
+| `VICTORIA_LOGS_URL` | No | `http://127.0.0.1:9428` | VictoriaLogs base URL for historical pipeline logs. |
+| `SYSTEM_METRICS_HISTORY_ENABLED` | No | `true` | Enables background persistence of system telemetry samples to VictoriaMetrics. |
+| `SYSTEM_METRICS_HISTORY_INTERVAL_MS` | No | `5000` | Flush interval in milliseconds for writing buffered system telemetry rows to VictoriaMetrics. |
 | `HYDRA_DEFAULT_BIND_IP` | No | `127.0.0.1` | Default IP address used when binding SRT streams. |
 
 ---

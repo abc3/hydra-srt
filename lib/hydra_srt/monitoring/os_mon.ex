@@ -136,8 +136,7 @@ defmodule HydraSrt.Monitoring.OsMon do
   @spec databases() :: map()
   def databases do
     [
-      {"metadata_database", "Metadata Database", repo_database_path()},
-      {"metrics_logs_database", "Metrics and Logs Database", analytics_database_path()}
+      {"metadata_database", "Metadata Database", repo_database_path()}
     ]
     |> Enum.reject(fn {_id, _name, path} -> is_nil(path) or path == "" end)
     |> Enum.map(&database_entry/1)
@@ -147,7 +146,6 @@ defmodule HydraSrt.Monitoring.OsMon do
 
   @spec database_id(String.t()) :: String.t()
   def database_id("metadata_database"), do: "metadata_database"
-  def database_id("metrics_logs_database"), do: "metrics_logs_database"
   def database_id(value) when is_binary(value), do: storage_id(value)
   def database_id(_value), do: "unknown"
 
@@ -313,10 +311,6 @@ defmodule HydraSrt.Monitoring.OsMon do
     :hydra_srt
     |> Application.get_env(HydraSrt.Repo, [])
     |> Keyword.get(:database)
-  end
-
-  def analytics_database_path do
-    Application.get_env(:hydra_srt, :analytics_database_path)
   end
 
   defp swap_usage_percent(total_swap, free_swap)

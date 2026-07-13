@@ -11,7 +11,7 @@ alias HydraSrt.Env
 # - SECRET_KEY_BASE: required in prod; optional in dev/test (defaults exist)
 # - API_AUTH_USERNAME / API_AUTH_PASSWORD: required in prod; optional in dev
 # - DATABASE_PATH: required in prod; optional in dev (overrides dev DB path)
-# - ANALYTICS_DATABASE_PATH: required in prod and dev
+# - VICTORIA_METRICS_URL / VICTORIA_LOGS_URL: optional analytics backends
 # - POOL_SIZE: Ecto pool size (prod default 5)
 # - PORT / PHX_HOST: HTTP listen port and URL host
 # - RTMP_PORT: RTMP ingest server listen port (default 1935)
@@ -84,14 +84,9 @@ case config_env() do
       pool_size: Env.get_integer("POOL_SIZE", 5),
       journal_mode: :wal
 
-    analytics_database_path =
-      Env.get_binary("ANALYTICS_DATABASE_PATH", nil) ||
-        raise """
-        environment variable ANALYTICS_DATABASE_PATH is missing.
-        For example: /etc/hydra_srt/hydra_srt_analytics.duckdb
-        """
-
-    config :hydra_srt, analytics_database_path: analytics_database_path
+    config :hydra_srt,
+      victoria_metrics_url: Env.get_binary("VICTORIA_METRICS_URL", "http://127.0.0.1:8428"),
+      victoria_logs_url: Env.get_binary("VICTORIA_LOGS_URL", "http://127.0.0.1:9428")
 
     host = Env.get_binary("PHX_HOST", "example.com")
     port = Env.get_integer("PORT", 4000)
@@ -119,11 +114,9 @@ case config_env() do
         pool_size: Env.get_integer("POOL_SIZE", 5)
     end
 
-    analytics_database_path =
-      Env.get_binary("ANALYTICS_DATABASE_PATH", nil) ||
-        Path.expand("../hydra_srt_analytics.duckdb", __DIR__)
-
-    config :hydra_srt, analytics_database_path: analytics_database_path
+    config :hydra_srt,
+      victoria_metrics_url: Env.get_binary("VICTORIA_METRICS_URL", "http://127.0.0.1:8428"),
+      victoria_logs_url: Env.get_binary("VICTORIA_LOGS_URL", "http://127.0.0.1:9428")
 
     if u = Env.get_binary("API_AUTH_USERNAME", nil) do
       config :hydra_srt, api_auth_username: u

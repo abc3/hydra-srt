@@ -37,7 +37,7 @@ flowchart TD
     App --> Telemetry[Telemetry]
     App --> PromEx[PromEx]
     App --> Repo[Ecto Repo SQLite]
-    App --> AnalyticsDb[DuckDB Connection]
+    App --> Victoria[Victoria HTTP Clients]
     App --> PubSub[Phoenix.PubSub]
     App --> Endpoint[Phoenix Endpoint]
     App --> DynSup[PartitionSupervisor]
@@ -112,29 +112,27 @@ Storage notes:
 
 **Location**: `DATABASE_PATH` env var, default `hydra_srt.db`
 
-### DuckDB
+### VictoriaMetrics and VictoriaLogs
 
-**Purpose**: Time-series analytics and metrics storage.
+**Purpose**: Historical observability storage outside the BEAM runtime.
 
 Used for:
-- System metrics history (`stats_samples` table)
-- Pipeline logs history (`pipeline_logs` table)
+- System metrics history
 - Network interface statistics
 - Route performance metrics
+- Route events and status history
+- Pipeline logs history
 
 Storage notes:
-- Single file.
-- SQL interface.
-- Columnar storage for analytics queries.
-- Better fit than SQLite for time-series reads and aggregation.
+- VictoriaMetrics stores numeric time-series data and route events.
+- VictoriaLogs stores structured pipeline log lines.
+- Both services are external HTTP processes, so storage failures degrade analytics without crashing HydraSRT.
 
-**Location**: `ANALYTICS_DATABASE_PATH` env var, default `hydra_srt_analytics.duckdb`
-
-DuckDB is accessed via the Adbc (Arrow Database Connectivity) library, not Ecto. Queries use native SQL through `Adbc.Connection`.
+**Location**: `VICTORIA_METRICS_URL` and `VICTORIA_LOGS_URL`, defaulting to loopback services in local deployments.
 
 ## Metrics Collection and Export
 
-HydraSRT writes current metrics to Prometheus and historical metrics to DuckDB.
+HydraSRT exposes current metrics through Prometheus and writes historical metrics to VictoriaMetrics. Pipeline logs are written to VictoriaLogs.
 
 ### Collection Path
 
@@ -144,8 +142,9 @@ flowchart LR
     RouteHandler[RouteHandler] -->|parses logs| PubSub[Phoenix PubSub]
     PubSub --> PipelineLogger[Stats.PipelineLogger]
     Telemetry --> SystemCollector[Stats.SystemTelemetryCollector]
-    SystemCollector -->|writes rows| DuckDB[DuckDB stats_samples]
-    PipelineLogger -->|buffers logs| DuckDB2[DuckDB pipeline_logs]
+    SystemCollector -->|writes samples| VM[VictoriaMetrics]
+    EventLogger[Stats.EventLogger] -->|writes events| VM
+    PipelineLogger -->|buffers logs| VL[VictoriaLogs]
     PipelineLogger -->|emits| TelemetryMetrics[Telemetry Metrics]
     Telemetry --> PromEx[PromEx]
     TelemetryMetrics --> PromEx
@@ -180,7 +179,7 @@ Poll interval controlled by `PROM_POLL_RATE` (default 5000ms).
 
 ### Historical Analytics
 
-Selected telemetry is stored in DuckDB for historical queries.
+Selected telemetry is stored in VictoriaMetrics for historical queries.
 
 API endpoint: `GET /api/nodes/:id/analytics`
 
