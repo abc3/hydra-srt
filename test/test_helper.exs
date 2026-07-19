@@ -76,6 +76,23 @@ excludes =
     excludes
   end
 
+excludes =
+  if System.get_env("NDI_E2E") != "true" do
+    [ndi_e2e: true] ++ excludes
+  else
+    # Real-media cases use @tag :ndi_runtime. ExUnit 1.18 has no setup {:skip,_};
+    # exclude that tag when HYDRA_NDI_RUNTIME_DIR is unset / has no libndi*.
+    if HydraSrt.E2E.Native.Helpers.ndi_runtime_available?() do
+      excludes
+    else
+      IO.puts(
+        "INFO: HYDRA_NDI_RUNTIME_DIR unset or libndi absent; excluding :ndi_runtime NDI E2E tests"
+      )
+
+      [ndi_runtime: true] ++ excludes
+    end
+  end
+
 if excludes != [] do
   ExUnit.configure(exclude: excludes)
 end

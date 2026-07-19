@@ -43,6 +43,31 @@ vi.mock('../../../utils/api', () => {
   };
 });
 
+vi.mock('../../../utils/ndiApi', () => ({
+  ndiApi: {
+    getCapabilities: vi.fn(async () => ({
+      data: {
+        feature_enabled: false,
+        plugin: { available: false, revision: null },
+        runtime: { available: false, major: null, version: null },
+        receive: { available: false, reason_codes: ['NDI_DISABLED'], formats: [] },
+        send: { available: false, reason_codes: ['NDI_DISABLED'], formats: [] },
+        discovery: { available: false, reason_codes: ['NDI_DISABLED'], mode: 'mdns' },
+        direct_address: { available: false, reason_codes: ['NDI_DISABLED'] },
+        checked_at: '2026-07-19T00:00:00Z',
+        expires_at: '2026-07-19T00:00:15Z',
+        stale: false,
+        check_in_progress: false,
+        node_id: 'self',
+      },
+    })),
+    listSources: vi.fn(async () => ({ data: [], meta: {} })),
+    refreshDiscovery: vi.fn(async () => ({ data: { generation: 'g1' } })),
+    probe: vi.fn(async () => ({ data: { ok: false } })),
+    getEndpointHealth: vi.fn(async () => ({ data: { endpoints: [], last_sequence: 0 } })),
+  },
+}));
+
 describe('Route form validation', () => {
   beforeEach(() => {
     vi.clearAllMocks();

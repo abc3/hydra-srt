@@ -58,6 +58,10 @@ import SwitchMarkers from './SwitchMarkers';
 import SourceTimeline from './SourceTimeline';
 import PipelineLogsTab from './PipelineLogsTab';
 import SrtHealthTab from './SrtHealthTab';
+import NdiHealthTab from './NdiHealthTab';
+import { useNdiCapabilities } from './useNdiCapabilities';
+import { isNdiRunnable } from './ndiCapabilityState';
+import { ndiApi } from '../../utils/ndiApi';
 import dayjs from 'dayjs';
 import {
   LineChart,
@@ -321,6 +325,7 @@ const RouteItem = () => {
   const [pipelineLogsRefreshTick, setPipelineLogsRefreshTick] = useState(0);
   const [analyticsCardTab, setAnalyticsCardTab] = useState('bandwidth');
   const [pipelineLogsLoading, setPipelineLogsLoading] = useState(false);
+  const { capabilities: ndiCapabilities } = useNdiCapabilities();
   const liveSnapshotBufferRef = useRef<LiveSnapshotBuffer>(null);
   const liveSnapshotFlushTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const lastAnalyticsFetchKeyRef = useRef<string | null>(null);
@@ -943,6 +948,28 @@ const RouteItem = () => {
       schema_status: (source.schema_status || source.status) as string | undefined,
     }));
   const routeBusy = isRouteBusy(routeData);
+  const hasNdiEndpoints = useMemo(() => {
+    const endpoints = [...(routeData?.sources || []), ...(routeData?.destinations || [])];
+    return endpoints.some((endpoint) => String(endpoint?.schema || '').toUpperCase() === 'NDI');
+  }, [routeData?.destinations, routeData?.sources]);
+  const ndiStartBlocked = useMemo(() => {
+    if (!hasNdiEndpoints) {
+      return false;
+    }
+    const sources = routeData?.sources || [];
+    const destinations = routeData?.destinations || [];
+    const hasNdiSource = sources.some((endpoint) => String(endpoint?.schema || '').toUpperCase() === 'NDI');
+    const hasNdiDest = destinations.some(
+      (endpoint) => String(endpoint?.schema || '').toUpperCase() === 'NDI' && endpoint.enabled !== false,
+    );
+    if (hasNdiSource && !isNdiRunnable(ndiCapabilities, 'receive')) {
+      return true;
+    }
+    if (hasNdiDest && !isNdiRunnable(ndiCapabilities, 'send')) {
+      return true;
+    }
+    return false;
+  }, [hasNdiEndpoints, ndiCapabilities, routeData?.destinations, routeData?.sources]);
   const deleteDisabledMessage = 'If you want to delete it, stop the route first';
 
   // Filter destinations
@@ -1510,21 +1537,29 @@ const RouteItem = () => {
             >
               Edit route
             </Button>
-            <Button
-              type={statusDetails.buttonType}
-              icon={statusDetails.buttonIcon}
-              onClick={handleRouteStatusToggle}
-              loading={pendingAction != null}
-              disabled={pendingAction != null}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                minWidth: '80px'
-              }}
+            <AntTooltip
+              title={
+                !routeBusy && ndiStartBlocked
+                  ? 'NDI is not available on this server, so this route cannot start yet.'
+                  : null
+              }
             >
-              {statusDetails.buttonText}
-            </Button>
+              <Button
+                type={statusDetails.buttonType}
+                icon={statusDetails.buttonIcon}
+                onClick={handleRouteStatusToggle}
+                loading={pendingAction != null}
+                disabled={pendingAction != null || (!routeBusy && ndiStartBlocked)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minWidth: '80px'
+                }}
+              >
+                {statusDetails.buttonText}
+              </Button>
+            </AntTooltip>
             <AntTooltip title={routeBusy ? deleteDisabledMessage : null}>
               <Button
                 danger
@@ -1685,6 +1720,37 @@ const RouteItem = () => {
                 />
               ),
             },
+            ...(hasNdiEndpoints
+              ? [{
+                  key: 'ndi_health',
+                  label: 'NDI Health',
+                  children: (
+                    <NdiHealthTab
+                      routeId={id as string}
+                      sources={routeData?.sources || []}
+                      destinations={routeData?.destinations || []}
+                      activeSourceId={routeData?.active_source_id}
+                      routeActive={!isTerminalRuntimeStatus(routeData?.schema_status || routeData?.status)}
+                      onRestartWithSource={(sourceId) => {
+                        void handleRestartWithSource(sourceId);
+                      }}
+                      onStop={() => {
+                        if (!routeBusy) {
+                          return;
+                        }
+                        void handleRouteStatusToggle();
+                      }}
+                      onTestEndpoint={(endpointId) => {
+                        void ndiApi.probe({ endpoint_id: endpointId }).then(() => {
+                          messageApi.success('NDI probe completed');
+                        }).catch((error) => {
+                          messageApi.error(getErrorMessage(error, 'NDI probe failed'));
+                        });
+                      }}
+                    />
+                  ),
+                }]
+              : []),
             {
               key: 'pipeline_logs',
               label: 'Pipeline Logs',

@@ -1592,7 +1592,8 @@ defmodule HydraSrt.Db do
     })
   end
 
-  defp endpoint_base_map(%Endpoint{} = endpoint) do
+  @spec endpoint_base_map(%Endpoint{}) :: %{String.t() => term()}
+  def endpoint_base_map(%Endpoint{} = endpoint) do
     %{
       "enabled" => endpoint.enabled,
       "name" => endpoint.name,
@@ -1620,6 +1621,22 @@ defmodule HydraSrt.Db do
       "allowed_list" => Endpoint.decode_ip_access_list(endpoint.allowed_list),
       "denied_list" => Endpoint.decode_ip_access_list(endpoint.denied_list),
       "limit_access" => endpoint.limit_access || false,
+      "ndi_source_name" => endpoint.ndi_source_name,
+      "ndi_source_address" => endpoint.ndi_source_address,
+      "ndi_selection_mode" => endpoint.ndi_selection_mode,
+      "ndi_observed_address_snapshot" => endpoint.ndi_observed_address_snapshot,
+      "ndi_observed_name_snapshot" => endpoint.ndi_observed_name_snapshot,
+      "ndi_selection_observed_at" => endpoint.ndi_selection_observed_at,
+      "ndi_receiver_name" => endpoint.ndi_receiver_name,
+      "ndi_media_policy" => endpoint.ndi_media_policy,
+      "ndi_bandwidth" => endpoint.ndi_bandwidth,
+      "ndi_color_format" => endpoint.ndi_color_format,
+      "ndi_timestamp_mode" => endpoint.ndi_timestamp_mode,
+      "ndi_connect_timeout_ms" => endpoint.ndi_connect_timeout_ms,
+      "ndi_receive_timeout_ms" => endpoint.ndi_receive_timeout_ms,
+      "ndi_track_discovery_timeout_ms" => endpoint.ndi_track_discovery_timeout_ms,
+      "ndi_max_queue_length" => endpoint.ndi_max_queue_length,
+      "ndi_sender_name" => endpoint.ndi_sender_name,
       "status" => endpoint.status,
       "created_at" => endpoint.inserted_at,
       "updated_at" => endpoint.updated_at

@@ -1,0 +1,40 @@
+{
+  "route_id": "route-two",
+  "config_revision": "revision-2",
+  "process_instance_id": "process-2",
+  "source": {
+    "id": "source-ndi",
+    "kind": "ndi",
+    "ndi": {
+      "source_name": null,
+      "url_address": "ndi://source-address",
+      "receiver_name": "Hydra route-two",
+      "bandwidth": "highest",
+      "color_format": "fastest",
+      "timestamp_mode": "receive-time-vs-timestamp",
+      "media_policy": "video_and_audio_required",
+      "connect_timeout_ms": 1000,
+      "receive_timeout_ms": 60000,
+      "track_discovery_timeout_ms": 10000,
+      "max_queue_length": 64
+    }
+  },
+  "destinations": [
+    {
+      "id": "destination-one",
+      "kind": "ndi",
+      "ndi": {
+        "sender_name": "Hydra One",
+        "media_policy": "video_only"
+      }
+    },
+    {
+      "id": "destination-two",
+      "kind": "ndi",
+      "ndi": {
+        "sender_name": "Hydra Two",
+        "media_policy": "audio_only"
+      }
+    }
+  ]
+}

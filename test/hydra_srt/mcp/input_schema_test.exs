@@ -14,8 +14,8 @@ defmodule HydraSrt.Mcp.InputSchemaTest do
     }
 
     assert InputSchema.to_hermes(schema) == %{
-             "name" => {:required, :any},
-             "note" => :any
+             "name" => {:required, :string},
+             "note" => :string
            }
   end
 
@@ -48,6 +48,17 @@ defmodule HydraSrt.Mcp.InputSchemaTest do
            }
   end
 
+  test "converts boolean fields" do
+    schema = %{
+      "type" => "object",
+      "properties" => %{
+        "enabled" => %{"type" => "boolean"}
+      }
+    }
+
+    assert InputSchema.to_hermes(schema) == %{"enabled" => :boolean}
+  end
+
   test "converts nested object fields" do
     schema = %{
       "type" => "object",
@@ -64,7 +75,7 @@ defmodule HydraSrt.Mcp.InputSchemaTest do
     }
 
     assert InputSchema.to_hermes(schema) == %{
-             "route" => {:required, {:object, %{"name" => {:required, :any}}}}
+             "route" => {:required, %{"name" => {:required, :string}}}
            }
   end
 

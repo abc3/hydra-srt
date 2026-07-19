@@ -1,0 +1,23 @@
+{
+  "route_id": "route-rtp-destination",
+  "config_revision": "revision-rtp-destination",
+  "process_instance_id": "process-rtp-destination",
+  "source": {
+    "id": "source",
+    "kind": "udp",
+    "udp": {
+      "address": "127.0.0.1",
+      "port": 5001
+    }
+  },
+  "destinations": [
+    {
+      "id": "rtp-dest",
+      "kind": "rtp",
+      "rtp": {
+        "address": "127.0.0.1",
+        "port": 5002
+      }
+    }
+  ]
+}

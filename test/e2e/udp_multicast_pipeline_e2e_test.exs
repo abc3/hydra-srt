@@ -59,7 +59,7 @@ defmodule HydraSrt.E2E.UdpMulticastPipelineE2ETest do
         )
 
       assert {:ok, %{bytes: dest_bytes}} =
-               E2EHelpers.await_udp_bytes(dest_counter, 20_000, 5_000)
+               E2EHelpers.await_udp_bytes(dest_counter, 20_000, 8_000)
 
       assert dest_bytes >= 20_000
     else

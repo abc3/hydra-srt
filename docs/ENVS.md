@@ -46,6 +46,8 @@ All environment variables recognised by Hydra SRT, grouped by purpose.
 | `SYSTEM_METRICS_HISTORY_ENABLED` | No | `true` | Enables background persistence of system telemetry samples to VictoriaMetrics. |
 | `SYSTEM_METRICS_HISTORY_INTERVAL_MS` | No | `5000` | Flush interval in milliseconds for writing buffered system telemetry rows to VictoriaMetrics. |
 | `HYDRA_DEFAULT_BIND_IP` | No | `127.0.0.1` | Default IP address used when binding SRT streams. |
+| `NDI_FEATURE` | No | `false` | Enables NDI sources and destinations, NDI discovery and the NDI API surface. While disabled, NDI endpoints are rejected with `NDI_DISABLED` and the discovery coordinator is not started. |
+| `HYDRA_NDI_RUNTIME_DIR` | No | — | Directory holding the NDI runtime (`libndi.so.6`), exported to the native pipeline as `NDI_RUNTIME_DIR_V6`. Required for NDI to load at runtime; the runtime is never bundled. |
 
 ---
 

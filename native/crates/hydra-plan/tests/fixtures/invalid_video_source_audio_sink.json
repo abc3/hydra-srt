@@ -1,0 +1,32 @@
+{
+  "route_id": "route-video-to-audio",
+  "config_revision": "revision-video-to-audio",
+  "process_instance_id": "process-video-to-audio",
+  "source": {
+    "id": "video-source",
+    "kind": "ndi",
+    "ndi": {
+      "source_name": "MACHINE (VIDEO)",
+      "url_address": null,
+      "receiver_name": "Hydra video route",
+      "bandwidth": "highest",
+      "color_format": "uyvy-bgra",
+      "timestamp_mode": "receive-time-vs-timestamp",
+      "media_policy": "video_only",
+      "connect_timeout_ms": 10000,
+      "receive_timeout_ms": 5000,
+      "track_discovery_timeout_ms": 10000,
+      "max_queue_length": 4
+    }
+  },
+  "destinations": [
+    {
+      "id": "audio-destination",
+      "kind": "ndi",
+      "ndi": {
+        "sender_name": "Hydra Audio Output",
+        "media_policy": "audio_only"
+      }
+    }
+  ]
+}

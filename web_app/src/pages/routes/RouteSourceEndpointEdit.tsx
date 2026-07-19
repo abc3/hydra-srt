@@ -18,6 +18,9 @@ import type { AppError } from '../../types/errors';
 import { getErrorMessage } from '../../types/errors';
 import type { InterfaceOption, InterfaceRecord } from '../../types/interfaces';
 import SrtAccessFields from './SrtAccessFields';
+import ProtocolSchemaRadio from './ProtocolSchemaRadio';
+import NdiInputFields from './NdiInputFields';
+import { useNdiCapabilities } from './useNdiCapabilities';
 
 const { Title } = Typography;
 const ANY_INTERFACE_OPTION: InterfaceOption = { label: 'Any interface', value: '' };
@@ -34,6 +37,8 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
     const [routeData, setRouteData] = useState<RouteSummary | null>(null);
     const [sourceData, setSourceData] = useState<EndpointFormValues | null>(null);
     const [routeLoading, setRouteLoading] = useState(true);
+    const { capabilities, loading: capabilitiesLoading } = useNdiCapabilities();
+    const ndiFeatureEnabled = capabilities?.feature_enabled === true;
 
     // Set breadcrumb items for the RouteSourceEndpointEdit page
     useEffect(() => {
@@ -240,6 +245,16 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
             .catch((info: unknown) => {
                 messageApi.error('Please check the form for errors');
                 console.log('Validate Failed:', info);
+                const errorFields =
+                    typeof info === 'object' &&
+                    info !== null &&
+                    'errorFields' in info &&
+                    Array.isArray((info as { errorFields?: Array<{ name: unknown }> }).errorFields)
+                        ? (info as { errorFields: Array<{ name: (string | number)[] }> }).errorFields
+                        : [];
+                if (errorFields[0]?.name) {
+                    form.scrollToField(errorFields[0].name);
+                }
             });
     };
 
@@ -320,12 +335,7 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                                         required
                                         rules={[{ required: true, message: 'Please select a source schema' }]}
                                     >
-                                        <Radio.Group buttonStyle="solid">
-                                            <Radio.Button value="SRT">SRT</Radio.Button>
-                                            <Radio.Button value="UDP">UDP</Radio.Button>
-                                            <Radio.Button value="RTP">RTP</Radio.Button>
-                                            <Radio.Button value="RTMP">RTMP</Radio.Button>
-                                        </Radio.Group>
+                                        <ProtocolSchemaRadio direction="source" ndiFeatureEnabled={ndiFeatureEnabled} />
                                     </Form.Item>
 
                                     {/* SRT Specific Options */}
@@ -618,6 +628,21 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                                                 </>
                                                     );
                                                 })()
+                                            )
+                                        }
+                                    </Form.Item>
+
+                                    <Form.Item noStyle dependencies={['schema']}>
+                                        {({ getFieldValue }) =>
+                                            getFieldValue('schema') === 'NDI' && (
+                                                <NdiInputFields
+                                                    capabilities={capabilities}
+                                                    capabilitiesLoading={capabilitiesLoading}
+                                                    endpointId={sourceId !== 'new' ? sourceId : undefined}
+                                                    savedSourceName={sourceData?.ndi_source_name}
+                                                    savedObservedAddress={sourceData?.ndi_observed_address_snapshot}
+                                                    savedObservedName={sourceData?.ndi_observed_name_snapshot}
+                                                />
                                             )
                                         }
                                     </Form.Item>

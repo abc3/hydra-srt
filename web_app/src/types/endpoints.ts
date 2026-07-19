@@ -1,11 +1,13 @@
 /** Route source/destination endpoint edit forms and API summaries. */
 
-export type EndpointFormValues = Record<string, unknown> & {
+import type { NdiEndpointFields } from './ndi';
+
+export type EndpointFormValues = Record<string, unknown> & NdiEndpointFields & {
   id?: string;
   name?: string;
   enabled?: boolean;
   node?: string;
-  schema?: 'SRT' | 'UDP' | 'RTP' | 'RTMP' | string;
+  schema?: 'SRT' | 'UDP' | 'RTP' | 'RTMP' | 'NDI' | string;
   mode?: 'caller' | 'listener' | 'rendezvous' | string;
   interface_sys_name?: string;
   address?: string;

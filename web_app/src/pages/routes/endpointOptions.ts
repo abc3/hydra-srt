@@ -1,3 +1,20 @@
+import {
+  NDI_BANDWIDTHS,
+  NDI_COLOR_FORMATS,
+  NDI_DEFAULT_CONNECT_TIMEOUT_MS,
+  NDI_DEFAULT_MAX_QUEUE_LENGTH,
+  NDI_DEFAULT_RECEIVE_TIMEOUT_MS,
+  NDI_DEFAULT_TRACK_DISCOVERY_TIMEOUT_MS,
+  NDI_MEDIA_POLICIES,
+  NDI_SELECTION_MODES,
+  NDI_SNAPSHOT_FIELDS,
+  NDI_TIMESTAMP_MODES,
+  NDI_TIMEOUT_MS_MAX,
+  NDI_TIMEOUT_MS_MIN,
+  NDI_MAX_QUEUE_LENGTH_MAX,
+  NDI_MAX_QUEUE_LENGTH_MIN,
+} from './ndiConstants';
+
 type EndpointValue = string | number | boolean | null | undefined;
 export type EndpointRecord = Record<string, unknown> & {
   schema?: string;
@@ -18,6 +35,20 @@ export type EndpointRecord = Record<string, unknown> & {
   location?: EndpointValue;
   'auto-reconnect'?: EndpointValue;
   'keep-listening'?: EndpointValue;
+  ndi_selection_mode?: EndpointValue;
+  ndi_source_name?: EndpointValue;
+  ndi_source_address?: EndpointValue;
+  ndi_receiver_name?: EndpointValue;
+  ndi_media_policy?: EndpointValue;
+  ndi_bandwidth?: EndpointValue;
+  ndi_color_format?: EndpointValue;
+  ndi_timestamp_mode?: EndpointValue;
+  ndi_connect_timeout_ms?: EndpointValue;
+  ndi_receive_timeout_ms?: EndpointValue;
+  ndi_track_discovery_timeout_ms?: EndpointValue;
+  ndi_max_queue_length?: EndpointValue;
+  ndi_sender_name?: EndpointValue;
+  selection_token?: EndpointValue;
 };
 
 const toNumberIfPresent = (value: EndpointValue): EndpointValue => {
@@ -52,6 +83,133 @@ const normalizeIpAccessList = (value: unknown): string[] => {
   }
 
   return [];
+};
+
+const clampNdiTimeout = (value: EndpointValue, fallback: number): number => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return fallback;
+  }
+  return Math.min(NDI_TIMEOUT_MS_MAX, Math.max(NDI_TIMEOUT_MS_MIN, Math.trunc(num)));
+};
+
+const clampNdiQueue = (value: EndpointValue, fallback: number): number => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return fallback;
+  }
+  return Math.min(NDI_MAX_QUEUE_LENGTH_MAX, Math.max(NDI_MAX_QUEUE_LENGTH_MIN, Math.trunc(num)));
+};
+
+const allowlistOrNull = <T extends string>(value: EndpointValue, allowlist: readonly T[]): T | null => {
+  if (typeof value !== 'string' || value === '') {
+    return null;
+  }
+  return (allowlist as readonly string[]).includes(value) ? (value as T) : null;
+};
+
+const normalizeNdiEndpoint = (flat: EndpointRecord): EndpointRecord => {
+  if (flat.schema !== 'NDI') {
+    return flat;
+  }
+
+  // Selection tokens are never persisted endpoint state.
+  delete flat.selection_token;
+  for (const key of NDI_SNAPSHOT_FIELDS) {
+    // Keep snapshots for display conflict UI; strip on flatten/save instead.
+    if (flat[key] === undefined) {
+      flat[key] = null;
+    }
+  }
+
+  const mode = allowlistOrNull(flat.ndi_selection_mode, NDI_SELECTION_MODES);
+  flat.ndi_selection_mode = mode ?? 'discovery_name';
+
+  if (flat.ndi_selection_mode === 'discovery_name') {
+    flat.ndi_source_address = null;
+  } else {
+    flat.ndi_source_name = null;
+  }
+
+  flat.ndi_media_policy =
+    allowlistOrNull(flat.ndi_media_policy, NDI_MEDIA_POLICIES) ?? 'video_and_audio_required';
+  flat.ndi_bandwidth = allowlistOrNull(flat.ndi_bandwidth, NDI_BANDWIDTHS) ?? 'highest';
+  flat.ndi_color_format = allowlistOrNull(flat.ndi_color_format, NDI_COLOR_FORMATS) ?? 'uyvy-bgra';
+  const timestampMode = allowlistOrNull(flat.ndi_timestamp_mode, NDI_TIMESTAMP_MODES);
+  flat.ndi_timestamp_mode = timestampMode;
+
+  if (flat.ndi_connect_timeout_ms == null || flat.ndi_connect_timeout_ms === '') {
+    flat.ndi_connect_timeout_ms = NDI_DEFAULT_CONNECT_TIMEOUT_MS;
+  } else {
+    flat.ndi_connect_timeout_ms = clampNdiTimeout(
+      flat.ndi_connect_timeout_ms,
+      NDI_DEFAULT_CONNECT_TIMEOUT_MS,
+    );
+  }
+  if (flat.ndi_receive_timeout_ms == null || flat.ndi_receive_timeout_ms === '') {
+    flat.ndi_receive_timeout_ms = NDI_DEFAULT_RECEIVE_TIMEOUT_MS;
+  } else {
+    flat.ndi_receive_timeout_ms = clampNdiTimeout(
+      flat.ndi_receive_timeout_ms,
+      NDI_DEFAULT_RECEIVE_TIMEOUT_MS,
+    );
+  }
+  if (flat.ndi_track_discovery_timeout_ms == null || flat.ndi_track_discovery_timeout_ms === '') {
+    flat.ndi_track_discovery_timeout_ms = NDI_DEFAULT_TRACK_DISCOVERY_TIMEOUT_MS;
+  } else {
+    flat.ndi_track_discovery_timeout_ms = clampNdiTimeout(
+      flat.ndi_track_discovery_timeout_ms,
+      NDI_DEFAULT_TRACK_DISCOVERY_TIMEOUT_MS,
+    );
+  }
+  if (flat.ndi_max_queue_length == null || flat.ndi_max_queue_length === '') {
+    flat.ndi_max_queue_length = NDI_DEFAULT_MAX_QUEUE_LENGTH;
+  } else {
+    flat.ndi_max_queue_length = clampNdiQueue(
+      flat.ndi_max_queue_length,
+      NDI_DEFAULT_MAX_QUEUE_LENGTH,
+    );
+  }
+
+  if (typeof flat.ndi_sender_name === 'string') {
+    flat.ndi_sender_name = flat.ndi_sender_name.trim();
+  }
+  if (typeof flat.ndi_source_name === 'string') {
+    flat.ndi_source_name = flat.ndi_source_name.trim();
+  }
+  if (typeof flat.ndi_source_address === 'string') {
+    flat.ndi_source_address = flat.ndi_source_address.trim();
+  }
+  if (typeof flat.ndi_receiver_name === 'string') {
+    flat.ndi_receiver_name = flat.ndi_receiver_name.trim() || null;
+  }
+
+  return flat;
+};
+
+const stripNdiClientOwnedFields = (flat: EndpointRecord): EndpointRecord => {
+  if (flat.schema !== 'NDI') {
+    return flat;
+  }
+
+  const next = { ...flat };
+  for (const key of NDI_SNAPSHOT_FIELDS) {
+    delete next[key];
+  }
+
+  // Transient selection token is submitted only when freshly chosen.
+  if (next.selection_token === undefined || next.selection_token === null || next.selection_token === '') {
+    delete next.selection_token;
+  }
+
+  if (next.ndi_selection_mode === 'discovery_name') {
+    next.ndi_source_address = null;
+  } else if (next.ndi_selection_mode === 'direct_address') {
+    next.ndi_source_name = null;
+    delete next.selection_token;
+  }
+
+  return next;
 };
 
 export const normalizeEndpointForForm = (endpoint: EndpointRecord | null | undefined): EndpointRecord | null | undefined => {
@@ -116,7 +274,7 @@ export const normalizeEndpointForForm = (endpoint: EndpointRecord | null | undef
   flat.denied_list = normalizeIpAccessList(flat.denied_list);
   flat.limit_access = flat.limit_access ?? false;
 
-  return flat;
+  return normalizeNdiEndpoint(flat);
 };
 
 export const flattenEndpointPayload = (endpoint: EndpointRecord | null | undefined): EndpointRecord | null | undefined => {
@@ -124,5 +282,21 @@ export const flattenEndpointPayload = (endpoint: EndpointRecord | null | undefin
     return endpoint;
   }
 
-  return normalizeEndpointForForm(endpoint);
+  const selectionToken =
+    typeof endpoint.selection_token === 'string' && endpoint.selection_token !== ''
+      ? endpoint.selection_token
+      : undefined;
+
+  const withoutToken = { ...endpoint };
+  delete withoutToken.selection_token;
+  const normalized = normalizeEndpointForForm(withoutToken);
+  if (!normalized) {
+    return normalized;
+  }
+
+  if (selectionToken) {
+    normalized.selection_token = selectionToken;
+  }
+
+  return stripNdiClientOwnedFields(normalized);
 };

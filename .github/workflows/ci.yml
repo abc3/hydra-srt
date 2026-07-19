@@ -70,6 +70,253 @@ jobs:
     - name: Run native E2E tests
       run: make test_rs_native_e2e
 
+  ndi_e2e:
+    name: NDI Native E2E Tests
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+      NDI_E2E: true
+      # Pinned MPL gst-plugin-ndi (gst-plugins-rs net/ndi). advanced-sdk stays OFF.
+      GST_PLUGINS_RS_REF: "0.13.7"
+      # Official NDI Linux SDK archive (checksum-pinned dated baseline).
+      NDI_SDK_URL: "https://downloads.ndi.tv/SDK/NDI_SDK_Linux/Install_NDI_SDK_v6_Linux.tar.gz"
+      NDI_SDK_SHA256: "f0314f245446defc488b63ceb4689acf1a965aeefdadacb70571bb216a8cc183"
+    steps:
+    - uses: actions/checkout@v4
+    - name: Assert no proprietary NDI artifacts in checkout
+      run: |
+        set -euo pipefail
+        hits=$(find . \
+          \( -path './.git' -o -path './_build' -o -path './deps' -o -path './native/target' -o -path './.fleet' -o -path './refs' \) -prune -o \
+          \( -iname 'libndi.so*' -o -iname 'libndi.dylib*' -o -iname 'Processing.NDI.Lib*' \
+             -o -iname 'Install_NDI_SDK*' -o -iname '*NDI*Tools*' -o -iname 'NDILib*' \) -print 2>/dev/null || true)
+        if [ -n "${hits}" ]; then
+          echo "Prohibited NDI artifacts present in checkout:"
+          echo "${hits}"
+          exit 1
+        fi
+        echo "Checkout is free of proprietary NDI binaries/archives."
+    - name: Install native dependencies (GStreamer, Avahi, cargo-c build deps)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg pkg-config \
+          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+          gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+          gstreamer1.0-tools \
+          libsrt-openssl-dev \
+          avahi-daemon avahi-utils libavahi-client-dev \
+          libclang-dev
+        sudo mkdir -p /var/run/dbus
+        sudo dbus-daemon --system --fork || true
+        sudo avahi-daemon -D || sudo service avahi-daemon start || true
+        avahi-browse -a -t >/dev/null 2>&1 || true
+    - name: Set up Elixir
+      uses: erlef/setup-beam@v1
+      with:
+        elixir-version: '1.18.4'
+        otp-version: '27.3'
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Elixir dependencies
+      uses: actions/cache@v3
+      with:
+        path: deps
+        key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+        restore-keys: ${{ runner.os }}-mix-
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: native
+        prefix-key: ndi-e2e
+    - name: Install cargo-c
+      run: cargo install cargo-c --locked --version 0.10.5+cargo-0.83.0 || cargo install cargo-c --locked
+    - name: Build and install pinned gst-plugin-ndi (advanced-sdk OFF)
+      run: |
+        set -euo pipefail
+        git clone --depth 1 --branch "${GST_PLUGINS_RS_REF}" \
+          https://github.com/GStreamer/gst-plugins-rs.git /tmp/gst-plugins-rs
+        cd /tmp/gst-plugins-rs
+        # Install into the runner home (never the repo checkout / never a published image).
+        cargo cinstall -p gst-plugin-ndi \
+          --prefix="${HOME}/.local" \
+          --libdir="${HOME}/.local/lib" \
+          --release
+        PLUGIN_DIR="${HOME}/.local/lib/gstreamer-1.0"
+        if [ ! -d "${PLUGIN_DIR}" ]; then
+          PLUGIN_DIR="$(find "${HOME}/.local" -type d -name 'gstreamer-1.0' | head -n1)"
+        fi
+        echo "GST_PLUGIN_PATH=${PLUGIN_DIR}:${GST_PLUGIN_PATH:-}" >> "$GITHUB_ENV"
+        export GST_PLUGIN_PATH="${PLUGIN_DIR}:${GST_PLUGIN_PATH:-}"
+        gst-inspect-1.0 ndisrc
+        # Confirm advanced-sdk feature was not requested (default features only).
+        gst-inspect-1.0 ndisrc | head -n 40
+    - name: Download official NDI runtime (ephemeral, checksum-pinned)
+      run: |
+        set -euo pipefail
+        case "${NDI_SDK_URL}" in
+          https://downloads.ndi.tv/*) ;;
+          *)
+            echo "Refusing non-official NDI download host: ${NDI_SDK_URL}"
+            exit 1
+            ;;
+        esac
+        curl -fsSL -o /tmp/Install_NDI_SDK_v6_Linux.tar.gz "${NDI_SDK_URL}"
+        echo "${NDI_SDK_SHA256}  /tmp/Install_NDI_SDK_v6_Linux.tar.gz" | sha256sum -c -
+        mkdir -p /tmp/ndi-sdk-extract /tmp/ndi-home /tmp/hydra-ndi-runtime
+        tar -xzf /tmp/Install_NDI_SDK_v6_Linux.tar.gz -C /tmp/ndi-sdk-extract
+        cd /tmp/ndi-sdk-extract
+        # Non-interactive install under /tmp (ephemeral runner path only).
+        # Feed a single accept via printf, not `yes`: `yes` keeps writing after the
+        # installer stops reading stdin and dies with SIGPIPE, which pipefail would
+        # turn into a spurious step failure. The libndi.so.6 check below is the real
+        # validation gate for a successful extract.
+        export HOME=/tmp/ndi-home
+        printf 'y\n' | PAGER=cat sh ./Install_NDI_SDK_v6_Linux.sh
+        # The SDK ships one real, fully-versioned file per target arch
+        # (e.g. libndi.so.6.3.2) with no soname symlink. Select the x86_64 build
+        # for this runner; matching only 'libndi.so.6' (exact) or picking any arch
+        # would miss it or grab an ARM/i686 binary.
+        libsrc=$(find /tmp/ndi-home /tmp/ndi-sdk-extract -path '*x86_64-linux-gnu*' \
+          -name 'libndi.so.6*' -type f 2>/dev/null | head -n1)
+        if [ -z "${libsrc}" ]; then
+          echo "Failed to locate x86_64 libndi.so.6* after official SDK install"
+          find /tmp/ndi-home /tmp/ndi-sdk-extract -name 'libndi*' 2>/dev/null | head -n 100 || true
+          exit 1
+        fi
+        # Materialize the soname (libndi.so.6) the gst-plugin-ndi / NDIlib_v6_load
+        # loader dlopens, plus the linker name. Never place runtime under the repo.
+        libbase=$(basename "${libsrc}")
+        cp -a "${libsrc}" "/tmp/hydra-ndi-runtime/${libbase}"
+        if [ "${libbase}" != "libndi.so.6" ]; then
+          ln -sf "${libbase}" /tmp/hydra-ndi-runtime/libndi.so.6
+        fi
+        ln -sf libndi.so.6 /tmp/hydra-ndi-runtime/libndi.so
+        echo "HYDRA_NDI_RUNTIME_DIR=/tmp/hydra-ndi-runtime" >> "$GITHUB_ENV"
+        echo "Located NDI runtime at /tmp/hydra-ndi-runtime (from ${libsrc})"
+        ls -la /tmp/hydra-ndi-runtime/
+    - name: Install Elixir dependencies
+      run: mix deps.get
+    - name: Compile Elixir dependencies
+      run: mix deps.compile
+    - name: Run NDI E2E tests
+      run: |
+        set -euo pipefail
+        # Headless CI runners have no working mDNS multicast, so a loopback NDI
+        # sender is never discovered and every real-media test times out. The
+        # official SDK ships ndi-discovery-server for exactly this, but the only
+        # thing that actually steers libndi at it is a client config file at the
+        # process's REAL passwd-DB home directory (libndi ignores $HOME for this
+        # lookup) containing the nested `{"ndi": {...}}` schema — the flat form
+        # from NDI's own docs is read without error but silently not honored, and
+        # the NDI_DISCOVERY_SERVER env var is a complete no-op. All proven via
+        # controlled positive/negative tests; see .fleet/reports/ndi-matrix.md.
+        # Both the sender (gst ndisink, spawned in this same job) and the finder
+        # (our native helper, and every test's sender) run as the same `runner`
+        # user, so one config file covers both, and it must exist before either
+        # the discovery server or any NDI process starts.
+        cfg_home=$(getent passwd "$(id -un)" | cut -d: -f6)
+        [ -n "${cfg_home}" ] || { echo "could not resolve passwd-DB home for $(id -un)"; exit 1; }
+        mkdir -p "${cfg_home}/.ndi"
+        printf '%s' '{"ndi":{"networks":{"ips":"","discovery":"127.0.0.1"}}}' \
+          > "${cfg_home}/.ndi/ndi-config.v1.json"
+        echo "--- ${cfg_home}/.ndi/ndi-config.v1.json ---"
+        cat "${cfg_home}/.ndi/ndi-config.v1.json"
+        echo
+
+        server=$(find /tmp/ndi-home /tmp/ndi-sdk-extract -path '*x86_64-linux-gnu*' \
+          -name 'ndi-discovery-server' -type f 2>/dev/null | head -n1)
+        [ -n "${server}" ] || { echo "ndi-discovery-server not found in SDK"; exit 1; }
+        chmod +x "${server}"
+        export NDI_RUNTIME_DIR_V6=/tmp/hydra-ndi-runtime
+        LD_LIBRARY_PATH="/tmp/hydra-ndi-runtime:${LD_LIBRARY_PATH:-}" \
+          nohup "${server}" > /tmp/ndi-discovery-server.log 2>&1 &
+        disc_pid=$!
+
+        # ss (iproute2) is expected but not guaranteed on ubuntu-latest; fall
+        # back to /dev/tcp, then nc, so a missing tool never masquerades as a
+        # discovery-server startup failure.
+        port_open() {
+          if command -v ss >/dev/null 2>&1; then
+            ss -ltn 2>/dev/null | grep -q ':5959'
+          elif command -v nc >/dev/null 2>&1; then
+            nc -z 127.0.0.1 5959 >/dev/null 2>&1
+          else
+            timeout 1 bash -c '</dev/tcp/127.0.0.1/5959' >/dev/null 2>&1
+          fi
+        }
+        listening=""
+        for _ in $(seq 1 15); do port_open && { listening=1; break; }; sleep 1; done
+        if [ -z "${listening}" ]; then
+          echo "discovery server not listening on :5959"; cat /tmp/ndi-discovery-server.log
+          exit 1
+        fi
+        echo "discovery server pid=${disc_pid} listening on :5959"
+
+        # Build the app (and the native binary via the :rs_native compiler) up
+        # front so the preflight below can use the real helper. `mix test` would
+        # build it too, but only after the preflight runs.
+        MIX_ENV=test mix compile
+        helper=$(find priv _build -path '*native/hydra_srt_pipeline' -type f 2>/dev/null | head -n1)
+        [ -n "${helper}" ] || { echo "native helper binary not found after compile"; \
+          find priv _build -name hydra_srt_pipeline 2>/dev/null | head; exit 1; }
+        echo "native helper: ${helper}"
+
+        # Preflight: prove a local sender (the exact pipeline the suite uses) is
+        # discoverable in ~25s, instead of learning it failed after a 14-min wall
+        # of 120s test timeouts. The finder is our own ndi-discovery helper — the
+        # identical code path the suite uses — so this is a faithful proxy and is
+        # guaranteed present (unlike gst-device-monitor-1.0, which Ubuntu does not
+        # ship). No -q on the sender: an earlier run with -q produced an empty
+        # log and taught us nothing on failure. Fail fast with full diagnostics.
+        smoke="HydraCiSmoke$$"
+        gst-launch-1.0 videotestsrc is-live=true \
+          ! video/x-raw,format=UYVY,width=640,height=360,framerate=30/1 \
+          ! ndisink ndi-name="${smoke}" > /tmp/ndi-smoke-sender.log 2>&1 &
+        smoke_pid=$!
+        sleep 3
+        found=""
+        disco_out=""
+        # Hold stdin open for a few seconds instead of closing it immediately.
+        # ndi-discovery quits its glib MainLoop on stdin EOF, so `printf '' |`
+        # makes it report only what the NDI device provider happened to have
+        # cached at t=0 and exit before any DeviceAdded arrives — a sender that
+        # is registered with the discovery server still reads as undiscovered.
+        # This mirrors what the test harness does for the same reason.
+        for _ in $(seq 1 8); do
+          disco_out=$( { printf ''; sleep 4; } | timeout 12 "${helper}" \
+            ndi-discovery --helper-instance-id "smoke-$$" 2>&1 || true)
+          if printf '%s' "${disco_out}" | grep -q "${smoke}"; then found=1; break; fi
+          sleep 2
+        done
+        kill "${smoke_pid}" 2>/dev/null || true
+        if [ -z "${found}" ]; then
+          echo "PREFLIGHT FAIL: local NDI sender not discoverable via discovery server"
+          echo "--- ${cfg_home}/.ndi/ndi-config.v1.json ---"
+          cat "${cfg_home}/.ndi/ndi-config.v1.json" 2>/dev/null || true
+          echo "--- last ndi-discovery output ---"; printf '%s\n' "${disco_out}" | head -40
+          echo "--- discovery-server.log ---"; cat /tmp/ndi-discovery-server.log 2>/dev/null || true
+          echo "--- smoke-sender.log ---"; cat /tmp/ndi-smoke-sender.log 2>/dev/null || true
+          echo "--- ss -ltnp (or fallback) ---"
+          if command -v ss >/dev/null 2>&1; then
+            ss -ltnp 2>/dev/null || true
+          elif command -v nc >/dev/null 2>&1; then
+            echo "ss unavailable; nc -z 127.0.0.1 5959: $(nc -z 127.0.0.1 5959 >/dev/null 2>&1 && echo open || echo closed)"
+          else
+            echo "ss/nc unavailable; /dev/tcp check: $(timeout 1 bash -c '</dev/tcp/127.0.0.1/5959' >/dev/null 2>&1 && echo open || echo closed)"
+          fi
+          echo "--- env(ndi) ---"; env | grep -i ndi || true
+          kill "${disc_pid}" 2>/dev/null || true
+          exit 1
+        fi
+        echo "PREFLIGHT OK: discovered ${smoke}"
+
+        if ! make test_ndi_e2e; then
+          echo "--- discovery-server.log ---"; cat /tmp/ndi-discovery-server.log 2>/dev/null || true
+          kill "${disc_pid}" 2>/dev/null || true
+          exit 1
+        fi
+        kill "${disc_pid}" 2>/dev/null || true
+
   js_unit_test:
     name: JS Unit Tests
     runs-on: ubuntu-latest

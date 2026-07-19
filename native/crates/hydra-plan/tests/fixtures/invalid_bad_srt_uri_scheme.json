@@ -1,0 +1,23 @@
+{
+  "route_id": "route-bad-uri",
+  "config_revision": "revision-bad-uri",
+  "process_instance_id": "process-bad-uri",
+  "source": {
+    "id": "source",
+    "kind": "srt",
+    "srt": {
+      "uri": "http://127.0.0.1:9000",
+      "mode": "listener"
+    }
+  },
+  "destinations": [
+    {
+      "id": "dest",
+      "kind": "udp",
+      "udp": {
+        "address": "127.0.0.1",
+        "port": 5000
+      }
+    }
+  ]
+}

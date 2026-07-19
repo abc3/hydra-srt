@@ -3,11 +3,13 @@ defmodule HydraSrt.Mcp.Tools.Destinations do
 
   alias HydraSrt.Destinations
   alias HydraSrt.Mcp.Helpers
+  alias HydraSrt.Mcp.InputSchema
   alias HydraSrt.Mcp.Tools.Routes, as: Schema
 
   @spec definitions() :: [map()]
   def definitions do
     route_id = Schema.string_prop("Route ID")
+    destination_attrs = InputSchema.destination_attributes_schema()
 
     [
       %{
@@ -34,7 +36,7 @@ defmodule HydraSrt.Mcp.Tools.Destinations do
           Schema.object_schema(
             %{
               "route_id" => route_id,
-              "destination" => Schema.object_prop("Destination attributes")
+              "destination" => destination_attrs
             },
             ["route_id", "destination"]
           )
@@ -47,7 +49,7 @@ defmodule HydraSrt.Mcp.Tools.Destinations do
             %{
               "route_id" => route_id,
               "destination_id" => Schema.string_prop("Destination ID"),
-              "destination" => Schema.object_prop("Destination attributes")
+              "destination" => destination_attrs
             },
             ["route_id", "destination_id", "destination"]
           )
@@ -70,7 +72,7 @@ defmodule HydraSrt.Mcp.Tools.Destinations do
   @spec handles?(String.t()) :: boolean()
   def handles?(name), do: name in Enum.map(definitions(), & &1.name)
 
-  @spec call(String.t(), map()) :: {:ok, term()} | {:error, term()}
+  @spec call(String.t(), map()) :: {:ok, term()} | {:error, term()} | :unknown
   def call("list_destinations", args) do
     with {:ok, route_id} <- Schema.param(args, "route_id"),
          result <- Destinations.list(route_id) do
@@ -89,7 +91,11 @@ defmodule HydraSrt.Mcp.Tools.Destinations do
   def call("create_destination", args) do
     with {:ok, route_id} <- Schema.param(args, "route_id"),
          {:ok, destination} <- Schema.map_param(args, "destination"),
-         result <- Destinations.create(route_id, destination) do
+         result <-
+           Destinations.create(
+             route_id,
+             InputSchema.sanitize_destination_attrs(destination)
+           ) do
       {:ok, Helpers.from_result(result)}
     end
   end
@@ -98,7 +104,12 @@ defmodule HydraSrt.Mcp.Tools.Destinations do
     with {:ok, route_id} <- Schema.param(args, "route_id"),
          {:ok, destination_id} <- Schema.param(args, "destination_id"),
          {:ok, destination} <- Schema.map_param(args, "destination"),
-         result <- Destinations.update(route_id, destination_id, destination) do
+         result <-
+           Destinations.update(
+             route_id,
+             destination_id,
+             InputSchema.sanitize_destination_attrs(destination)
+           ) do
       {:ok, Helpers.from_result(result)}
     end
   end

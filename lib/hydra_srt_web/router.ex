@@ -56,6 +56,7 @@ defmodule HydraSrtWeb.Router do
     get "/routes/:route_id/start", RouteController, :start
     get "/routes/:route_id/stop", RouteController, :stop
     get "/routes/:route_id/restart", RouteController, :restart
+    get "/routes/:route_id/endpoint-health", RouteController, :endpoint_health
     post "/routes/:id/switch-source", RouteController, :switch_source
     get "/routes/:route_id/destinations", DestinationController, :index
     post "/routes/:route_id/destinations", DestinationController, :create
@@ -85,6 +86,11 @@ defmodule HydraSrtWeb.Router do
     put "/system/signal-generation", SystemController, :signal_generation_configure
     post "/system/signal-generation/start", SystemController, :signal_generation_start
     post "/system/signal-generation/stop", SystemController, :signal_generation_stop
+    get "/system/ndi/capabilities", NdiCapabilitiesController, :show
+
+    get "/ndi/sources", NdiSourcesController, :index
+    post "/ndi/discovery/refresh", NdiSourcesController, :refresh
+    post "/ndi/probes", NdiProbesController, :create
 
     get "/nodes", NodeController, :index
     get "/nodes/:id", NodeController, :show

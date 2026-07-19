@@ -288,12 +288,12 @@ defmodule HydraSrt.MonitoringTest do
       %{
         pid: 111,
         command:
-          "/Users/sts/dev/hydra/_build/dev/lib/hydra_srt/priv/native/hydra_srt_pipeline route-1"
+          "/Users/sts/dev/hydra/_build/dev/lib/hydra_srt/priv/native/hydra_srt_pipeline route --route-id route-1 --process-instance-id piid-1"
       },
       %{
         pid: 222,
         command:
-          "/Users/sts/dev/hydra/_build/dev/lib/hydra_srt/priv/native/hydra_srt_pipeline route-10"
+          "/Users/sts/dev/hydra/_build/dev/lib/hydra_srt/priv/native/hydra_srt_pipeline route --route-id route-10 --process-instance-id piid-10"
       },
       %{pid: 333, command: "grep route-1"},
       %{pid: 444, command: "/bin/other route-1"}

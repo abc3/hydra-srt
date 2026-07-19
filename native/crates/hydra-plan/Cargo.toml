@@ -1,0 +1,10 @@
+[package]
+name = "hydra-plan"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+ipnet = "2.12.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"

@@ -188,9 +188,14 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     interval_ms = Keyword.get(opts, :interval_ms, 750)
     probe_timeout_ms = Keyword.get(opts, :probe_timeout_ms, 3_500)
 
+    # The per-probe timeout has to scale with the environment like every other
+    # wait here. Pinning it while the surrounding budget scales means a runner
+    # slow enough to need the larger budget cannot finish an RTMP handshake and
+    # stream detection inside a single probe, so every attempt times out and the
+    # extra budget buys nothing.
     wait_until(
       fn ->
-        case ffprobe_streams(url, probe_timeout_ms, scale_timeout: false) do
+        case ffprobe_streams(url, probe_timeout_ms) do
           {:ok, streams} -> rtmp_streams_include_av?(streams)
           _ -> false
         end
@@ -199,7 +204,7 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
       interval_ms
     )
 
-    case ffprobe_streams(url, probe_timeout_ms, scale_timeout: false) do
+    case ffprobe_streams(url, probe_timeout_ms) do
       {:ok, streams} ->
         if rtmp_streams_include_av?(streams) do
           {:ok, %{streams: streams}}

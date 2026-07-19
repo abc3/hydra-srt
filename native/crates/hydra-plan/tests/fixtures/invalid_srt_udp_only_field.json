@@ -1,0 +1,27 @@
+{
+  "route_id": "route-legacy",
+  "config_revision": "revision-legacy",
+  "process_instance_id": "process-legacy",
+  "source": {
+    "id": "legacy-source",
+    "name": "Legacy Source",
+    "kind": "srt",
+    "srt": {
+      "uri": "srt://127.0.0.1:9000?mode=caller",
+      "mode": "caller",
+      "address": "127.0.0.1",
+      "port": 9000
+    }
+  },
+  "destinations": [
+    {
+      "id": "udp-destination",
+      "name": "UDP Destination",
+      "kind": "udp",
+      "udp": {
+        "address": "127.0.0.1",
+        "port": 5000
+      }
+    }
+  ]
+}

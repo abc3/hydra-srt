@@ -1,0 +1,24 @@
+{
+  "route_id": "route-bad-pbkeylen",
+  "config_revision": "revision-bad-pbkeylen",
+  "process_instance_id": "process-bad-pbkeylen",
+  "source": {
+    "id": "source",
+    "kind": "srt",
+    "srt": {
+      "uri": "srt://127.0.0.1:9000?mode=listener",
+      "mode": "listener",
+      "pbkeylen": 8
+    }
+  },
+  "destinations": [
+    {
+      "id": "dest",
+      "kind": "udp",
+      "udp": {
+        "address": "127.0.0.1",
+        "port": 5000
+      }
+    }
+  ]
+}

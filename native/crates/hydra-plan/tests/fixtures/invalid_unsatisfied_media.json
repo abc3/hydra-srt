@@ -1,0 +1,23 @@
+{
+  "route_id": "route-unsatisfied",
+  "config_revision": "revision-unsatisfied",
+  "process_instance_id": "process-unsatisfied",
+  "source": {
+    "id": "audio-source",
+    "kind": "ndi",
+    "ndi": {
+      "source_name": "MACHINE (AUDIO)",
+      "url_address": null,
+      "receiver_name": "Hydra route",
+      "bandwidth": "audio_only",
+      "color_format": "uyvy-bgra",
+      "timestamp_mode": "receive-time-vs-timestamp",
+      "media_policy": "audio_only",
+      "connect_timeout_ms": 10000,
+      "receive_timeout_ms": 5000,
+      "track_discovery_timeout_ms": 10000,
+      "max_queue_length": 4
+    }
+  },
+  "destinations": [{"id":"av-destination","kind":"ndi","ndi":{"sender_name":"Output","media_policy":"video_and_audio_required"}}]
+}

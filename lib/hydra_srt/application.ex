@@ -4,6 +4,7 @@ defmodule HydraSrt.Application do
   require Logger
 
   @impl true
+  @spec start(Application.start_type(), term()) :: {:ok, pid()} | {:error, term()}
   def start(_type, _args) do
     Application.put_env(
       :hydra_srt,
@@ -68,6 +69,14 @@ defmodule HydraSrt.Application do
       rtmp_server_listener,
       HydraSrtWeb.Endpoint
     ]
+
+    # Start the NDI discovery coordinator only when NDI is enabled.
+    children =
+      if HydraSrt.Ndi.FeaturePolicy.enabled?() do
+        children ++ [HydraSrt.Ndi.Discovery]
+      else
+        children
+      end
 
     # Cachex is used by API auth and RTMP stream bootstrap cache; keep them always available.
     rtmp_cache_child = %{

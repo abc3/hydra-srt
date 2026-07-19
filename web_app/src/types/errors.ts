@@ -1,6 +1,9 @@
 export type AppError = {
   message?: string;
   errors?: Record<string, unknown>;
+  // Structured API errors thrown by requestJson carry the parsed body here
+  // (see utils/api.ts), including the stable top-level `code`.
+  payload?: unknown;
 };
 
 export const getErrorMessage = (error: unknown, fallback: string): string => {

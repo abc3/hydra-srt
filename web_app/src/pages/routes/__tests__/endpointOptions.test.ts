@@ -81,4 +81,50 @@ describe('endpointOptions', () => {
     expect(endpoint?.streamid).toBe('#!::r=channel');
     expect(flattenEndpointPayload(endpoint)?.streamid).toBe('#!::r=channel');
   });
+
+  it('normalizes NDI discovery fields and strips client-owned snapshots on flatten', () => {
+    const endpoint = normalizeEndpointForForm({
+      schema: 'NDI',
+      ndi_selection_mode: 'discovery_name',
+      ndi_source_name: ' CAM (A) ',
+      ndi_source_address: 'should-clear',
+      ndi_observed_address_snapshot: '192.0.2.1:5961',
+      selection_token: 'tok-should-not-persist-in-form',
+      ndi_connect_timeout_ms: '500',
+      ndi_max_queue_length: 99,
+    });
+
+    expect(endpoint?.ndi_selection_mode).toBe('discovery_name');
+    expect(endpoint?.ndi_source_name).toBe('CAM (A)');
+    expect(endpoint?.ndi_source_address).toBeNull();
+    expect(endpoint?.selection_token).toBeUndefined();
+    expect(endpoint?.ndi_connect_timeout_ms).toBe(1000);
+    expect(endpoint?.ndi_max_queue_length).toBe(64);
+    expect(endpoint?.ndi_bandwidth).toBe('highest');
+
+    const payload = flattenEndpointPayload({
+      ...endpoint,
+      selection_token: 'fresh-token',
+      ndi_observed_address_snapshot: '192.0.2.1:5961',
+    });
+
+    expect(payload?.selection_token).toBe('fresh-token');
+    expect(payload?.ndi_observed_address_snapshot).toBeUndefined();
+    expect(payload?.ndi_source_name).toBe('CAM (A)');
+  });
+
+  it('normalizes NDI direct-address mode and clears discovery name', () => {
+    const payload = flattenEndpointPayload({
+      schema: 'NDI',
+      ndi_selection_mode: 'direct_address',
+      ndi_source_address: '192.0.2.9:5961',
+      ndi_source_name: 'should-clear',
+      selection_token: 'tok',
+    });
+
+    expect(payload?.ndi_selection_mode).toBe('direct_address');
+    expect(payload?.ndi_source_address).toBe('192.0.2.9:5961');
+    expect(payload?.ndi_source_name).toBeNull();
+    expect(payload?.selection_token).toBeUndefined();
+  });
 });

@@ -4,6 +4,8 @@ defmodule HydraSrt.ProcessMonitor do
 
   alias HydraSrt.Helpers
 
+  @type pipeline_kind :: :route | :ndi_helper | :other
+
   def list_pipeline_processes do
     case :os.type() do
       {:unix, :darwin} -> list_pipeline_processes_darwin()
@@ -52,12 +54,53 @@ defmodule HydraSrt.ProcessMonitor do
     Enum.filter(processes, &route_pipeline_process?(&1, route_id))
   end
 
+  @doc """
+  Classifies a `hydra_srt_pipeline` OS process.
+
+  - `:route` — route media process (`route --route-id ...`)
+  - `:ndi_helper` — discovery/probe helper (`ndi-discovery` / `ndi-probe`); excluded from route cleanup
+  - `:other` — not a pipeline binary invocation
+  """
+  @spec pipeline_process_kind(%{optional(:command) => String.t()} | map()) :: pipeline_kind()
+  def pipeline_process_kind(%{command: command}) when is_binary(command) do
+    pipeline_process_kind_from_args(command_args(command))
+  end
+
+  def pipeline_process_kind(_process), do: :other
+
+  @spec pipeline_process_kind_from_args([String.t()]) :: pipeline_kind()
+  def pipeline_process_kind_from_args(args) when is_list(args) do
+    case pipeline_binary_index(args) do
+      nil ->
+        :other
+
+      index ->
+        # Subcommand is the token immediately after the binary path — not bare
+        # argv membership (a route id / flag value of "ndi-discovery" must stay :route).
+        case Enum.at(args, index + 1) do
+          "ndi-discovery" -> :ndi_helper
+          "ndi-probe" -> :ndi_helper
+          _ -> :route
+        end
+    end
+  end
+
+  @spec pipeline_binary_index([String.t()]) :: non_neg_integer() | nil
+  def pipeline_binary_index(args) when is_list(args) do
+    Enum.find_index(args, &(Path.basename(&1) == "hydra_srt_pipeline"))
+  end
+
+  @spec command_args(String.t()) :: [String.t()]
+  def command_args(command) when is_binary(command) do
+    String.split(command, ~r/\s+/, trim: true)
+  end
+
   @doc false
+  @spec route_pipeline_process?(map(), String.t()) :: boolean()
   def route_pipeline_process?(%{command: command}, route_id)
       when is_binary(command) and is_binary(route_id) do
-    args = String.split(command, ~r/\s+/, trim: true)
-
-    Enum.any?(args, &(Path.basename(&1) == "hydra_srt_pipeline")) and route_id in args
+    args = command_args(command)
+    pipeline_process_kind_from_args(args) == :route and route_id in args
   end
 
   def route_pipeline_process?(_process, _route_id), do: false

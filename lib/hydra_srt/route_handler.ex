@@ -4,21 +4,160 @@ defmodule HydraSrt.RouteHandler do
   require Logger
   @behaviour :gen_statem
   @normal_port_exit_reasons [:normal, :epipe]
-  @retry_restart_interval_ms 5_000
+
+  # Hard-retry backoff: exponential with decorrelated jitter, a ceiling, and a
+  # circuit breaker after the maximum attempts. The retry budget is re-derived on
+  # boot recovery and is not persisted across restarts.
+  @retry_base_ms :timer.seconds(1)
+  @retry_ceiling_ms :timer.seconds(30)
+  @retry_max_attempts 5
 
   alias HydraSrt.Db
   alias HydraSrt.Helpers
+  alias HydraSrt.Ndi.FeaturePolicy
   alias HydraSrt.SystemInterfaces
   alias HydraSrt.Stats.EventLogger
   import Bitwise
 
+  @ndi_default_media_policy "video_and_audio_required"
+  @ndi_default_bandwidth "highest"
+  @ndi_default_color_format "uyvy-bgra"
+  @ndi_default_connect_timeout_ms 10_000
+  @ndi_default_receive_timeout_ms 5_000
+  @ndi_default_track_discovery_timeout_ms 10_000
+  @ndi_default_max_queue_length 4
+
+  @type source_loss_signal :: :reconnecting | :zero_bitrate
+
+  @type json_map :: %{optional(String.t()) => term()}
+
+  @type route_terminal_t :: %{
+          reason_code: String.t() | nil,
+          retryable: boolean() | nil,
+          retry_domain: String.t() | nil,
+          detail: String.t() | nil,
+          observed_at_ms: integer() | nil,
+          sequence: integer() | nil
+        }
+
+  @type endpoint_health_payload :: json_map()
+  @type route_terminal_payload :: json_map()
+
+  @type data_t :: %{
+          required(:id) => String.t(),
+          required(:port) => port() | nil,
+          required(:route) => json_map(),
+          required(:port_buffer) => String.t(),
+          required(:shutdown_reason) => term() | nil,
+          required(:active_source_id) => String.t() | nil,
+          required(:last_manual_source_id) => String.t() | nil,
+          required(:process_instance_id) => String.t() | nil,
+          required(:endpoint_health) => %{optional(String.t()) => endpoint_health_payload()},
+          required(:route_terminal) => route_terminal_t() | nil,
+          required(:source_loss_since_ms) => integer() | nil,
+          required(:source_loss_signal) => source_loss_signal() | nil,
+          required(:cooldown_until) => integer() | nil,
+          required(:primary_stable_since_ms) => integer() | nil,
+          required(:last_primary_probe_ms) => integer() | nil,
+          required(:primary_probe_inflight?) => boolean(),
+          required(:retry_scheduled?) => boolean(),
+          required(:retry_attempt) => non_neg_integer(),
+          required(:retry_prev_backoff_ms) => non_neg_integer() | nil,
+          required(:retry_circuit_open?) => boolean(),
+          required(:recovery_blocked?) => boolean(),
+          required(:recovering?) => boolean(),
+          optional(:now_ms) => integer(),
+          optional(:source_loss_elapsed_ms) => non_neg_integer()
+        }
+
+  @type typed_endpoint :: json_map()
+  @type native_config :: json_map()
+
+  @type native_json_parse_result ::
+          {:pipeline_status, String.t(), String.t() | nil}
+          | {:srt_access, json_map()}
+          | {:pipeline_log, json_map()}
+          | {:endpoint_health, endpoint_health_payload()}
+          | {:route_terminal, route_terminal_payload()}
+          | {:stats, json_map()}
+          | :unknown
+
+  @type endpoint_health_identity :: %{
+          process_instance_id: String.t() | nil,
+          config_revision: String.t() | nil,
+          last_sequence: non_neg_integer(),
+          endpoint_health: %{optional(String.t()) => endpoint_health_payload()}
+        }
+
+  @endpoint_health_call_timeout_ms :timer.seconds(5)
+
+  @spec start_link(map()) :: {:ok, pid()} | {:error, term()}
   def start_link(args), do: :gen_statem.start_link(__MODULE__, args, [])
 
+  @spec switch_source(pid(), String.t()) :: :ok
+  @spec switch_source(pid(), String.t(), String.t()) :: :ok
   def switch_source(pid, source_id, reason \\ "manual"),
     do: :gen_statem.cast(pid, {:switch_source, source_id, reason})
 
+  @spec switch_source_sync(pid(), String.t()) :: term()
+  @spec switch_source_sync(pid(), String.t(), String.t()) :: term()
+  @spec switch_source_sync(pid(), String.t(), String.t(), timeout()) :: term()
   def switch_source_sync(pid, source_id, reason \\ "manual", timeout \\ 15_000),
     do: :gen_statem.call(pid, {:switch_source, source_id, reason}, timeout)
+
+  @doc """
+  Returns the live endpoint-health map plus process identity from a RouteHandler.
+
+  Uses a bounded `:gen_statem.call` timeout so HTTP snapshot handlers cannot hang.
+  """
+  @spec get_endpoint_health(pid()) :: {:ok, endpoint_health_identity()} | {:error, term()}
+  def get_endpoint_health(pid) when is_pid(pid),
+    do: get_endpoint_health(pid, @endpoint_health_call_timeout_ms)
+
+  @spec get_endpoint_health(pid(), timeout()) ::
+          {:ok, endpoint_health_identity()} | {:error, term()}
+  def get_endpoint_health(pid, timeout) when is_pid(pid) do
+    try do
+      :gen_statem.call(pid, :get_endpoint_health, timeout)
+    catch
+      :exit, reason -> {:error, reason}
+    end
+  end
+
+  @spec endpoint_health_identity(data_t()) :: endpoint_health_identity()
+  def endpoint_health_identity(data) when is_map(data) do
+    health = data[:endpoint_health] || %{}
+
+    %{
+      process_instance_id: data[:process_instance_id],
+      config_revision: config_revision_from_health(health),
+      last_sequence: last_sequence_from_health(health),
+      endpoint_health: health
+    }
+  end
+
+  @spec config_revision_from_health(%{optional(String.t()) => endpoint_health_payload()}) ::
+          String.t() | nil
+  def config_revision_from_health(health) when is_map(health) do
+    health
+    |> Map.values()
+    |> Enum.find_value(fn
+      %{"config_revision" => revision} when is_binary(revision) and revision != "" -> revision
+      _ -> nil
+    end)
+  end
+
+  @spec last_sequence_from_health(%{optional(String.t()) => endpoint_health_payload()}) ::
+          non_neg_integer()
+  def last_sequence_from_health(health) when is_map(health) do
+    Enum.reduce(Map.values(health), 0, fn
+      %{"sequence" => sequence}, acc when is_integer(sequence) and sequence > acc ->
+        sequence
+
+      _payload, acc ->
+        acc
+    end)
+  end
 
   @impl true
   def callback_mode, do: [:handle_event_function]
@@ -38,13 +177,21 @@ defmodule HydraSrt.RouteHandler do
       shutdown_reason: nil,
       active_source_id: route["active_source_id"],
       last_manual_source_id: nil,
-      zero_bitrate_ticks: 0,
-      reconnecting_since_ms: nil,
+      process_instance_id: nil,
+      endpoint_health: %{},
+      route_terminal: nil,
+      # Soft source-loss window (merged triggers B+C): one debounce clock.
+      source_loss_since_ms: nil,
+      source_loss_signal: nil,
       cooldown_until: nil,
       primary_stable_since_ms: nil,
       last_primary_probe_ms: nil,
       primary_probe_inflight?: false,
       retry_scheduled?: false,
+      retry_attempt: 0,
+      retry_prev_backoff_ms: nil,
+      retry_circuit_open?: false,
+      recovery_blocked?: false,
       recovering?: false
     }
 
@@ -59,19 +206,35 @@ defmodule HydraSrt.RouteHandler do
       open_and_initialize_native_pipeline(data.route, data.id, data.active_source_id)
 
     case port do
-      {:ok, port} ->
+      {:ok, port, process_instance_id} ->
         HydraSrt.mark_route_started(data.id)
 
         {:next_state, :started,
-         %{data | port: port, zero_bitrate_ticks: 0, reconnecting_since_ms: nil}}
+         %{
+           data
+           | port: port,
+             process_instance_id: process_instance_id,
+             endpoint_health: %{},
+             route_terminal: nil,
+             source_loss_since_ms: nil,
+             source_loss_signal: nil,
+             retry_attempt: 0,
+             retry_prev_backoff_ms: nil,
+             retry_circuit_open?: false,
+             recovery_blocked?: false
+         }}
 
       {:error, reason} ->
         Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
 
         next_data =
-          data
-          |> mark_restarting_runtime()
-          |> schedule_retry_restart()
+          if policy_deny_reason?(reason) do
+            mark_terminal_failure(data, reason)
+          else
+            data
+            |> mark_restarting_runtime()
+            |> schedule_retry_restart()
+          end
 
         {:keep_state, next_data}
     end
@@ -107,12 +270,7 @@ defmodule HydraSrt.RouteHandler do
     if status == 0 do
       {:stop, :normal, %{data | shutdown_reason: {:port_exit, 0}}}
     else
-      next_data =
-        data
-        |> mark_restarting_runtime()
-        |> Map.put(:port, nil)
-        |> schedule_retry_restart()
-
+      next_data = maybe_schedule_hard_retry_after_process_loss(%{data | port: nil})
       {:keep_state, next_data}
     end
   end
@@ -131,12 +289,7 @@ defmodule HydraSrt.RouteHandler do
     if reason in @normal_port_exit_reasons do
       {:stop, :normal, %{data | shutdown_reason: {:port_exit, reason}}}
     else
-      next_data =
-        data
-        |> mark_restarting_runtime()
-        |> Map.put(:port, nil)
-        |> schedule_retry_restart()
-
+      next_data = maybe_schedule_hard_retry_after_process_loss(%{data | port: nil})
       {:keep_state, next_data}
     end
   end
@@ -147,9 +300,13 @@ defmodule HydraSrt.RouteHandler do
 
   def handle_event(:info, :retry_start, _state, data) do
     next_data =
-      data
-      |> Map.put(:retry_scheduled?, false)
-      |> retry_pipeline_start()
+      if Map.get(data, :recovery_blocked?, false) or Map.get(data, :retry_circuit_open?, false) do
+        %{data | retry_scheduled?: false}
+      else
+        data
+        |> Map.put(:retry_scheduled?, false)
+        |> retry_pipeline_start()
+      end
 
     {:keep_state, next_data}
   end
@@ -161,6 +318,10 @@ defmodule HydraSrt.RouteHandler do
       {:error, _reason, next_data} -> {:keep_state, next_data}
       {:error, _reason} -> {:keep_state, data}
     end
+  end
+
+  def handle_event({:call, from}, :get_endpoint_health, _state, data) do
+    {:keep_state, data, [{:reply, from, {:ok, endpoint_health_identity(data)}}]}
   end
 
   def handle_event({:call, from}, {:switch_source, source_id, reason}, _state, data)
@@ -253,17 +414,19 @@ defmodule HydraSrt.RouteHandler do
   end
 
   defp open_and_initialize_native_pipeline(route, route_id, source_id) do
-    route
-    |> start_native_pipeline()
-    |> initialize_native_pipeline(route_id, source_id, true)
+    with {:ok, params} <- route_data_to_params(route_id, source_id) do
+      route
+      |> start_native_pipeline(params["process_instance_id"])
+      |> initialize_native_pipeline(route_id, source_id, params, true)
+    end
   end
 
-  defp initialize_native_pipeline(port, route_id, source_id, retry_on_closed?) do
+  defp initialize_native_pipeline(port, route_id, source_id, params, retry_on_closed?) do
     Logger.info("RouteHandler: Started port: #{inspect(port)}")
 
-    case send_initial_command(port, route_id, source_id) do
+    case send_initial_command(port, params) do
       :ok ->
-        {:ok, port}
+        {:ok, port, params["process_instance_id"]}
 
       {:error, :closed} when retry_on_closed? ->
         kill_stale_pipeline_processes(route_id, "failed_start_closed")
@@ -272,9 +435,11 @@ defmodule HydraSrt.RouteHandler do
         |> Db.get_route(true)
         |> case do
           {:ok, route} ->
-            route
-            |> start_native_pipeline()
-            |> initialize_native_pipeline(route_id, source_id, false)
+            with {:ok, retry_params} <- route_data_to_params(route_id, source_id) do
+              route
+              |> start_native_pipeline(retry_params["process_instance_id"])
+              |> initialize_native_pipeline(route_id, source_id, retry_params, false)
+            end
 
           {:error, reason} ->
             {:error, reason}
@@ -287,9 +452,10 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  defp start_native_pipeline(route) do
+  @spec start_native_pipeline(map(), String.t()) :: port()
+  def start_native_pipeline(route, process_instance_id) do
     binary_path = get_binary_path()
-    args = [to_string(route["id"])]
+    args = native_route_args(to_string(route["id"]), process_instance_id)
 
     base_opts = [
       :stderr_to_stdout,
@@ -300,14 +466,7 @@ defmodule HydraSrt.RouteHandler do
       args: Enum.map(args, &String.to_charlist/1)
     ]
 
-    env_opts =
-      case route["gstDebug"] do
-        debug when is_binary(debug) and debug != "" ->
-          [env: [{~c"GST_DEBUG", String.to_charlist(debug)}, {~c"GST_DEBUG_NO_COLOR", ~c"1"}]]
-
-        _ ->
-          [env: [{~c"GST_DEBUG", ~c"0"}, {~c"GST_DEBUG_NO_COLOR", ~c"1"}]]
-      end
+    env_opts = [env: native_pipeline_port_env(route["gstDebug"])]
 
     Logger.info(
       "RouteHandler: start_native_pipeline: #{binary_path} #{Enum.join(args, " ")}: #{inspect(route["gstDebug"])}"
@@ -316,13 +475,53 @@ defmodule HydraSrt.RouteHandler do
     Port.open({:spawn_executable, String.to_charlist(binary_path)}, base_opts ++ env_opts)
   end
 
+  @doc """
+  Port env for the native pipeline process.
+
+  Always sets `GST_DEBUG` / `GST_DEBUG_NO_COLOR`. When `HYDRA_NDI_RUNTIME_DIR` is
+  set, also exports `NDI_RUNTIME_DIR_V6` so `gst-plugin-ndi` can dlopen `libndi`.
+  """
+  @spec native_pipeline_port_env(term()) :: [{charlist(), charlist()}]
+  def native_pipeline_port_env(gst_debug) do
+    gst =
+      case gst_debug do
+        debug when is_binary(debug) and debug != "" ->
+          [{~c"GST_DEBUG", String.to_charlist(debug)}, {~c"GST_DEBUG_NO_COLOR", ~c"1"}]
+
+        _ ->
+          [{~c"GST_DEBUG", ~c"0"}, {~c"GST_DEBUG_NO_COLOR", ~c"1"}]
+      end
+
+    gst ++ ndi_runtime_port_env()
+  end
+
+  @doc """
+  Maps product knob `HYDRA_NDI_RUNTIME_DIR` to the NDI SDK env `NDI_RUNTIME_DIR_V6`.
+
+  Returns an empty list when the product knob is unset or blank.
+  """
+  @spec ndi_runtime_port_env() :: [{charlist(), charlist()}]
+  def ndi_runtime_port_env do
+    case System.get_env("HYDRA_NDI_RUNTIME_DIR") do
+      dir when is_binary(dir) and dir != "" ->
+        [{~c"NDI_RUNTIME_DIR_V6", String.to_charlist(dir)}]
+
+      _ ->
+        []
+    end
+  end
+
+  @spec native_route_args(String.t(), String.t()) :: [String.t()]
+  def native_route_args(route_id, process_instance_id) do
+    ["route", "--route-id", route_id, "--process-instance-id", process_instance_id]
+  end
+
   defp get_binary_path do
     Path.join([:code.priv_dir(:hydra_srt), "native", "hydra_srt_pipeline"])
   end
 
-  defp send_initial_command(port, route_id, source_id) do
-    with {:ok, params} <- route_data_to_params(route_id, source_id),
-         {:ok, params} <- Jason.encode(params),
+  defp send_initial_command(port, params) do
+    with {:ok, params} <- Jason.encode(params),
          payload = params <> "\n",
          _ = Logger.info("RouteHandler: initial command payload: #{params}"),
          :ok <- command_port(port, payload) do
@@ -381,6 +580,7 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
+  @spec consume_port_output(binary(), data_t()) :: data_t()
   def consume_port_output(chunk, data) when is_binary(chunk) and is_map(data) do
     [buffer | completed_lines] =
       (data.port_buffer <> chunk)
@@ -394,9 +594,10 @@ defmodule HydraSrt.RouteHandler do
     end)
   end
 
-  defp process_port_line("", data), do: data
+  @spec process_port_line(String.t(), data_t()) :: data_t()
+  def process_port_line("", data), do: data
 
-  defp process_port_line("route_id:" <> route_id, data) do
+  def process_port_line("route_id:" <> route_id, data) do
     if route_id != data.id do
       Logger.warning("RouteHandler: route_id mismatch from native pipeline: #{inspect(route_id)}")
     end
@@ -404,9 +605,9 @@ defmodule HydraSrt.RouteHandler do
     data
   end
 
-  defp process_port_line("stats_source_stream_id:" <> _stream_id, data), do: data
+  def process_port_line("stats_source_stream_id:" <> _stream_id, data), do: data
 
-  defp process_port_line("{" <> _ = json, data) do
+  def process_port_line("{" <> _ = json, data) do
     case parse_native_json_line(json) do
       {:pipeline_status, status, reason} ->
         Logger.info("RouteHandler: pipeline_status=#{status} reason=#{inspect(reason)}")
@@ -415,10 +616,10 @@ defmodule HydraSrt.RouteHandler do
           case status do
             "reconnecting" ->
               EventLogger.log_pipeline_reconnecting(data.id, data.active_source_id)
-              maybe_failover(data, :reconnecting)
+              observe_source_loss(data, :reconnecting)
 
             "processing" ->
-              %{data | reconnecting_since_ms: nil, recovering?: false}
+              clear_source_loss_window(%{data | recovering?: false})
 
             "failed" ->
               EventLogger.log_pipeline_failed(
@@ -428,7 +629,13 @@ defmodule HydraSrt.RouteHandler do
                 "Pipeline reported failed status"
               )
 
-              schedule_retry_restart(data)
+              # Prefer route_terminal when present; otherwise hard-retry (A).
+              if Map.get(data, :recovery_blocked?, false) or
+                   non_retryable_terminal?(data[:route_terminal]) do
+                data
+              else
+                schedule_retry_restart(data)
+              end
 
             _ ->
               data
@@ -462,13 +669,19 @@ defmodule HydraSrt.RouteHandler do
         publish_native_pipeline_log(data.id, log)
         data
 
+      {:endpoint_health, payload} ->
+        apply_endpoint_health_event(data, payload)
+
+      {:route_terminal, payload} ->
+        apply_route_terminal_event(data, payload)
+
       :unknown ->
         Logger.warning("RouteHandler: unknown native json line: #{inspect(json)}")
         data
     end
   end
 
-  defp process_port_line(line, data) do
+  def process_port_line(line, data) do
     {:message_queue_len, len} = Process.info(self(), :message_queue_len)
 
     if len < 500 do
@@ -492,24 +705,83 @@ defmodule HydraSrt.RouteHandler do
     data
   end
 
-  defp maybe_handle_zero_bitrate(data, stats) do
+  @spec maybe_handle_zero_bitrate(data_t(), json_map()) :: data_t()
+  def maybe_handle_zero_bitrate(data, stats) when is_map(data) and is_map(stats) do
     bytes_in = get_in(stats, ["source", "bytes_in_per_sec"])
 
     if is_number(bytes_in) and bytes_in == 0 do
-      data
-      |> Map.update!(:zero_bitrate_ticks, &(&1 + 1))
-      |> maybe_failover(:zero_bitrate)
+      observe_source_loss(data, :zero_bitrate)
     else
-      if data.recovering? do
-        HydraSrt.set_route_runtime_status(data.id, "processing")
-        %{data | zero_bitrate_ticks: 0, recovering?: false}
+      clear_source_loss_on_bitrate_recovery(data)
+    end
+  end
+
+  @spec clear_source_loss_on_bitrate_recovery(data_t()) :: data_t()
+  def clear_source_loss_on_bitrate_recovery(data) when is_map(data) do
+    if data.recovering? do
+      HydraSrt.set_route_runtime_status(data.id, "processing")
+      clear_source_loss_window(%{data | recovering?: false})
+    else
+      clear_source_loss_window(data)
+    end
+  end
+
+  @spec clear_source_loss_window(data_t()) :: data_t()
+  def clear_source_loss_window(data) when is_map(data) do
+    %{data | source_loss_since_ms: nil, source_loss_signal: nil}
+  end
+
+  @spec observe_source_loss(data_t(), source_loss_signal()) :: data_t()
+  def observe_source_loss(data, signal)
+      when is_map(data) and signal in [:reconnecting, :zero_bitrate] do
+    # Single soft owner: do not race hard-retry / circuit / non-retryable terminal.
+    if Map.get(data, :retry_scheduled?, false) or Map.get(data, :retry_circuit_open?, false) or
+         Map.get(data, :recovery_blocked?, false) do
+      data
+    else
+      now = now_ms()
+      since = data[:source_loss_since_ms] || now
+
+      data = %{
+        data
+        | source_loss_since_ms: since,
+          source_loss_signal: signal
+      }
+
+      eval_data = Map.merge(data, %{now_ms: now, source_loss_elapsed_ms: max(now - since, 0)})
+
+      if should_trigger_source_loss_failover?(eval_data) do
+        trigger_source_loss_failover(data)
       else
-        %{data | zero_bitrate_ticks: 0}
+        data
       end
     end
   end
 
-  defp maybe_probe_primary_recovery(data) do
+  @spec trigger_source_loss_failover(data_t()) :: data_t()
+  def trigger_source_loss_failover(data) when is_map(data) do
+    reason =
+      case data[:source_loss_signal] do
+        :zero_bitrate -> "source_loss"
+        :reconnecting -> "source_loss"
+        _ -> "source_loss"
+      end
+
+    case next_source_for_failover(data) do
+      nil ->
+        data
+
+      next_source ->
+        case failover_to_source(data, next_source["id"], reason) do
+          {:ok, next_data} -> next_data
+          {:error, _reason, next_data} -> next_data
+          {:error, _} -> data
+        end
+    end
+  end
+
+  @spec maybe_probe_primary_recovery(data_t()) :: data_t()
+  def maybe_probe_primary_recovery(data) when is_map(data) do
     mode = backup_mode(data.route)
 
     with true <- mode == "active",
@@ -543,52 +815,18 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  defp maybe_failover(data, reason) when reason in [:zero_bitrate, :reconnecting, :failed] do
-    now_ms = now_ms()
-
-    reconnecting_elapsed_ms =
-      case data.reconnecting_since_ms do
-        nil -> 0
-        started when is_integer(started) -> max(now_ms - started, 0)
-      end
-
-    reconnecting_since_ms =
-      if reason == :reconnecting do
-        data.reconnecting_since_ms || now_ms
-      else
-        data.reconnecting_since_ms
-      end
-
-    eval_data =
-      data
-      |> Map.put(:now_ms, now_ms)
-      |> Map.put(:reconnecting_elapsed_ms, reconnecting_elapsed_ms)
-
-    if should_trigger_failover?(eval_data, reason) do
-      case next_source_for_failover(data) do
-        nil ->
-          data
-
-        next_source ->
-          case failover_to_source(data, next_source["id"], Atom.to_string(reason)) do
-            {:ok, next_data} -> next_data
-            {:error, _reason, next_data} -> next_data
-            {:error, _} -> data
-          end
-      end
-    else
-      %{data | reconnecting_since_ms: reconnecting_since_ms}
-    end
-  end
-
-  defp next_source_for_failover(data) do
+  @spec next_source_for_failover(data_t()) :: json_map() | nil
+  def next_source_for_failover(data) when is_map(data) do
     mode = backup_mode(data.route)
     sources = get_in(data, [:route, "sources"]) || []
 
     failover_target_source(sources, data.active_source_id, mode)
   end
 
-  defp failover_to_source(data, source_id, reason) do
+  @spec failover_to_source(data_t(), String.t(), String.t()) ::
+          {:ok, data_t()} | {:error, term()} | {:error, term(), data_t()}
+  def failover_to_source(data, source_id, reason)
+      when is_map(data) and is_binary(source_id) and is_binary(reason) do
     route_id = data.id
 
     with {:ok, route} <- Db.get_route(route_id, true),
@@ -599,7 +837,7 @@ defmodule HydraSrt.RouteHandler do
 
       with :ok <- close_existing_port(next_data.port) do
         case open_and_initialize_native_pipeline(route, route_id, source_id) do
-          {:ok, port} ->
+          {:ok, port, process_instance_id} ->
             case Db.set_route_active_source(route_id, source_id, persist_reason) do
               {:ok, _route} ->
                 cooldown_ms = backup_cooldown_ms(route)
@@ -616,17 +854,24 @@ defmodule HydraSrt.RouteHandler do
                    next_data
                    | route: route,
                      port: port,
+                     process_instance_id: process_instance_id,
+                     endpoint_health: %{},
+                     route_terminal: nil,
                      active_source_id: source_id,
                      last_manual_source_id: last_manual_source_id,
-                     zero_bitrate_ticks: 0,
-                     reconnecting_since_ms: nil,
+                     source_loss_since_ms: nil,
+                     source_loss_signal: nil,
                      cooldown_until: now_ms() + cooldown_ms,
                      primary_stable_since_ms: nil,
                      primary_probe_inflight?: false,
+                     retry_attempt: 0,
+                     retry_prev_backoff_ms: nil,
+                     retry_circuit_open?: false,
+                     recovery_blocked?: false,
                      recovering?: true
                  }}
 
-              {:error, reason} ->
+              {:error, db_reason} ->
                 close_existing_port(port)
 
                 failed_data =
@@ -634,25 +879,29 @@ defmodule HydraSrt.RouteHandler do
                   |> Map.put(:port, nil)
                   |> schedule_retry_restart()
 
-                {:error, reason, failed_data}
+                {:error, db_reason, failed_data}
             end
 
-          {:error, reason} ->
+          {:error, start_reason} ->
             failed_data =
-              next_data
-              |> Map.put(:port, nil)
-              |> schedule_retry_restart()
+              if policy_deny_reason?(start_reason) do
+                mark_terminal_failure(%{next_data | port: nil}, start_reason)
+              else
+                next_data
+                |> Map.put(:port, nil)
+                |> schedule_retry_restart()
+              end
 
-            {:error, reason, failed_data}
+            {:error, start_reason, failed_data}
         end
       end
     else
-      {:error, reason} ->
+      {:error, fail_reason} ->
         Logger.warning(
-          "RouteHandler: failover failed route_id=#{route_id} reason=#{inspect(reason)}"
+          "RouteHandler: failover failed route_id=#{route_id} reason=#{inspect(fail_reason)}"
         )
 
-        {:error, reason}
+        {:error, fail_reason}
 
       false ->
         {:error, :invalid_source}
@@ -661,8 +910,9 @@ defmodule HydraSrt.RouteHandler do
 
   # Keep operator intent in `last_switch_reason` when automatic failovers bounce the pipeline
   # (same source, or return to a source the operator last chose via API "manual").
-  defp switch_reason_for_persist(route, source_id, reason, data)
-       when is_map(route) and is_map(data) and is_binary(source_id) and is_binary(reason) do
+  @spec switch_reason_for_persist(json_map(), String.t(), String.t(), data_t()) :: String.t()
+  def switch_reason_for_persist(route, source_id, reason, data)
+      when is_map(route) and is_map(data) and is_binary(source_id) and is_binary(reason) do
     current_active_id = Map.get(route, "active_source_id")
     prior = Map.get(route, "last_switch_reason")
     manual_id = data[:last_manual_source_id]
@@ -671,11 +921,11 @@ defmodule HydraSrt.RouteHandler do
       reason in ["manual", "primary_recovered"] ->
         reason
 
-      reason in ["zero_bitrate", "reconnecting", "failed"] and is_binary(manual_id) and
+      reason in ["source_loss", "zero_bitrate", "reconnecting"] and is_binary(manual_id) and
           source_id == manual_id ->
         "manual"
 
-      reason in ["zero_bitrate", "reconnecting", "failed"] and source_id == current_active_id and
+      reason in ["source_loss", "zero_bitrate", "reconnecting"] and source_id == current_active_id and
           prior == "manual" ->
         "manual"
 
@@ -684,23 +934,161 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  defp now_ms, do: System.monotonic_time(:millisecond)
+  @spec now_ms() :: integer()
+  def now_ms, do: System.monotonic_time(:millisecond)
 
-  defp close_existing_port(port) when is_port(port) do
+  @spec close_existing_port(port() | nil | term()) :: :ok
+  def close_existing_port(port) when is_port(port) do
     close_port(port)
     :ok
   end
 
-  defp close_existing_port(_), do: :ok
+  def close_existing_port(_), do: :ok
 
-  defp schedule_retry_restart(%{retry_scheduled?: true} = data), do: data
-
-  defp schedule_retry_restart(data) do
-    Process.send_after(self(), :retry_start, @retry_restart_interval_ms)
-    %{data | retry_scheduled?: true}
+  @spec maybe_schedule_hard_retry_after_process_loss(data_t()) :: data_t()
+  def maybe_schedule_hard_retry_after_process_loss(data) when is_map(data) do
+    if Map.get(data, :recovery_blocked?, false) or Map.get(data, :retry_circuit_open?, false) or
+         non_retryable_terminal?(data[:route_terminal]) do
+      data
+    else
+      data
+      |> mark_restarting_runtime()
+      |> schedule_retry_restart()
+    end
   end
 
-  defp mark_restarting_runtime(data) do
+  @spec schedule_retry_restart(data_t()) :: data_t()
+  def schedule_retry_restart(%{retry_scheduled?: true} = data), do: data
+
+  def schedule_retry_restart(%{retry_circuit_open?: true} = data), do: data
+
+  def schedule_retry_restart(%{recovery_blocked?: true} = data), do: data
+
+  def schedule_retry_restart(data) when is_map(data) do
+    attempt = Map.get(data, :retry_attempt, 0)
+
+    if attempt >= @retry_max_attempts do
+      open_retry_circuit(data)
+    else
+      next_attempt = attempt + 1
+      delay_ms = next_retry_backoff_ms(Map.get(data, :retry_prev_backoff_ms), next_attempt)
+
+      Logger.info(
+        "RouteHandler: scheduling hard-retry attempt=#{next_attempt}/#{@retry_max_attempts} backoff_ms=#{delay_ms} route_id=#{data.id}"
+      )
+
+      Process.send_after(self(), :retry_start, delay_ms)
+
+      %{
+        data
+        | retry_scheduled?: true,
+          retry_attempt: next_attempt,
+          retry_prev_backoff_ms: delay_ms
+      }
+    end
+  end
+
+  @doc """
+  Exponential backoff (base 1s, ×2, ceiling 30s) with AWS-style decorrelated jitter:
+
+      min(ceiling, random_between(base, max(exp_base, previous) * 3))
+  """
+  @spec next_retry_backoff_ms(nil | non_neg_integer()) :: pos_integer()
+  def next_retry_backoff_ms(previous_ms), do: next_retry_backoff_ms(previous_ms, 1)
+
+  @spec next_retry_backoff_ms(nil | non_neg_integer(), pos_integer()) :: pos_integer()
+  def next_retry_backoff_ms(previous_ms, attempt)
+      when (is_nil(previous_ms) or (is_integer(previous_ms) and previous_ms >= 0)) and
+             is_integer(attempt) and attempt >= 1 do
+    shift = min(attempt - 1, 5)
+    exp_base = min(@retry_ceiling_ms, @retry_base_ms * Integer.pow(2, shift))
+    prev = previous_ms || @retry_base_ms
+    seed = max(exp_base, prev)
+    upper = min(@retry_ceiling_ms, seed * 3)
+    lower = @retry_base_ms
+
+    if upper <= lower do
+      lower
+    else
+      :rand.uniform(upper - lower + 1) + lower - 1
+    end
+  end
+
+  @spec open_retry_circuit(data_t()) :: data_t()
+  def open_retry_circuit(data) when is_map(data) do
+    Logger.error(
+      "RouteHandler: retry circuit open route_id=#{data.id} attempts=#{Map.get(data, :retry_attempt, 0)} — operator action required"
+    )
+
+    EventLogger.log_pipeline_failed(
+      data.id,
+      data.active_source_id,
+      "RETRY_CIRCUIT_OPEN",
+      "Retry budget exhausted; operator action required"
+    )
+
+    _ = HydraSrt.mark_route_failed(data.id)
+
+    %{
+      data
+      | retry_circuit_open?: true,
+        retry_scheduled?: false,
+        recovering?: false,
+        recovery_blocked?: true
+    }
+  end
+
+  @spec policy_deny_reason?(term()) :: boolean()
+  def policy_deny_reason?(reason) when is_binary(reason), do: reason == "NDI_DISABLED"
+  def policy_deny_reason?(_), do: false
+
+  @spec non_retryable_terminal?(route_terminal_t() | route_terminal_payload() | nil) :: boolean()
+  def non_retryable_terminal?(%{retryable: false}), do: true
+  def non_retryable_terminal?(%{"retryable" => false}), do: true
+  def non_retryable_terminal?(_), do: false
+
+  @spec mark_terminal_failure(data_t(), String.t() | atom() | term(), String.t() | nil) ::
+          data_t()
+  def mark_terminal_failure(data, reason, detail \\ nil) when is_map(data) do
+    reason_code =
+      cond do
+        is_binary(reason) -> reason
+        is_atom(reason) -> Atom.to_string(reason)
+        true -> "ROUTE_TERMINAL"
+      end
+
+    Logger.error(
+      "RouteHandler: terminal failure (no retry) route_id=#{data.id} reason=#{inspect(reason_code)} detail=#{inspect(detail)}"
+    )
+
+    EventLogger.log_pipeline_failed(
+      data.id,
+      data.active_source_id,
+      reason_code,
+      terminal_failure_message(detail)
+    )
+
+    _ = HydraSrt.mark_route_failed(data.id)
+
+    %{
+      data
+      | recovery_blocked?: true,
+        retry_scheduled?: false,
+        recovering?: false,
+        source_loss_since_ms: nil,
+        source_loss_signal: nil
+    }
+  end
+
+  @spec terminal_failure_message(String.t() | nil) :: String.t()
+  def terminal_failure_message(detail) when is_binary(detail) and detail != "" do
+    "Terminal failure; auto-retry suppressed: #{detail}"
+  end
+
+  def terminal_failure_message(_), do: "Terminal failure; auto-retry suppressed"
+
+  @spec mark_restarting_runtime(data_t()) :: data_t()
+  def mark_restarting_runtime(data) when is_map(data) do
     case HydraSrt.set_route_runtime_status(data.id, "restarting") do
       {:ok, _route} ->
         :ok
@@ -712,23 +1100,32 @@ defmodule HydraSrt.RouteHandler do
     %{data | recovering?: true}
   end
 
-  defp retry_pipeline_start(data) do
+  @spec retry_pipeline_start(data_t()) :: data_t()
+  def retry_pipeline_start(data) when is_map(data) do
     with {:ok, route} <- Db.get_route(data.id, true),
          {:ok, source_id} <- retry_source_id(route, data.active_source_id),
          :ok <- close_existing_port(data.port),
-         {:ok, port} <- open_and_initialize_native_pipeline(route, data.id, source_id) do
+         {:ok, port, process_instance_id} <-
+           open_and_initialize_native_pipeline(route, data.id, source_id) do
       _ = Db.set_route_active_source(data.id, source_id, "failed")
 
       %{
         data
         | route: route,
           port: port,
+          process_instance_id: process_instance_id,
+          endpoint_health: %{},
+          route_terminal: nil,
           active_source_id: source_id,
-          zero_bitrate_ticks: 0,
-          reconnecting_since_ms: nil,
+          source_loss_since_ms: nil,
+          source_loss_signal: nil,
           cooldown_until: nil,
           primary_stable_since_ms: nil,
           primary_probe_inflight?: false,
+          retry_attempt: 0,
+          retry_prev_backoff_ms: nil,
+          retry_circuit_open?: false,
+          recovery_blocked?: false,
           recovering?: true
       }
     else
@@ -737,15 +1134,20 @@ defmodule HydraSrt.RouteHandler do
           "RouteHandler: retry start failed route_id=#{data.id} reason=#{inspect(reason)}"
         )
 
-        data
-        |> Map.put(:port, nil)
-        |> mark_restarting_runtime()
-        |> schedule_retry_restart()
+        if policy_deny_reason?(reason) do
+          mark_terminal_failure(%{data | port: nil}, reason)
+        else
+          data
+          |> Map.put(:port, nil)
+          |> mark_restarting_runtime()
+          |> schedule_retry_restart()
+        end
     end
   end
 
-  defp retry_source_id(route, active_source_id)
-       when is_map(route) and is_binary(active_source_id) do
+  @spec retry_source_id(json_map(), String.t() | nil) :: {:ok, String.t()} | {:error, term()}
+  def retry_source_id(route, active_source_id)
+      when is_map(route) and is_binary(active_source_id) do
     sources = Map.get(route, "sources", [])
 
     source_id =
@@ -760,41 +1162,58 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  defp retry_source_id(route, _active_source_id) when is_map(route) do
+  def retry_source_id(route, _active_source_id) when is_map(route) do
     source_record_from_route(route, nil) |> map_source_record_to_id()
   end
 
-  defp map_source_record_to_id({:ok, %{"id" => id, "enabled" => true}}) when is_binary(id),
+  @spec map_source_record_to_id({:ok, json_map()} | {:error, term()}) ::
+          {:ok, String.t()} | {:error, term()}
+  def map_source_record_to_id({:ok, %{"id" => id, "enabled" => true}}) when is_binary(id),
     do: {:ok, id}
 
-  defp map_source_record_to_id(_), do: {:error, :no_enabled_source}
+  def map_source_record_to_id(_), do: {:error, :no_enabled_source}
 
-  defp maybe_mark_restarting_before_switch(data, reason)
-       when reason in ["zero_bitrate", "reconnecting", "failed", "manual", "primary_recovered"] do
+  @spec maybe_mark_restarting_before_switch(data_t(), String.t()) :: data_t()
+  def maybe_mark_restarting_before_switch(data, reason)
+      when reason in [
+             "source_loss",
+             "zero_bitrate",
+             "reconnecting",
+             "failed",
+             "manual",
+             "primary_recovered"
+           ] do
     mark_restarting_runtime(data)
   end
 
-  defp maybe_mark_restarting_before_switch(data, _reason), do: data
+  def maybe_mark_restarting_before_switch(data, _reason), do: data
 
-  defp backup_mode(route), do: backup_value(route, "backup_mode", "passive")
+  @spec backup_mode(json_map()) :: String.t() | term()
+  def backup_mode(route), do: backup_value(route, "backup_mode", "passive")
 
-  defp backup_switch_after_ms(route),
+  @spec backup_switch_after_ms(json_map()) :: integer()
+  def backup_switch_after_ms(route),
     do: backup_value(route, "backup_switch_after_ms", 3000)
 
-  defp backup_cooldown_ms(route),
+  @spec backup_cooldown_ms(json_map()) :: integer()
+  def backup_cooldown_ms(route),
     do: backup_value(route, "backup_cooldown_ms", 10_000)
 
-  defp backup_primary_stable_ms(route),
+  @spec backup_primary_stable_ms(json_map()) :: integer()
+  def backup_primary_stable_ms(route),
     do: backup_value(route, "backup_primary_stable_ms", 15_000)
 
-  defp backup_probe_interval_ms(route),
+  @spec backup_probe_interval_ms(json_map()) :: integer()
+  def backup_probe_interval_ms(route),
     do: backup_value(route, "backup_probe_interval_ms", 5000)
 
-  defp backup_value(route, flat_key, default) when is_map(route) do
+  @spec backup_value(json_map(), String.t(), term()) :: term()
+  def backup_value(route, flat_key, default) when is_map(route) do
     Map.get(route, flat_key) || default
   end
 
   @doc false
+  @spec parse_native_json_line(String.t()) :: native_json_parse_result()
   def parse_native_json_line(json) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, %{"event" => "pipeline_status", "status" => status} = payload}
@@ -807,6 +1226,12 @@ defmodule HydraSrt.RouteHandler do
       {:ok, %{"event" => "pipeline_log"} = payload} ->
         {:pipeline_log, payload}
 
+      {:ok, %{"event" => "endpoint_health"} = payload} ->
+        {:endpoint_health, payload}
+
+      {:ok, %{"event" => "route_terminal"} = payload} ->
+        {:route_terminal, payload}
+
       {:ok, %{"event" => _event}} ->
         :unknown
 
@@ -816,6 +1241,136 @@ defmodule HydraSrt.RouteHandler do
       _ ->
         :unknown
     end
+  end
+
+  @spec matching_process_event?(data_t(), json_map()) :: boolean()
+  def matching_process_event?(data, payload) when is_map(data) and is_map(payload) do
+    process_instance_id = data[:process_instance_id]
+
+    is_binary(process_instance_id) and
+      payload["route_id"] == data.id and
+      payload["process_instance_id"] == process_instance_id
+  end
+
+  @spec apply_endpoint_health_event(data_t(), endpoint_health_payload()) :: data_t()
+  def apply_endpoint_health_event(data, payload) when is_map(data) and is_map(payload) do
+    if matching_process_event?(data, payload) do
+      endpoint_id = payload["endpoint_id"]
+
+      next_health =
+        (data[:endpoint_health] || %{})
+        |> Map.put(endpoint_id, payload)
+
+      publish_endpoint_health(data.id, payload)
+      %{data | endpoint_health: next_health}
+    else
+      Logger.debug(
+        "RouteHandler: dropping stale/unknown endpoint_health route_id=#{inspect(payload["route_id"])} process_instance_id=#{inspect(payload["process_instance_id"])}"
+      )
+
+      data
+    end
+  end
+
+  @spec apply_route_terminal_event(data_t(), route_terminal_payload()) :: data_t()
+  def apply_route_terminal_event(data, payload) when is_map(data) and is_map(payload) do
+    if matching_process_event?(data, payload) do
+      terminal = %{
+        reason_code: payload["reason_code"],
+        retryable: payload["retryable"],
+        retry_domain: payload["retry_domain"],
+        detail: payload["detail"],
+        observed_at_ms: payload["observed_at_ms"],
+        sequence: payload["sequence"]
+      }
+
+      Logger.info(
+        "RouteHandler: route_terminal reason_code=#{inspect(terminal.reason_code)} retryable=#{inspect(terminal.retryable)} retry_domain=#{inspect(terminal.retry_domain)}"
+      )
+
+      data =
+        data
+        |> Map.put(:route_terminal, terminal)
+        |> clear_source_loss_window()
+
+      consume_route_terminal(data, terminal)
+    else
+      Logger.debug(
+        "RouteHandler: dropping stale/unknown route_terminal route_id=#{inspect(payload["route_id"])} process_instance_id=#{inspect(payload["process_instance_id"])}"
+      )
+
+      data
+    end
+  end
+
+  @spec consume_route_terminal(data_t(), route_terminal_t()) :: data_t()
+  def consume_route_terminal(data, terminal) when is_map(data) and is_map(terminal) do
+    case terminal.retryable do
+      false ->
+        mark_terminal_failure(data, terminal.reason_code || "ROUTE_TERMINAL", terminal.detail)
+
+      true ->
+        drive_retryable_terminal_recovery(data, terminal)
+
+      _ ->
+        # Unclassified retryable → fail closed (no auto-retry storm).
+        mark_terminal_failure(
+          data,
+          terminal.reason_code || "ROUTE_TERMINAL_UNCLASSIFIED",
+          terminal.detail
+        )
+    end
+  end
+
+  @spec drive_retryable_terminal_recovery(data_t(), route_terminal_t()) :: data_t()
+  def drive_retryable_terminal_recovery(data, terminal)
+      when is_map(data) and is_map(terminal) do
+    domain = terminal.retry_domain
+
+    Logger.info(
+      "RouteHandler: retryable terminal recovery route_id=#{data.id} domain=#{inspect(domain)} reason_code=#{inspect(terminal.reason_code)}"
+    )
+
+    case domain do
+      "source" ->
+        case next_source_for_failover(data) do
+          %{"id" => id} when is_binary(id) and id != data.active_source_id ->
+            case failover_to_source(data, id, "source_loss") do
+              {:ok, next_data} ->
+                next_data
+
+              {:error, _reason, next_data} ->
+                next_data
+
+              {:error, _} ->
+                data
+                |> mark_restarting_runtime()
+                |> schedule_retry_restart()
+            end
+
+          _ ->
+            data
+            |> mark_restarting_runtime()
+            |> schedule_retry_restart()
+        end
+
+      _ ->
+        # "route", "none" with retryable true, or unknown → sole hard-retry owner (A).
+        data
+        |> mark_restarting_runtime()
+        |> schedule_retry_restart()
+    end
+  end
+
+  @spec publish_endpoint_health(String.t(), endpoint_health_payload()) :: :ok
+  def publish_endpoint_health(route_id, payload) when is_binary(route_id) and is_map(payload) do
+    Phoenix.PubSub.broadcast(
+      HydraSrt.PubSub,
+      "item:" <> route_id,
+      {:endpoint_health, payload}
+    )
+
+    :ok
   end
 
   @doc false
@@ -1001,18 +1556,111 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
+  @spec route_data_to_params(String.t()) :: {:ok, native_config()} | {:error, term()}
   def route_data_to_params(route_id), do: route_data_to_params(route_id, nil)
 
+  @spec route_data_to_params(String.t(), String.t() | nil) ::
+          {:ok, native_config()} | {:error, term()}
   def route_data_to_params(route_id, source_id) do
     with {:ok, route} <- Db.get_route(route_id, true),
          {:ok, source_record} <- source_record_from_route(route, source_id),
-         {:ok, source} <- source_from_record(source_record),
+         :ok <- ensure_ndi_start_allowed(route, source_record),
+         {:ok, source} <- source_from_record(source_record, route),
          {:ok, sinks} <- sinks_from_record(route) do
-      {:ok, %{"source" => source, "sinks" => sinks}}
+      {:ok, build_config(route_id, source_record, source, sinks)}
+    end
+  end
+
+  @spec ensure_ndi_start_allowed(json_map(), json_map()) :: :ok | {:error, String.t()}
+  def ensure_ndi_start_allowed(route, source_record)
+      when is_map(route) and is_map(source_record) do
+    actions = ndi_policy_actions(route, source_record)
+
+    Enum.reduce_while(actions, :ok, fn action, :ok ->
+      case FeaturePolicy.deny_reason(action) do
+        nil -> {:cont, :ok}
+        reason -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  @spec ndi_policy_actions(json_map(), json_map()) :: [:receive | :send]
+  def ndi_policy_actions(route, source_record) when is_map(route) and is_map(source_record) do
+    actions =
+      if source_record["schema"] == "NDI" do
+        [:receive]
+      else
+        []
+      end
+
+    destinations = Map.get(route, "destinations", [])
+
+    if Enum.any?(destinations, &ndi_enabled_destination?/1) do
+      actions ++ [:send]
+    else
+      actions
+    end
+  end
+
+  @spec ndi_enabled_destination?(json_map() | term()) :: boolean()
+  def ndi_enabled_destination?(destination) when is_map(destination) do
+    destination_enabled?(destination) and destination["schema"] == "NDI"
+  end
+
+  def ndi_enabled_destination?(_), do: false
+
+  @spec build_config(String.t(), json_map(), typed_endpoint(), [typed_endpoint()]) ::
+          native_config()
+  def build_config(route_id, source_record, source, sinks) do
+    kind = source["kind"]
+
+    %{
+      "route_id" => route_id,
+      "config_revision" => "boot-" <> Ecto.UUID.generate(),
+      "process_instance_id" => Ecto.UUID.generate(),
+      "source" => %{
+        "id" => source_record["id"],
+        "name" => endpoint_display_name(source_record),
+        "kind" => kind,
+        kind => source[kind]
+      },
+      "destinations" => Enum.map(sinks, &typed_destination_endpoint/1)
+    }
+  end
+
+  @spec typed_destination_endpoint(typed_endpoint()) :: typed_endpoint()
+  def typed_destination_endpoint(sink) when is_map(sink) do
+    kind = sink["kind"]
+
+    %{
+      "id" => sink["id"],
+      "name" => sink["name"],
+      "kind" => kind,
+      kind => sink[kind]
+    }
+  end
+
+  @spec endpoint_display_name(json_map()) :: String.t()
+  def endpoint_display_name(record) when is_map(record) do
+    # A stored record carries an explicit `nil` name, so `Map.get/3` defaults are
+    # not enough: the wire contract needs a string here, never `null`.
+    case Map.get(record, "name") do
+      name when is_binary(name) and name != "" -> name
+      _ -> endpoint_display_id(record)
+    end
+  end
+
+  @spec endpoint_display_id(json_map()) :: String.t()
+  defp endpoint_display_id(record) do
+    case Map.get(record, "id") do
+      id when is_binary(id) -> id
+      _ -> ""
     end
   end
 
   @doc false
+  @spec source_record_from_route(json_map(), String.t() | nil) ::
+          {:ok, json_map()} | {:error, term()}
   def source_record_from_route(%{"sources" => sources}, source_id)
       when is_list(sources) and is_binary(source_id) do
     case Enum.find(sources, &(&1["id"] == source_id)) do
@@ -1040,27 +1688,36 @@ defmodule HydraSrt.RouteHandler do
           "route payload without \"sources\" is not supported after sources migration: #{inspect(route)}"
   end
 
-  @spec sinks_from_record(map()) :: {:ok, list()} | {:error, term()}
+  @spec sinks_from_record(json_map()) ::
+          {:ok, [typed_endpoint()]} | {:error, {:invalid_destinations, [term()]} | term()}
   def sinks_from_record(%{"destinations" => destinations})
       when is_list(destinations) and destinations != [] do
-    sinks =
-      destinations
-      |> Enum.filter(&destination_enabled?/1)
-      |> Enum.reduce([], fn destination, acc ->
+    enabled = Enum.filter(destinations, &destination_enabled?/1)
+
+    {sinks, failing_ids} =
+      Enum.reduce(enabled, {[], []}, fn destination, {ok_acc, err_acc} ->
         case sink_from_record(destination) do
           {:ok, sink} ->
-            [sink | acc]
+            {[sink | ok_acc], err_acc}
 
           {:error, error} ->
+            failing_id = destination["id"] || destination[:id] || "unknown"
+
             Logger.error(
-              "RouteHandler: sink_from_record error: #{inspect(error)}, destination: #{inspect(destination)}"
+              "RouteHandler: sink_from_record error: #{inspect(error)}, destination_id=#{inspect(failing_id)}"
             )
 
-            acc
+            {ok_acc, [failing_id | err_acc]}
         end
       end)
 
-    {:ok, sinks}
+    case Enum.reverse(failing_ids) do
+      [] ->
+        {:ok, Enum.reverse(sinks)}
+
+      ids ->
+        {:error, {:invalid_destinations, ids}}
+    end
   end
 
   def sinks_from_record(_) do
@@ -1068,11 +1725,15 @@ defmodule HydraSrt.RouteHandler do
     {:ok, []}
   end
 
-  defp destination_enabled?(destination) when is_map(destination) do
+  @spec destination_enabled?(json_map() | term()) :: boolean()
+  def destination_enabled?(destination) when is_map(destination) do
     destination["enabled"] == true or destination[:enabled] == true
   end
 
+  def destination_enabled?(_), do: false
+
   @doc false
+  @spec build_srt_uri(json_map()) :: String.t()
   def build_srt_uri(opts) when is_map(opts) do
     mode = Map.get(opts, "mode")
 
@@ -1083,9 +1744,9 @@ defmodule HydraSrt.RouteHandler do
         Application.get_env(:hydra_srt, :default_bind_ip, "127.0.0.1")
       )
 
-    remote_address = Map.get(opts, "address") || Map.get(opts, "host")
+    remote_address = srt_remote_address(opts)
     localport = Map.get(opts, "localport")
-    remote_port = Map.get(opts, "port")
+    remote_port = srt_remote_port(opts)
 
     query_params =
       %{}
@@ -1122,9 +1783,46 @@ defmodule HydraSrt.RouteHandler do
   end
 
   @doc false
+  @spec build_srt_uri(term()) :: nil
   def build_srt_uri(_), do: nil
 
   @doc false
+  @spec srt_remote_address(json_map()) :: String.t() | nil
+  def srt_remote_address(opts) when is_map(opts) do
+    Map.get(opts, "address") || Map.get(opts, "host")
+  end
+
+  @doc false
+  @spec srt_remote_port(json_map()) :: integer() | nil
+  def srt_remote_port(opts) when is_map(opts), do: Map.get(opts, "port")
+
+  @doc """
+  Local bind (`localaddress`, `localport`) the SRT element should use.
+
+  In caller/rendezvous mode `build_srt_uri/1` falls back to `localaddress` /
+  `localport` for the peer, so those only describe a local bind when an explicit
+  peer address/port is configured; otherwise the element would try to bind the
+  port it is supposed to dial.
+  """
+  @spec srt_local_bind(json_map()) :: {String.t() | nil, integer() | nil}
+  def srt_local_bind(opts) when is_map(opts) do
+    bind_address = Map.get(opts, "bind-address")
+    localaddress = Map.get(opts, "localaddress")
+    localport = Map.get(opts, "localport")
+
+    if Map.get(opts, "mode") in ["caller", "rendezvous"] do
+      {bind_address || peer_scoped(srt_remote_address(opts), localaddress),
+       peer_scoped(srt_remote_port(opts), localport)}
+    else
+      {localaddress || bind_address, localport}
+    end
+  end
+
+  defp peer_scoped(nil, _local), do: nil
+  defp peer_scoped(_peer, local), do: local
+
+  @doc false
+  @spec maybe_add_param(json_map(), json_map(), String.t()) :: json_map()
   def maybe_add_param(params, opts, key) when is_map(params) and is_map(opts) do
     case Map.get(opts, key) do
       nil -> params
@@ -1133,24 +1831,21 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
+  @spec sink_from_record(json_map()) :: {:ok, typed_endpoint()} | {:error, term()}
   def sink_from_record(%{"id" => id, "schema" => "SRT"} = destination) do
     opts = endpoint_options_from_record(destination)
 
     with {:ok, resolved_opts} <- resolve_interface_options(opts) do
-      name = Map.get(destination, "name", id)
+      name = endpoint_display_name(destination)
       uri = build_srt_uri(resolved_opts)
-      runtime_opts = drop_srt_uri_options(resolved_opts)
 
-      # Native pipeline expects SRT properties directly on the element config (not a URI).
       {:ok,
        %{
-         "type" => "srtsink",
-         "uri" => uri,
-         "hydra_destination_id" => id,
-         "hydra_destination_name" => name,
-         "hydra_destination_schema" => "SRT"
-       }
-       |> Map.merge(runtime_opts)}
+         "id" => id,
+         "name" => name,
+         "kind" => "srt",
+         "srt" => srt_destination_payload(resolved_opts, uri)
+       }}
     end
   end
 
@@ -1158,7 +1853,7 @@ defmodule HydraSrt.RouteHandler do
     opts = endpoint_options_from_record(destination)
 
     with {:ok, resolved_opts} <- resolve_interface_options(opts) do
-      name = Map.get(destination, "name", id)
+      name = endpoint_display_name(destination)
 
       # Native pipeline expects `address` and `port` (it maps `address` -> udpsink host property).
       address = Map.get(resolved_opts, "address") || Map.get(resolved_opts, "host")
@@ -1174,21 +1869,24 @@ defmodule HydraSrt.RouteHandler do
           bind_address
         end
 
+      multicast_iface =
+        Map.get(resolved_opts, "multicast-iface") ||
+          Map.get(resolved_opts, "interface_sys_name")
+
       {:ok,
        %{
-         "type" => "udpsink",
-         "address" => address,
-         "host" => address,
-         "port" => port,
-         "bind-address" => bind_address,
-         "multicast-iface" =>
-           Map.get(resolved_opts, "multicast-iface") ||
-             Map.get(resolved_opts, "interface_sys_name"),
-         "hydra_destination_id" => id,
-         "hydra_destination_name" => name,
-         "hydra_destination_schema" => "UDP"
-       }
-       |> drop_nil_values()}
+         "id" => id,
+         "name" => name,
+         "kind" => "udp",
+         "udp" =>
+           %{
+             "address" => address,
+             "port" => port,
+             "bind_address" => bind_address,
+             "multicast_iface" => multicast_iface
+           }
+           |> drop_nil_values()
+       }}
     end
   end
 
@@ -1198,7 +1896,7 @@ defmodule HydraSrt.RouteHandler do
     with false <- map_size(opts) == 0,
          {:ok, resolved_opts} <- resolve_interface_options(opts) do
       id = Map.get(destination, "id")
-      name = Map.get(destination, "name", id)
+      name = endpoint_display_name(destination)
       location = Map.get(resolved_opts, "location")
 
       if is_nil(location) or location == "" do
@@ -1206,11 +1904,10 @@ defmodule HydraSrt.RouteHandler do
       else
         {:ok,
          %{
-           "type" => "rtmpsink",
-           "location" => location,
-           "hydra_destination_id" => id,
-           "hydra_destination_name" => name,
-           "hydra_destination_schema" => "RTMP"
+           "id" => id,
+           "name" => name,
+           "kind" => "rtmp",
+           "rtmp" => %{"location" => location}
          }}
       end
     else
@@ -1219,53 +1916,69 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
+  def sink_from_record(%{"id" => id, "schema" => "NDI"} = destination) do
+    case ndi_destination_payload(destination) do
+      {:ok, ndi} ->
+        name = endpoint_display_name(destination)
+
+        {:ok,
+         %{
+           "id" => id,
+           "name" => name,
+           "kind" => "ndi",
+           "ndi" => ndi
+         }}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
   def sink_from_record(_), do: {:error, :invalid_destination}
 
-  def source_from_record(%{"schema" => "SRT"} = source) do
+  @spec source_from_record(json_map()) :: {:ok, typed_endpoint()} | {:error, term()}
+  def source_from_record(record) when is_map(record), do: source_from_record(record, %{})
+
+  @spec source_from_record(json_map(), json_map()) :: {:ok, typed_endpoint()} | {:error, term()}
+  def source_from_record(%{"schema" => "SRT"} = source, _route) do
     opts = endpoint_options_from_record(source)
 
     with false <- map_size(opts) == 0,
          {:ok, resolved_opts} <- resolve_interface_options(opts) do
       uri = build_srt_uri(resolved_opts)
-      runtime_opts = drop_srt_uri_options(resolved_opts)
 
-      # Native pipeline expects SRT properties directly on the element config (not a URI).
-      {:ok, %{"type" => "srtsrc", "uri" => uri} |> Map.merge(runtime_opts)}
+      {:ok, %{"kind" => "srt", "srt" => srt_source_payload(resolved_opts, uri)}}
     else
       true -> {:error, :invalid_source}
     end
   end
 
-  def source_from_record(%{"schema" => "UDP"} = source) do
+  def source_from_record(%{"schema" => "UDP"} = source, _route) do
     opts = endpoint_options_from_record(source)
 
     with {:ok, resolved_opts} <- resolve_interface_options(opts) do
-      {:ok, udp_source_config(resolved_opts)}
+      {:ok, %{"kind" => "udp", "udp" => udp_source_config(resolved_opts)}}
     end
   end
 
-  def source_from_record(%{"schema" => "RTP"} = source) do
+  def source_from_record(%{"schema" => "RTP"} = source, _route) do
     opts = endpoint_options_from_record(source)
 
     with {:ok, resolved_opts} <- resolve_interface_options(opts) do
       # TS over RTP source uses udpsrc + rtpmp2tdepay in native pipeline.
-      {:ok,
-       resolved_opts
-       |> udp_source_config()
-       |> Map.put("hydra_source_schema", "RTP")}
+      {:ok, %{"kind" => "rtp", "rtp" => udp_source_config(resolved_opts)}}
     end
   end
 
-  def source_from_record(%{"schema" => "RTMP"} = source) do
+  def source_from_record(%{"schema" => "RTMP"} = source, _route) do
     opts = endpoint_options_from_record(source)
 
     case HydraSrt.Api.Endpoint.normalize_rtmp_path(Map.get(opts, "path")) do
       path when is_binary(path) and path != "" ->
         {:ok,
          %{
-           "type" => "rtmpsrc",
-           "location" => build_rtmp_proxy_uri(path),
-           "hydra_source_schema" => "RTMP"
+           "kind" => "rtmp",
+           "rtmp" => %{"location" => build_rtmp_proxy_uri(path)}
          }}
 
       _ ->
@@ -1273,9 +1986,104 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
-  def source_from_record(_), do: {:error, :invalid_source}
+  def source_from_record(%{"schema" => "NDI"} = source, route) when is_map(route) do
+    case ndi_source_payload(source, route) do
+      {:ok, ndi} ->
+        {:ok, %{"kind" => "ndi", "ndi" => ndi}}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  def source_from_record(_, _), do: {:error, :invalid_source}
+
+  @spec ndi_source_payload(json_map(), json_map()) :: {:ok, json_map()} | {:error, term()}
+  def ndi_source_payload(source, route) when is_map(source) and is_map(route) do
+    mode = source["ndi_selection_mode"]
+
+    locator =
+      case mode do
+        "discovery_name" ->
+          case source["ndi_source_name"] do
+            name when is_binary(name) and name != "" ->
+              {:ok, %{"source_name" => name}}
+
+            _ ->
+              {:error, :invalid_source}
+          end
+
+        "direct_address" ->
+          case source["ndi_source_address"] do
+            address when is_binary(address) and address != "" ->
+              {:ok, %{"url_address" => address}}
+
+            _ ->
+              {:error, :invalid_source}
+          end
+
+        _ ->
+          {:error, :invalid_source}
+      end
+
+    with {:ok, locator_fields} <- locator do
+      ndi =
+        locator_fields
+        |> Map.merge(%{
+          "receiver_name" => ndi_receiver_name(source, route),
+          "bandwidth" => source["ndi_bandwidth"] || @ndi_default_bandwidth,
+          "color_format" => source["ndi_color_format"] || @ndi_default_color_format,
+          "timestamp_mode" => source["ndi_timestamp_mode"],
+          "media_policy" => source["ndi_media_policy"] || @ndi_default_media_policy,
+          "connect_timeout_ms" =>
+            source["ndi_connect_timeout_ms"] || @ndi_default_connect_timeout_ms,
+          "receive_timeout_ms" =>
+            source["ndi_receive_timeout_ms"] || @ndi_default_receive_timeout_ms,
+          "track_discovery_timeout_ms" =>
+            source["ndi_track_discovery_timeout_ms"] ||
+              @ndi_default_track_discovery_timeout_ms,
+          "max_queue_length" => source["ndi_max_queue_length"] || @ndi_default_max_queue_length
+        })
+        |> drop_nil_values()
+
+      {:ok, ndi}
+    end
+  end
+
+  @spec ndi_destination_payload(json_map()) :: {:ok, json_map()} | {:error, term()}
+  def ndi_destination_payload(destination) when is_map(destination) do
+    case destination["ndi_sender_name"] do
+      name when is_binary(name) and name != "" ->
+        {:ok,
+         %{
+           "sender_name" => name,
+           "media_policy" => destination["ndi_media_policy"] || @ndi_default_media_policy
+         }}
+
+      _ ->
+        {:error, :invalid_destination}
+    end
+  end
+
+  @spec ndi_receiver_name(json_map(), json_map()) :: String.t()
+  def ndi_receiver_name(source, route) when is_map(source) and is_map(route) do
+    case source["ndi_receiver_name"] do
+      name when is_binary(name) and name != "" ->
+        name
+
+      _ ->
+        route_name =
+          case route["name"] do
+            name when is_binary(name) and name != "" -> name
+            _ -> route["id"] || ""
+          end
+
+        "Hydra #{route_name}"
+    end
+  end
 
   @doc false
+  @spec build_rtmp_proxy_uri(String.t()) :: String.t()
   def build_rtmp_proxy_uri(path) when is_binary(path) do
     normalized_path = HydraSrt.Api.Endpoint.normalize_rtmp_path(path)
     rtmp_port = Application.fetch_env!(:hydra_srt, :rtmp_port)
@@ -1283,6 +2091,7 @@ defmodule HydraSrt.RouteHandler do
   end
 
   @doc false
+  @spec udp_source_config(json_map()) :: json_map()
   def udp_source_config(opts) when is_map(opts) do
     address = Map.get(opts, "address") || Map.get(opts, "host") || Map.get(opts, "localaddress")
     port = Map.get(opts, "port") || Map.get(opts, "localport")
@@ -1293,24 +2102,76 @@ defmodule HydraSrt.RouteHandler do
         Map.get(opts, "multicast_iface") ||
         Map.get(opts, "interface_sys_name")
 
-    opts
-    |> Map.drop([
-      "host",
-      "multicast",
-      "interface_sys_name",
-      "multicast_iface",
-      "localaddress",
-      "localport",
-      "bind-address"
-    ])
-    |> Map.put("type", "udpsrc")
-    |> Map.put("address", address)
-    |> Map.put("port", port)
-    |> maybe_put_multicast_options(multicast?, multicast_iface)
+    %{
+      "address" => address,
+      "port" => port,
+      "auto_multicast" => if(multicast?, do: true, else: nil),
+      "multicast_iface" => if(multicast?, do: multicast_iface, else: nil)
+    }
+    |> drop_nil_values()
+  end
+
+  @spec srt_source_payload(json_map(), String.t()) :: json_map()
+  def srt_source_payload(opts, uri) when is_map(opts) and is_binary(uri) do
+    srt_payload(opts, uri, _include_access = true)
+  end
+
+  @spec srt_destination_payload(json_map(), String.t()) :: json_map()
+  def srt_destination_payload(opts, uri) when is_map(opts) and is_binary(uri) do
+    srt_payload(opts, uri, _include_access = false)
+  end
+
+  @spec srt_payload(json_map(), String.t(), boolean()) :: json_map()
+  def srt_payload(opts, uri, include_access)
+      when is_map(opts) and is_binary(uri) and is_boolean(include_access) do
+    mode = Map.get(opts, "mode")
+
+    streamid =
+      if mode in ["caller", "rendezvous"] do
+        case Map.get(opts, "streamid") do
+          value when is_binary(value) and value != "" -> value
+          _ -> nil
+        end
+      else
+        nil
+      end
+
+    access =
+      if include_access and Map.get(opts, "hydra_limit_access") == true do
+        %{
+          "limit" => true,
+          "allowed" => Map.get(opts, "hydra_allowed_list", []),
+          "denied" => Map.get(opts, "hydra_denied_list", [])
+        }
+      else
+        nil
+      end
+
+    {localaddress, localport} = srt_local_bind(opts)
+
+    # SRT carries the peer host/port in the URI and binds through
+    # `localaddress`/`localport`; `srtsrc`/`srtsink` have no `address`, `port`,
+    # `bind-address` or `multicast-iface` property, so those never go on the wire.
+    %{
+      "uri" => uri,
+      "mode" => mode,
+      "latency" => Map.get(opts, "latency"),
+      "auto_reconnect" => Map.get(opts, "auto-reconnect"),
+      "keep_listening" => Map.get(opts, "keep-listening"),
+      "poll_timeout" => Map.get(opts, "poll-timeout"),
+      "passphrase" => Map.get(opts, "passphrase"),
+      "pbkeylen" => Map.get(opts, "pbkeylen"),
+      "streamid" => streamid,
+      "localaddress" => localaddress,
+      "localport" => localport,
+      "authentication" => Map.get(opts, "authentication"),
+      "access" => access
+    }
     |> drop_nil_values()
   end
 
   @doc false
+  @spec maybe_put_multicast_options(json_map(), boolean() | term(), term()) :: json_map()
   def maybe_put_multicast_options(opts, true, multicast_iface) when is_map(opts) do
     opts
     |> Map.put("auto-multicast", true)
@@ -1320,11 +2181,13 @@ defmodule HydraSrt.RouteHandler do
   def maybe_put_multicast_options(opts, _, _), do: opts
 
   @doc false
+  @spec multicast_source?(json_map(), String.t() | term()) :: boolean()
   def multicast_source?(opts, address) when is_map(opts) do
     Map.get(opts, "multicast") == true or multicast_address?(address)
   end
 
   @doc false
+  @spec multicast_address?(String.t() | term()) :: boolean()
   def multicast_address?(address) when is_binary(address) do
     cond do
       String.starts_with?(address, "ff") ->
@@ -1341,6 +2204,7 @@ defmodule HydraSrt.RouteHandler do
   def multicast_address?(_), do: false
 
   @doc false
+  @spec failover_target_source([json_map()], String.t() | nil, String.t()) :: json_map() | nil
   def failover_target_source(sources, active_source_id, mode)
       when is_list(sources) and mode in ["active", "passive", "disabled"] do
     case next_enabled_source(sources, active_source_id, mode) do
@@ -1353,6 +2217,7 @@ defmodule HydraSrt.RouteHandler do
   def failover_target_source(_sources, _active_source_id, _mode), do: nil
 
   @doc false
+  @spec next_enabled_source([json_map()], String.t() | nil, String.t()) :: json_map() | nil
   def next_enabled_source(sources, current_id, mode)
       when is_list(sources) and mode in ["active", "passive", "disabled"] do
     if mode == "disabled" do
@@ -1391,6 +2256,7 @@ defmodule HydraSrt.RouteHandler do
   end
 
   @doc false
+  @spec in_cooldown?(integer() | nil | term(), integer() | term()) :: boolean()
   def in_cooldown?(cooldown_until_ms, now_ms)
       when is_integer(cooldown_until_ms) and is_integer(now_ms),
       do: cooldown_until_ms > now_ms
@@ -1398,34 +2264,28 @@ defmodule HydraSrt.RouteHandler do
   def in_cooldown?(_, _), do: false
 
   @doc false
-  def should_trigger_failover?(data, reason)
-      when is_map(data) and reason in [:zero_bitrate, :reconnecting, :failed] do
+  @spec should_trigger_source_loss_failover?(data_t()) :: boolean()
+  def should_trigger_source_loss_failover?(data) when is_map(data) do
     mode = backup_mode(data.route)
     switch_after_ms = backup_switch_after_ms(data.route)
     cooldown_until = Map.get(data, :cooldown_until)
     now_ms = Map.get(data, :now_ms, 0)
+    elapsed_ms = Map.get(data, :source_loss_elapsed_ms, 0)
 
     cond do
       mode == "disabled" ->
         false
 
-      reason == :failed ->
-        true
-
       in_cooldown?(cooldown_until, now_ms) ->
         false
 
-      reason == :zero_bitrate ->
-        zero_bitrate_ticks = Map.get(data, :zero_bitrate_ticks, 0)
-        zero_bitrate_ticks * 1000 >= switch_after_ms
-
-      reason == :reconnecting ->
-        reconnecting_elapsed_ms = Map.get(data, :reconnecting_elapsed_ms, 0)
-        reconnecting_elapsed_ms >= switch_after_ms
+      true ->
+        elapsed_ms >= switch_after_ms
     end
   end
 
   @doc false
+  @spec resolve_interface_options(json_map()) :: {:ok, json_map()} | {:error, term()}
   def resolve_interface_options(opts) when is_map(opts) do
     case Map.get(opts, "interface_sys_name") do
       nil ->
@@ -1451,6 +2311,7 @@ defmodule HydraSrt.RouteHandler do
   def resolve_interface_options(_), do: {:error, :invalid_options}
 
   @doc false
+  @spec drop_srt_uri_options(json_map()) :: json_map()
   def drop_srt_uri_options(opts), do: Map.delete(opts, "streamid")
 
   defp endpoint_options_from_record(record) when is_map(record) do
@@ -1491,6 +2352,7 @@ defmodule HydraSrt.RouteHandler do
   end
 
   @doc false
+  @spec put_srt_access_opts(json_map(), json_map()) :: json_map()
   def put_srt_access_opts(opts, record) when is_map(opts) and is_map(record) do
     if record["limit_access"] == true do
       opts
@@ -1503,6 +2365,7 @@ defmodule HydraSrt.RouteHandler do
   end
 
   @doc false
+  @spec normalize_access_list(term()) :: [String.t()]
   def normalize_access_list(value) when is_list(value) do
     value
     |> Enum.filter(&is_binary/1)
@@ -1558,6 +2421,7 @@ defmodule HydraSrt.RouteHandler do
   end
 
   @doc false
+  @spec drop_nil_values(json_map()) :: json_map()
   def drop_nil_values(map) when is_map(map) do
     map
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
@@ -1596,19 +2460,30 @@ defmodule HydraSrt.RouteHandler do
 
   defp link_local_ipv6?(_), do: false
 
+  @spec dummy_params() :: String.t()
   def dummy_params do
-    %{
-      "source_type" => "srtsrc",
-      "source_property" => "uri",
-      "source_value" => "srt://127.0.0.1:4201?mode=listener",
-      "sinks" => [
+    build_config(
+      "dummy-route",
+      %{"id" => "dummy-source", "name" => "Dummy source", "schema" => "SRT"},
+      %{
+        "kind" => "srt",
+        "srt" => %{
+          "uri" => "srt://127.0.0.1:4201?mode=listener",
+          "mode" => "listener"
+        }
+      },
+      [
         %{
-          "type" => "srtsink",
-          "property" => "uri",
-          "value" => "srt://127.0.0.1:4205?mode=listener"
+          "id" => "dummy-destination",
+          "name" => "Dummy destination",
+          "kind" => "srt",
+          "srt" => %{
+            "uri" => "srt://127.0.0.1:4205?mode=listener",
+            "mode" => "listener"
+          }
         }
       ]
-    }
+    )
     |> Jason.encode!()
   end
 end

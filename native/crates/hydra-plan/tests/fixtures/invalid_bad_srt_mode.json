@@ -1,0 +1,23 @@
+{
+  "route_id": "route-bad-mode",
+  "config_revision": "revision-bad-mode",
+  "process_instance_id": "process-bad-mode",
+  "source": {
+    "id": "source",
+    "kind": "srt",
+    "srt": {
+      "uri": "srt://127.0.0.1:9000?mode=listener",
+      "mode": "client"
+    }
+  },
+  "destinations": [
+    {
+      "id": "dest",
+      "kind": "udp",
+      "udp": {
+        "address": "127.0.0.1",
+        "port": 5000
+      }
+    }
+  ]
+}

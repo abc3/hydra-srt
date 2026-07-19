@@ -27,6 +27,10 @@
 | UDP       | ✔     | ✔      |
 | RTMP      | ✔     | ✔      |
 | RTP       | ✔     | —      |
+| [NDI](docs/ndi.md) | ✔ | ✔ |
+
+NDI is off by default. It needs the NDI runtime, which is not shipped with HydraSRT and
+is installed by the operator: see [docs/ndi.md](docs/ndi.md).
 
 ### Planned transports
 
@@ -146,6 +150,7 @@ Setup, deployment, and troubleshooting: [docs/development.md](docs/development.m
 | [docs/api.md](docs/api.md)            | REST API documentation                |
 | [docs/mcp.md](docs/mcp.md)            | MCP server, tokens, and client setup |
 | [docs/envs.md](docs/envs.md)          | Environment variables reference       |
+| [docs/ndi.md](docs/ndi.md)            | Installing and enabling NDI           |
 
 ## Contributing
 

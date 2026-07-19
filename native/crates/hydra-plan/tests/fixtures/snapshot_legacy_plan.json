@@ -1,0 +1,70 @@
+{
+  "source": {
+    "endpoint_id": "legacy-source",
+    "endpoint_name": "Legacy Source",
+    "adapter": {
+      "kind": "srt",
+      "config": {
+        "uri": "srt://127.0.0.1:9000?mode=listener",
+        "mode": "listener",
+        "latency": 120,
+        "auto_reconnect": null,
+        "keep_listening": null,
+        "poll_timeout": null,
+        "passphrase": null,
+        "pbkeylen": null,
+        "streamid": null,
+        "localaddress": null,
+        "localport": null,
+        "authentication": null,
+        "access": null
+      },
+      "media": "mpeg_ts_program"
+    }
+  },
+  "branches": [
+    {
+      "endpoint_id": "srt-destination",
+      "endpoint_name": "SRT Destination",
+      "adapter": {
+        "kind": "srt",
+        "config": {
+          "uri": "srt://127.0.0.1:9001?mode=caller",
+          "mode": "caller",
+          "latency": null,
+          "auto_reconnect": null,
+          "keep_listening": null,
+          "poll_timeout": null,
+          "passphrase": null,
+          "pbkeylen": null,
+          "streamid": null,
+          "localaddress": null,
+          "localport": null,
+          "authentication": null
+        },
+        "media": "mpeg_ts_program"
+      },
+      "queue": {
+        "class": "legacy_program_leaky"
+      }
+    },
+    {
+      "endpoint_id": "udp-destination",
+      "endpoint_name": "UDP Destination",
+      "adapter": {
+        "kind": "udp",
+        "config": {
+          "address": "239.1.1.1",
+          "port": 5000,
+          "auto_multicast": null,
+          "multicast_iface": null,
+          "bind_address": null
+        },
+        "media": "mpeg_ts_program"
+      },
+      "queue": {
+        "class": "legacy_program"
+      }
+    }
+  ]
+}

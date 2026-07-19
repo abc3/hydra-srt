@@ -1,6 +1,7 @@
 defmodule HydraSrtWeb.RouteController do
   use HydraSrtWeb, :controller
 
+  alias HydraSrt.EndpointHealth
   alias HydraSrt.RouteAnalytics
   alias HydraSrt.Routes
   alias HydraSrt.Tags
@@ -116,6 +117,20 @@ defmodule HydraSrtWeb.RouteController do
         conn
         |> put_status(:unprocessable_entity)
         |> json(%{error: inspect(reason)})
+    end
+  end
+
+  @doc """
+  Endpoint-health snapshot for a route, consumed by the NDI Health tab.
+  """
+  @spec endpoint_health(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, :not_found}
+  def endpoint_health(conn, %{"route_id" => route_id}) when is_binary(route_id) do
+    case EndpointHealth.snapshot(route_id) do
+      {:ok, snapshot} ->
+        data(conn, snapshot)
+
+      {:error, :not_found} ->
+        {:error, :not_found}
     end
   end
 
@@ -260,5 +275,6 @@ defmodule HydraSrtWeb.RouteController do
     |> json(%{error: "Missing required 'route' parameter"})
   end
 
-  defp data(conn, data), do: json(conn, %{data: data})
+  @spec data(Plug.Conn.t(), term()) :: Plug.Conn.t()
+  def data(conn, data), do: json(conn, %{data: data})
 end

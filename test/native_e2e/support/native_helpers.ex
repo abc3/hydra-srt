@@ -4,8 +4,21 @@ defmodule HydraSrt.E2E.Native.Helpers do
   alias HydraSrt.E2E.Native.ProcessRegistry
   alias HydraSrt.TestSupport.E2EHelpers
 
+  @ndi_media_policies ~w(
+    video_and_audio_required
+    video_required_audio_optional
+    video_only
+    audio_only
+  )
+
   def ensure_prereqs! do
     ensure_ffmpeg!()
+    ensure_rs_native_binary_present!()
+    ProcessRegistry.ensure_table!()
+    :ok
+  end
+
+  def ensure_ndi_prereqs! do
     ensure_rs_native_binary_present!()
     ProcessRegistry.ensure_table!()
     :ok
@@ -33,36 +46,651 @@ defmodule HydraSrt.E2E.Native.Helpers do
     Path.join([:code.priv_dir(:hydra_srt), "native", "hydra_srt_pipeline"])
   end
 
+  @validate_config_timeout_ms 30_000
+
+  @doc """
+  Runs the native `validate-config` dry run: parse, plan and build the graph
+  without starting it, so a config can be checked without media or sockets.
+
+  Returns `{exit_status, decoded_result}`; `exit_status` is `:timeout` when the
+  child never exits.
+  """
+  def validate_native_config(config) when is_map(config) do
+    port =
+      Port.open({:spawn_executable, String.to_charlist(rs_native_binary_path())}, [
+        :binary,
+        :exit_status,
+        :stream,
+        :stderr_to_stdout,
+        :hide,
+        args: ["validate-config"],
+        env: native_port_env()
+      ])
+
+    Port.command(port, Jason.encode!(config) <> "\n")
+    {status, output} = collect_validate_config(port, [])
+    {status, decode_validate_config_result(output)}
+  end
+
+  defp collect_validate_config(port, acc) do
+    receive do
+      {^port, {:data, data}} ->
+        collect_validate_config(port, [data | acc])
+
+      {^port, {:exit_status, status}} ->
+        {status, acc |> Enum.reverse() |> IO.iodata_to_binary()}
+    after
+      @validate_config_timeout_ms ->
+        Port.close(port)
+        {:timeout, acc |> Enum.reverse() |> IO.iodata_to_binary()}
+    end
+  end
+
+  defp decode_validate_config_result(output) do
+    output
+    |> String.split("\n", trim: true)
+    |> Enum.reverse()
+    |> Enum.find_value(%{"event" => "no_result", "raw" => output}, fn line ->
+      case Jason.decode(line) do
+        {:ok, %{"event" => _} = result} -> result
+        _ -> nil
+      end
+    end)
+  end
+
+  @doc """
+  Port env for native E2E children: quiet GStreamer plus optional NDI runtime path.
+  """
+  def native_port_env do
+    base = [{~c"GST_DEBUG", ~c"0"}, {~c"GST_DEBUG_NO_COLOR", ~c"1"}]
+
+    case System.get_env("HYDRA_NDI_RUNTIME_DIR") do
+      dir when is_binary(dir) and dir != "" ->
+        base ++ [{~c"NDI_RUNTIME_DIR_V6", String.to_charlist(dir)}]
+
+      _ ->
+        base
+    end
+  end
+
+  @doc """
+  Port/System env that forces the runtime-absent branch.
+
+  `gst-plugin-ndi` resolves libndi from `NDI_RUNTIME_DIR_V6`, then
+  `NDI_RUNTIME_DIR_V5`, then the bare sonames through the platform loader
+  search path, so all of the runtime dir variables have to go. The loader
+  fallback cannot be cleared from here: a host that ships libndi on its default
+  search path still loads it, which is why callers must confirm the child env
+  really is runtime-less with `ndi_capability_status/1` instead of assuming it.
+  """
+  def native_port_env_without_runtime do
+    [
+      {~c"GST_DEBUG", ~c"0"},
+      {~c"GST_DEBUG_NO_COLOR", ~c"1"},
+      {~c"NDI_RUNTIME_DIR_V6", false},
+      {~c"NDI_RUNTIME_DIR_V5", false},
+      {~c"HYDRA_NDI_RUNTIME_DIR", false}
+    ]
+  end
+
+  # Port.open/2 spells "remove this variable from the child" as `false`, while
+  # System.cmd/3 spells it as `nil` and rejects anything that is not a binary.
+  def system_env_from_port_env(env) do
+    Enum.map(env, fn
+      {k, false} -> {List.to_string(k), nil}
+      {k, v} when is_list(v) -> {List.to_string(k), List.to_string(v)}
+    end)
+  end
+
   def free_srt_port!, do: E2EHelpers.tcp_free_port!()
   def free_udp_port!, do: E2EHelpers.udp_free_port!()
 
   def srt_to_udp_config(source_port, udp_port, opts \\ []) do
     source_uri = build_srt_uri("127.0.0.1", source_port, "listener", opts)
+    route_id = Keyword.get(opts, :route_id, Ecto.UUID.generate())
 
     %{
-      "source" =>
+      "route_id" => route_id,
+      "config_revision" => "boot-" <> Ecto.UUID.generate(),
+      "process_instance_id" => Ecto.UUID.generate(),
+      "source" => %{
+        "id" => "source_demo",
+        "name" => "source_demo",
+        "kind" => "srt",
+        "srt" =>
+          %{
+            "uri" => source_uri,
+            "mode" => "listener",
+            "localaddress" => "127.0.0.1",
+            "localport" => source_port,
+            "auto_reconnect" => true,
+            "keep_listening" => false
+          }
+          |> maybe_put_passphrase(opts)
+      },
+      "destinations" => [
         %{
-          "type" => "srtsrc",
-          "uri" => source_uri,
-          "localaddress" => "127.0.0.1",
-          "localport" => source_port,
-          "auto-reconnect" => true,
-          "keep-listening" => false,
-          "mode" => "listener"
-        }
-        |> maybe_put_passphrase(opts),
-      "sinks" => [
-        %{
-          "type" => "udpsink",
-          "address" => "127.0.0.1",
-          "host" => "127.0.0.1",
-          "port" => udp_port,
-          "hydra_destination_id" => "udp_demo",
-          "hydra_destination_name" => "udp_demo",
-          "hydra_destination_schema" => "UDP"
+          "id" => "udp_demo",
+          "name" => "udp_demo",
+          "kind" => "udp",
+          "udp" => %{
+            "address" => "127.0.0.1",
+            "port" => udp_port
+          }
         }
       ]
     }
+  end
+
+  @doc """
+  Typed NDI→NDI route config (no legacy `element_type`/`props`).
+  """
+  def ndi_to_ndi_config(opts \\ []) do
+    route_id = Keyword.get(opts, :route_id, "ndi_" <> Ecto.UUID.generate())
+    media_policy = Keyword.get(opts, :media_policy, "video_and_audio_required")
+    source_name = Keyword.get(opts, :source_name)
+    url_address = Keyword.get(opts, :url_address)
+
+    sender_name =
+      Keyword.get(opts, :sender_name, "Hydra NDI E2E Out #{System.unique_integer([:positive])}")
+
+    receiver_name = Keyword.get(opts, :receiver_name, "Hydra NDI E2E Recv")
+
+    unless media_policy in @ndi_media_policies do
+      raise ArgumentError, "unsupported media_policy: #{inspect(media_policy)}"
+    end
+
+    locator =
+      cond do
+        is_binary(source_name) and source_name != "" and is_nil(url_address) ->
+          %{"source_name" => source_name, "url_address" => nil}
+
+        is_binary(url_address) and url_address != "" and is_nil(source_name) ->
+          %{"source_name" => nil, "url_address" => url_address}
+
+        true ->
+          raise ArgumentError, "exactly one of :source_name or :url_address is required"
+      end
+
+    %{
+      "route_id" => route_id,
+      "config_revision" => "ndi-e2e-" <> Ecto.UUID.generate(),
+      "process_instance_id" => Ecto.UUID.generate(),
+      "source" => %{
+        "id" => Keyword.get(opts, :source_id, "ndi_source"),
+        "name" => Keyword.get(opts, :source_label, "ndi_source"),
+        "kind" => "ndi",
+        "ndi" =>
+          Map.merge(locator, %{
+            "receiver_name" => receiver_name,
+            "bandwidth" => Keyword.get(opts, :bandwidth, "highest"),
+            "color_format" => Keyword.get(opts, :color_format, "uyvy-bgra"),
+            "timestamp_mode" => Keyword.get(opts, :timestamp_mode, "receive-time-vs-timestamp"),
+            "media_policy" => media_policy,
+            "connect_timeout_ms" => Keyword.get(opts, :connect_timeout_ms, 10_000),
+            "receive_timeout_ms" => Keyword.get(opts, :receive_timeout_ms, 5_000),
+            "track_discovery_timeout_ms" =>
+              Keyword.get(opts, :track_discovery_timeout_ms, 10_000),
+            "max_queue_length" => Keyword.get(opts, :max_queue_length, 4)
+          })
+      },
+      "destinations" => [
+        %{
+          "id" => Keyword.get(opts, :dest_id, "ndi_dest"),
+          "name" => Keyword.get(opts, :dest_label, "ndi_dest"),
+          "kind" => "ndi",
+          "ndi" => %{
+            "sender_name" => sender_name,
+            "media_policy" => media_policy
+          }
+        }
+      ]
+    }
+  end
+
+  @doc """
+  Probe stdin payload: a single typed NDI source endpoint.
+  """
+  def ndi_probe_input(opts \\ []) do
+    source_name = Keyword.get(opts, :source_name, "Absent NDI Source")
+    url_address = Keyword.get(opts, :url_address)
+    media_policy = Keyword.get(opts, :media_policy, "video_only")
+
+    locator =
+      cond do
+        is_binary(url_address) and url_address != "" ->
+          %{"source_name" => nil, "url_address" => url_address}
+
+        true ->
+          %{"source_name" => source_name, "url_address" => nil}
+      end
+
+    %{
+      "source" => %{
+        "id" => Keyword.get(opts, :source_id, "ndi_probe_source"),
+        "name" => "ndi_probe_source",
+        "kind" => "ndi",
+        "ndi" =>
+          Map.merge(locator, %{
+            "receiver_name" => Keyword.get(opts, :receiver_name, "Hydra NDI Probe"),
+            "bandwidth" => "highest",
+            "color_format" => "uyvy-bgra",
+            "timestamp_mode" => "receive-time-vs-timestamp",
+            "media_policy" => media_policy,
+            "connect_timeout_ms" => Keyword.get(opts, :connect_timeout_ms, 2_000),
+            "receive_timeout_ms" => Keyword.get(opts, :receive_timeout_ms, 2_000),
+            "track_discovery_timeout_ms" => Keyword.get(opts, :track_discovery_timeout_ms, 2_000),
+            "max_queue_length" => 4
+          })
+      }
+    }
+  end
+
+  @doc """
+  True when `HYDRA_NDI_RUNTIME_DIR` points at a directory with a loadable libndi.
+  """
+  def ndi_runtime_available? do
+    case System.get_env("HYDRA_NDI_RUNTIME_DIR") do
+      dir when is_binary(dir) and dir != "" ->
+        File.dir?(dir) and libndi_present?(dir)
+
+      _ ->
+        false
+    end
+  end
+
+  def libndi_present?(dir) when is_binary(dir) do
+    patterns = [
+      "libndi.so.6",
+      "libndi.so",
+      "libndi.dylib",
+      "libndi*.dylib",
+      "Processing.NDI.Lib*.dylib"
+    ]
+
+    Enum.any?(patterns, fn pattern ->
+      Path.wildcard(Path.join(dir, pattern)) != []
+    end)
+  end
+
+  @doc """
+  Runs `ndi-discovery` with stdin closed; returns `{exit_status, decoded_json_events}`.
+  """
+  def run_ndi_discovery!(opts \\ []) do
+    helper_id = Keyword.get(opts, :helper_instance_id, Ecto.UUID.generate())
+    timeout_ms = Keyword.get(opts, :timeout_ms, 15_000)
+    env = Keyword.get(opts, :env, native_port_env())
+
+    run_helper_collect!(
+      ["ndi-discovery", "--helper-instance-id", helper_id],
+      "",
+      env,
+      timeout_ms,
+      close_stdin?: false
+    )
+  end
+
+  @doc """
+  Runs `ndi-probe` with one JSON line on stdin; returns `{exit_status, decoded_json_events}`.
+  """
+  def run_ndi_probe!(input, opts \\ []) when is_map(input) do
+    probe_id = Keyword.get(opts, :probe_instance_id, Ecto.UUID.generate())
+    timeout_ms = Keyword.get(opts, :timeout_ms, 20_000)
+    env = Keyword.get(opts, :env, native_port_env())
+
+    run_helper_collect!(
+      ["ndi-probe", "--probe-instance-id", probe_id],
+      Jason.encode!(input) <> "\n",
+      env,
+      timeout_ms,
+      close_stdin?: false
+    )
+  end
+
+  @doc """
+  Classifies NDI capability via a one-shot discovery run.
+
+  Pass `:env` to classify the capability of a specific child environment rather
+  than the suite default.
+
+  Returns `{:plugin_missing | :runtime_missing | :available, events}`.
+  """
+  def ndi_capability_status(opts \\ []) do
+    {_status, events} =
+      run_ndi_discovery!(Keyword.merge([timeout_ms: 10_000], opts))
+
+    cond do
+      Enum.any?(
+        events,
+        &match?(%{"event" => "ndi_capability", "reason_code" => "NDI_PLUGIN_MISSING"}, &1)
+      ) ->
+        {:plugin_missing, events}
+
+      Enum.any?(
+        events,
+        &match?(%{"event" => "ndi_capability", "reason_code" => "NDI_RUNTIME_MISSING"}, &1)
+      ) ->
+        {:runtime_missing, events}
+
+      Enum.any?(events, &match?(%{"event" => "ndi_device_snapshot"}, &1)) ->
+        {:available, events}
+
+      true ->
+        {:plugin_missing, events}
+    end
+  end
+
+  @doc """
+  Starts an upstream `gst-launch-1.0` NDI sender fixture. Returns
+  `%{port, os_pid, tag, name, log_path}`.
+
+  The sender's stdout+stderr are redirected to `log_path` (not left to pile up
+  unread in this process's mailbox), and the process is verified alive after a
+  short settle window: a sender that dies immediately raises here, with its
+  captured output, instead of silently masquerading as a discovery timeout
+  30-120s later.
+  """
+  def start_gst_ndi_sender!(opts \\ []) do
+    name = Keyword.get(opts, :name, "Hydra CI Source #{System.unique_integer([:positive])}")
+    media_policy = Keyword.get(opts, :media_policy, "video_and_audio_required")
+    duration_s = Keyword.get(opts, :duration_s, 30)
+    tag = "gst_ndi_sender_#{System.unique_integer([:positive])}"
+
+    pipeline =
+      case media_policy do
+        "video_and_audio_required" ->
+          [
+            "ndisinkcombiner",
+            "name=c",
+            "!",
+            "ndisink",
+            "ndi-name=#{name}",
+            "videotestsrc",
+            "is-live=true",
+            "num-buffers=#{duration_s * 30}",
+            "!",
+            "video/x-raw,format=UYVY,width=640,height=360,framerate=30/1",
+            "!",
+            "c.video",
+            "audiotestsrc",
+            "is-live=true",
+            "num-buffers=#{duration_s * 50}",
+            "!",
+            "audio/x-raw,format=F32LE,rate=48000,channels=2",
+            "!",
+            "c.audio"
+          ]
+
+        "video_only" ->
+          [
+            "videotestsrc",
+            "is-live=true",
+            "num-buffers=#{duration_s * 30}",
+            "!",
+            "video/x-raw,format=UYVY,width=640,height=360,framerate=30/1",
+            "!",
+            "ndisink",
+            "ndi-name=#{name}"
+          ]
+
+        "audio_only" ->
+          [
+            "audiotestsrc",
+            "is-live=true",
+            "num-buffers=#{duration_s * 50}",
+            "!",
+            "audio/x-raw,format=F32LE,rate=48000,channels=2",
+            "!",
+            "ndisink",
+            "ndi-name=#{name}"
+          ]
+
+        other ->
+          raise ArgumentError, "unsupported sender media_policy: #{inspect(other)}"
+      end
+
+    case System.find_executable("gst-launch-1.0") do
+      nil ->
+        raise ExUnit.AssertionError, message: "gst-launch-1.0 required for NDI sender fixtures"
+
+      gst_launch ->
+        log_path = Path.join(System.tmp_dir!(), "hydra_ndi_sender_#{tag}.log")
+
+        # Route through a shell so stdout+stderr can be redirected to a file we
+        # can read back later. Port.open/2 already runs this as `sh -c "exec ..."`,
+        # so the shell is replaced by gst-launch-1.0 and Port.info(:os_pid) (plus
+        # stop_os_process!/ProcessRegistry) still target it rather than a wrapper
+        # shell. Prepending another `exec` here would make sh look for a binary
+        # literally named "exec".
+        shell_cmd =
+          Enum.map_join([gst_launch | pipeline], " ", &shell_escape/1) <>
+            " > " <> shell_escape(log_path) <> " 2>&1"
+
+        port =
+          Port.open(
+            {:spawn, shell_cmd},
+            [
+              :binary,
+              :exit_status,
+              :stream,
+              :hide,
+              env: native_port_env()
+            ]
+          )
+
+        os_pid =
+          case Port.info(port, :os_pid) do
+            {:os_pid, pid} when is_integer(pid) -> pid
+            _ -> nil
+          end
+
+        :ok =
+          ProcessRegistry.register!(make_ref(), %{
+            kind: :gst_ndi_sender,
+            tag: tag,
+            os_pid: os_pid,
+            port: port
+          })
+
+        sender = %{port: port, os_pid: os_pid, tag: tag, name: name, log_path: log_path}
+
+        # Settle, then verify the process didn't die on the spot (bad args,
+        # missing plugin, NDI runtime load failure, etc). Never let that be
+        # indistinguishable from "discovery didn't see it".
+        Process.sleep(1_000)
+
+        unless sender_alive?(sender) do
+          raise ExUnit.AssertionError,
+            message: """
+            NDI sender fixture #{inspect(name)} (tag=#{tag}) exited immediately \
+            after launch (os_pid=#{inspect(os_pid)}). It cannot be discovered \
+            because it is not running.
+
+            --- captured sender output (#{log_path}) ---
+            #{read_sender_output(sender)}
+            """
+        end
+
+        sender
+    end
+  end
+
+  @doc """
+  True when a sender fixture's OS process is still running.
+  """
+  def sender_alive?(%{os_pid: os_pid}) when is_integer(os_pid) do
+    case System.cmd("kill", ["-0", Integer.to_string(os_pid)], stderr_to_stdout: true) do
+      {_out, 0} -> true
+      {_out, _} -> false
+    end
+  end
+
+  def sender_alive?(_), do: false
+
+  @doc """
+  Reads back a sender fixture's captured stdout+stderr.
+  """
+  def read_sender_output(%{log_path: log_path}) when is_binary(log_path) do
+    case File.read(log_path) do
+      {:ok, content} when content != "" -> content
+      {:ok, ""} -> "(empty: sender produced no output)"
+      {:error, reason} -> "(no output captured: #{log_path} unreadable: #{inspect(reason)})"
+    end
+  end
+
+  def read_sender_output(_), do: "(sender fixture has no captured log path)"
+
+  def stop_os_process!(%{os_pid: os_pid, port: port}) when is_integer(os_pid) do
+    if Port.info(port) != nil, do: Port.close(port)
+    _ = System.cmd("kill", ["-TERM", Integer.to_string(os_pid)], stderr_to_stdout: true)
+    :ok
+  end
+
+  def stop_os_process!(_), do: :ok
+
+  @doc """
+  Asserts proprietary NDI artifacts are absent from the repository checkout.
+  """
+  def assert_no_prohibited_ndi_artifacts!(root \\ File.cwd!()) do
+    patterns = [
+      "**/libndi.so*",
+      "**/libndi.dylib*",
+      "**/Processing.NDI.Lib*",
+      "**/Install_NDI_SDK*",
+      "**/NDI SDK*",
+      "**/*NDI*Tools*",
+      "**/NDILib*"
+    ]
+
+    hits =
+      patterns
+      |> Enum.flat_map(fn pattern ->
+        Path.wildcard(Path.join(root, pattern))
+      end)
+      |> Enum.reject(fn path ->
+        String.contains?(path, "/.fleet/") or
+          String.contains?(path, "/refs/") or
+          String.contains?(path, "/docs/") or
+          String.ends_with?(path, ".md") or
+          String.ends_with?(path, ".exs") or
+          String.ends_with?(path, ".ex") or
+          String.ends_with?(path, ".yml")
+      end)
+
+    if hits != [] do
+      raise ExUnit.AssertionError,
+        message: "prohibited NDI artifacts present in checkout: #{inspect(hits)}"
+    end
+
+    :ok
+  end
+
+  def wait_until(fun, timeout_ms, interval_ms \\ 50) do
+    E2EHelpers.wait_until(fun, timeout_ms, interval_ms)
+  end
+
+  @doc """
+  Returns diagnostics for the most recent `run_helper_collect!` call made by
+  this process: `%{args:, exit_status:, timed_out?:, raw:}`. Scoped to the
+  calling process (the ExUnit test process), via the process dictionary, so
+  concurrent tests never see each other's output.
+  """
+  def last_helper_output do
+    Process.get(:hydra_ndi_last_helper_output, %{
+      args: nil,
+      exit_status: nil,
+      timed_out?: nil,
+      raw: "(no helper invocation recorded yet)"
+    })
+  end
+
+  def run_helper_collect!(args, stdin_payload, env, timeout_ms, opts \\ []) do
+    binary = rs_native_binary_path()
+    env_strings = system_env_from_port_env(env)
+    # Whether the helper should observe stdin EOF as soon as the payload is
+    # consumed (discovery: no input expected) vs kept open a beat longer.
+    close_stdin? = Keyword.get(opts, :close_stdin?, true)
+
+    stdin_path =
+      Path.join(System.tmp_dir!(), "hydra_ndi_stdin_#{System.unique_integer([:positive])}")
+
+    stdout_path =
+      Path.join(System.tmp_dir!(), "hydra_ndi_stdout_#{System.unique_integer([:positive])}")
+
+    File.write!(stdin_path, stdin_payload)
+
+    cmd_str = Enum.map_join([binary | args], " ", &shell_escape/1)
+
+    # Output is redirected to a file (not captured only via System.cmd's
+    # return value) so that if the Task has to be brutally killed on timeout,
+    # whatever the helper had already written is still readable afterward —
+    # a hung helper must be diagnosable, not silently discarded.
+    redirect_out = " > " <> shell_escape(stdout_path) <> " 2>&1"
+
+    # `ndi-probe` reads one stdin line synchronously and exits on its own, so EOF
+    # timing is irrelevant to it and a plain redirect is right.
+    #
+    # `ndi-discovery` quits its glib MainLoop the moment stdin reaches EOF. With a
+    # plain `< file` redirect that is instantaneous, so it reports only whatever
+    # `monitor.devices()` happened to hold at t=0 and exits before the NDI device
+    # provider has finished a discovery cycle and posted its DeviceAdded messages.
+    # Holding stdin open for a bounded window (a POSIX pipe — `sh` here is dash,
+    # which has no process substitution) gives the provider time to report, while
+    # the eventual EOF still stops the helper inside the collection timeout.
+    shell =
+      if close_stdin? do
+        cmd_str <> " < " <> shell_escape(stdin_path) <> redirect_out
+      else
+        window_s = Float.round(max(timeout_ms - 1_000, 500) / 1_000, 1)
+
+        "( cat " <>
+          shell_escape(stdin_path) <>
+          "; sleep " <> to_string(window_s) <> " ) | " <> cmd_str <> redirect_out
+      end
+
+    task =
+      Task.async(fn ->
+        System.cmd("sh", ["-c", shell], env: env_strings)
+      end)
+
+    {exit_status, timed_out?} =
+      case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+        {:ok, {_output, status}} -> {status, false}
+        {:ok, _other} -> {-1, false}
+        nil -> {-1, true}
+      end
+
+    raw_output =
+      case File.read(stdout_path) do
+        {:ok, content} -> content
+        {:error, _} -> ""
+      end
+
+    events =
+      raw_output
+      |> String.split("\n", trim: true)
+      |> Enum.reduce([], fn line, acc ->
+        case Jason.decode(line) do
+          {:ok, map} when is_map(map) -> [map | acc]
+          _ -> acc
+        end
+      end)
+      |> Enum.reverse()
+
+    Process.put(:hydra_ndi_last_helper_output, %{
+      args: args,
+      exit_status: exit_status,
+      timed_out?: timed_out?,
+      raw: raw_output
+    })
+
+    _ = File.rm(stdin_path)
+    _ = File.rm(stdout_path)
+    {exit_status, events}
+  end
+
+  def shell_escape(value) when is_binary(value) do
+    "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
   end
 
   def start_ffmpeg_sender!(source_port, opts \\ []) do
@@ -137,10 +765,6 @@ defmodule HydraSrt.E2E.Native.Helpers do
       })
 
     proc
-  end
-
-  def wait_until(fun, timeout_ms, interval_ms \\ 50) do
-    E2EHelpers.wait_until(fun, timeout_ms, interval_ms)
   end
 
   defp build_srt_uri(host, port, mode, opts) do

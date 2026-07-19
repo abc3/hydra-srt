@@ -28,6 +28,7 @@ const itemSubscriptionsOnServer = new Set<string>();
 const itemSourceListeners = new Map<string, Set<Listener>>();
 const routeEventsListeners = new Map<string, Set<Listener>>();
 const routeEventsSubscriptionsOnServer = new Set<string>();
+const endpointHealthListeners = new Map<string, Set<Listener>>();
 
 /**
  * Same rules as the pre-refactor UI (e.g. RouteItem): pass the HTTP `/socket`
@@ -392,6 +393,22 @@ export const connectRealtime = () => {
     listeners.forEach((listener) => listener(payload));
   });
 
+  channel.on('endpoint_health', (payload: Payload) => {
+    const routeId = typeof payload?.route_id === 'string' ? payload.route_id : null;
+
+    if (!routeId) {
+      return;
+    }
+
+    const listeners = endpointHealthListeners.get(routeId);
+
+    if (!listeners || listeners.size === 0) {
+      return;
+    }
+
+    listeners.forEach((listener) => listener(payload));
+  });
+
   channel.onError((error: unknown) => {
     console.error('[realtime] channel error', error);
   });
@@ -474,6 +491,7 @@ export const disconnectRealtime = () => {
   itemSourceListeners.clear();
   routeEventsListeners.clear();
   routeEventsSubscriptionsOnServer.clear();
+  endpointHealthListeners.clear();
 };
 
 export const subscribeToStats = (listener: Listener) => {
@@ -621,6 +639,46 @@ export const subscribeToRouteEvents = (routeId: string, listener: Listener) => {
       pushRouteEventsUnsubscription(routeId);
     } else {
       routeEventsListeners.set(routeId, currentListeners);
+    }
+  };
+};
+
+/**
+ * Subscribe to NDI `endpoint_health` pushes for a route.
+ * Uses the existing item channel subscription so the server can forward
+ * PubSub `{:endpoint_health, payload}` as `endpoint_health` events.
+ */
+export const subscribeToEndpointHealth = (routeId: string, listener: Listener) => {
+  if (typeof routeId !== 'string' || routeId.length === 0) {
+    return () => {};
+  }
+
+  const listeners = endpointHealthListeners.get(routeId) || new Set();
+
+  if (typeof listener === 'function') {
+    listeners.add(listener);
+  }
+
+  endpointHealthListeners.set(routeId, listeners);
+  connectRealtime();
+  addItemListener(routeId);
+  pushItemSubscription(routeId);
+
+  return () => {
+    const currentListeners = endpointHealthListeners.get(routeId);
+
+    if (currentListeners && typeof listener === 'function') {
+      currentListeners.delete(listener);
+    }
+
+    if (!currentListeners || currentListeners.size === 0) {
+      endpointHealthListeners.delete(routeId);
+      const remaining = removeItemListener(routeId);
+      if (remaining === 0) {
+        pushItemUnsubscription(routeId);
+      }
+    } else {
+      endpointHealthListeners.set(routeId, currentListeners);
     }
   };
 };

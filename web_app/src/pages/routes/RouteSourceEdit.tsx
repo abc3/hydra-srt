@@ -43,6 +43,10 @@ import { applyBackendEndpointErrors } from './endpointFormErrors';
 import { flattenEndpointPayload, getEndpointOption, normalizeEndpointForForm } from './endpointOptions';
 import type { EndpointRecord } from './endpointOptions';
 import SrtAccessFields from './SrtAccessFields';
+import ProtocolSchemaRadio from './ProtocolSchemaRadio';
+import NdiInputFields from './NdiInputFields';
+import NdiOutputFields from './NdiOutputFields';
+import { useNdiCapabilities } from './useNdiCapabilities';
 
 const { Title } = Typography;
 const ANY_INTERFACE_OPTION: InterfaceOption = { label: 'Any interface', value: '' };
@@ -117,6 +121,8 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
   const [routeData, setRouteData] = useState<RouteRecord | null>(null);
   const [testResultOpen, setTestResultOpen] = useState(false);
   const [testResultData, setTestResultData] = useState<SourceTestResult | null>(null);
+  const { capabilities, loading: capabilitiesLoading } = useNdiCapabilities();
+  const ndiFeatureEnabled = capabilities?.feature_enabled === true;
   const dataFetchedRef = useRef(false);
   const previousSourceModesRef = useRef<(string | undefined)[]>([]);
 
@@ -744,12 +750,7 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                           </Form.Item>
 
                           <Form.Item label="Schema" name={[field.name, 'schema']} rules={[{ required: true, message: 'Please select a source schema' }]}>
-                            <Radio.Group buttonStyle="solid">
-                              <Radio.Button value="SRT">SRT</Radio.Button>
-                              <Radio.Button value="UDP">UDP</Radio.Button>
-                              <Radio.Button value="RTP">RTP</Radio.Button>
-                              <Radio.Button value="RTMP">RTMP</Radio.Button>
-                            </Radio.Group>
+                            <ProtocolSchemaRadio direction="source" ndiFeatureEnabled={ndiFeatureEnabled} />
                           </Form.Item>
 
                           <Form.Item noStyle dependencies={[['sources', field.name, 'schema'], ['sources', field.name, 'mode'], ['sources', field.name, 'multicast']]}>
@@ -945,6 +946,23 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                                 );
                               }
 
+                              if (schema === 'NDI') {
+                                return (
+                                  <NdiInputFields
+                                    namePrefix={field.name}
+                                    listName="sources"
+                                    capabilities={capabilities}
+                                    capabilitiesLoading={capabilitiesLoading}
+                                    endpointId={typeof getFieldValue(['sources', field.name, 'id']) === 'string'
+                                      ? getFieldValue(['sources', field.name, 'id'])
+                                      : undefined}
+                                    savedSourceName={getFieldValue(['sources', field.name, 'ndi_source_name'])}
+                                    savedObservedAddress={getFieldValue(['sources', field.name, 'ndi_observed_address_snapshot'])}
+                                    savedObservedName={getFieldValue(['sources', field.name, 'ndi_observed_name_snapshot'])}
+                                  />
+                                );
+                              }
+
                               return null;
                             }}
                           </Form.Item>
@@ -989,10 +1007,7 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                             </Form.Item>
 
                             <Form.Item label="Schema" name={[field.name, 'schema']} rules={[{ required: true, message: 'Please select a destination schema' }]}>
-                              <Radio.Group buttonStyle="solid">
-                                <Radio.Button value="SRT">SRT</Radio.Button>
-                                <Radio.Button value="UDP">UDP</Radio.Button>
-                              </Radio.Group>
+                              <ProtocolSchemaRadio direction="destination" ndiFeatureEnabled={ndiFeatureEnabled} />
                             </Form.Item>
 
                             <Form.Item noStyle shouldUpdate>
@@ -1203,6 +1218,37 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                                         <InputNumber style={{ width: 150 }} placeholder="Enter port number" />
                                       </Form.Item>
                                     </>
+                                  );
+                                }
+
+                                if (schema === 'RTMP') {
+                                  return (
+                                    <Form.Item
+                                      label="Location"
+                                      name={[field.name, 'location']}
+                                      rules={[{ required: true, message: 'Please enter an RTMP destination URL' }]}
+                                      extra="The RTMP destination URL (e.g. rtmp://live.twitch.tv/app/stream_key)"
+                                    >
+                                      <Input placeholder="rtmp://host/app/key" />
+                                    </Form.Item>
+                                  );
+                                }
+
+                                if (schema === 'NDI') {
+                                  const destinations = (getFieldValue('destinations') || []) as RouteEndpoint[];
+                                  const siblingSenderNames = destinations
+                                    .filter((_, index) => index !== field.name)
+                                    .map((dest) => dest?.ndi_sender_name)
+                                    .filter((name): name is string => typeof name === 'string' && name.length > 0);
+
+                                  return (
+                                    <NdiOutputFields
+                                      namePrefix={field.name}
+                                      listName="destinations"
+                                      capabilities={capabilities}
+                                      capabilitiesLoading={capabilitiesLoading}
+                                      siblingSenderNames={siblingSenderNames}
+                                    />
                                   );
                                 }
 
