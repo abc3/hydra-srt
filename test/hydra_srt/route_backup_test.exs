@@ -302,4 +302,75 @@ defmodule HydraSrt.RouteBackupTest do
     assert {:error, {:unsupported_backup_version, "2.0"}} =
              RouteBackup.import(%{"backup_version" => "2.0", "routes" => []})
   end
+
+  test "round-trips NDI intent fields in backup version 1.0 without sender name key" do
+    backup = %{
+      "backup_version" => "1.0",
+      "product_version" => "0.6.1",
+      "routes" => [
+        %{
+          "name" => "NDI route",
+          "enabled" => false,
+          "sources" => [
+            %{
+              "name" => "NDI in",
+              "enabled" => true,
+              "schema" => "NDI",
+              "ndi_selection_mode" => "discovery_name",
+              "ndi_source_name" => "CAMERA (A)",
+              "ndi_media_policy" => "video_and_audio_required",
+              "ndi_bandwidth" => "highest",
+              "ndi_color_format" => "uyvy-bgra",
+              "ndi_timestamp_mode" => "receive-time-vs-timestamp",
+              "ndi_connect_timeout_ms" => 10_000,
+              "ndi_receive_timeout_ms" => 5_000,
+              "ndi_track_discovery_timeout_ms" => 10_000,
+              "ndi_max_queue_length" => 4,
+              "ndi_receiver_name" => "Hydra NDI route",
+              "ndi_sender_name_key" => "must-be-ignored-on-import"
+            }
+          ],
+          "destinations" => [
+            %{
+              "name" => "NDI out",
+              "enabled" => true,
+              "schema" => "NDI",
+              "ndi_sender_name" => "Hydra (NDI route)",
+              "ndi_media_policy" => "video_only",
+              "ndi_sender_name_key" => "also-ignored"
+            }
+          ]
+        }
+      ]
+    }
+
+    assert {:ok, 1} = RouteBackup.import(backup)
+    assert {:ok, exported} = RouteBackup.export()
+    assert exported["backup_version"] == "1.0"
+
+    [route] = exported["routes"]
+    [source] = route["sources"]
+    [destination] = route["destinations"]
+
+    assert source["schema"] == "NDI"
+    assert source["ndi_selection_mode"] == "discovery_name"
+    assert source["ndi_source_name"] == "CAMERA (A)"
+    assert source["ndi_media_policy"] == "video_and_audio_required"
+    assert source["ndi_max_queue_length"] == 4
+    refute Map.has_key?(source, "ndi_sender_name_key")
+
+    assert destination["schema"] == "NDI"
+    assert destination["ndi_sender_name"] == "Hydra (NDI route)"
+    assert destination["ndi_media_policy"] == "video_only"
+    refute Map.has_key?(destination, "ndi_sender_name_key")
+
+    {:ok, [db_route]} = Db.get_all_routes(true)
+
+    destination_row =
+      Endpoint.destination_scope()
+      |> where([endpoint], endpoint.route_id == ^db_route["id"])
+      |> Repo.one!()
+
+    assert destination_row.ndi_sender_name_key == "hydra (ndi route)"
+  end
 end

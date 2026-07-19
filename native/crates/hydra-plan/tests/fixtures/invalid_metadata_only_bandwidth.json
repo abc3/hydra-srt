@@ -1,0 +1,23 @@
+{
+  "route_id": "route-invalid",
+  "config_revision": "revision-invalid",
+  "process_instance_id": "process-invalid",
+  "source": {
+    "id": "source-ndi",
+    "kind": "ndi",
+    "ndi": {
+      "source_name": "MACHINE (CHANNEL)",
+      "url_address": null,
+      "receiver_name": "Hydra route",
+      "bandwidth": "metadata_only",
+      "color_format": "uyvy-bgra",
+      "timestamp_mode": "receive-time-vs-timestamp",
+      "media_policy": "video_only",
+      "connect_timeout_ms": 10000,
+      "receive_timeout_ms": 5000,
+      "track_discovery_timeout_ms": 10000,
+      "max_queue_length": 4
+    }
+  },
+  "destinations": [{"id":"destination-ndi","kind":"ndi","ndi":{"sender_name":"Output","media_policy":"video_only"}}]
+}

@@ -2,12 +2,14 @@ defmodule HydraSrt.Mcp.Tools.Sources do
   @moduledoc false
 
   alias HydraSrt.Mcp.Helpers
+  alias HydraSrt.Mcp.InputSchema
   alias HydraSrt.Mcp.Tools.Routes, as: Schema
   alias HydraSrt.Sources
 
   @spec definitions() :: [map()]
   def definitions do
     route_id = Schema.string_prop("Route ID")
+    source_attrs = InputSchema.source_attributes_schema()
 
     [
       %{
@@ -29,7 +31,7 @@ defmodule HydraSrt.Mcp.Tools.Sources do
         description: "Create a source on a route.",
         input_schema:
           Schema.object_schema(
-            %{"route_id" => route_id, "source" => Schema.object_prop("Source attributes")},
+            %{"route_id" => route_id, "source" => source_attrs},
             ["route_id", "source"]
           )
       },
@@ -41,7 +43,7 @@ defmodule HydraSrt.Mcp.Tools.Sources do
             %{
               "route_id" => route_id,
               "source_id" => Schema.string_prop("Source ID"),
-              "source" => Schema.object_prop("Source attributes")
+              "source" => source_attrs
             },
             ["route_id", "source_id", "source"]
           )
@@ -82,7 +84,7 @@ defmodule HydraSrt.Mcp.Tools.Sources do
   @spec handles?(String.t()) :: boolean()
   def handles?(name), do: name in Enum.map(definitions(), & &1.name)
 
-  @spec call(String.t(), map()) :: {:ok, term()} | {:error, term()}
+  @spec call(String.t(), map()) :: {:ok, term()} | {:error, term()} | :unknown
   def call("list_sources", args) do
     with {:ok, route_id} <- Schema.param(args, "route_id"),
          result <- Sources.list(route_id) do
@@ -101,7 +103,7 @@ defmodule HydraSrt.Mcp.Tools.Sources do
   def call("create_source", args) do
     with {:ok, route_id} <- Schema.param(args, "route_id"),
          {:ok, source} <- Schema.map_param(args, "source"),
-         result <- Sources.create(route_id, source) do
+         result <- Sources.create(route_id, InputSchema.sanitize_source_attrs(source)) do
       {:ok, Helpers.from_result(result)}
     end
   end
@@ -110,7 +112,8 @@ defmodule HydraSrt.Mcp.Tools.Sources do
     with {:ok, route_id} <- Schema.param(args, "route_id"),
          {:ok, source_id} <- Schema.param(args, "source_id"),
          {:ok, source} <- Schema.map_param(args, "source"),
-         result <- Sources.update(route_id, source_id, source) do
+         result <-
+           Sources.update(route_id, source_id, InputSchema.sanitize_source_attrs(source)) do
       {:ok, Helpers.from_result(result)}
     end
   end
@@ -148,6 +151,7 @@ defmodule HydraSrt.Mcp.Tools.Sources do
 
   def call(_name, _args), do: :unknown
 
+  @spec require_source_ids(map()) :: {:ok, [term()]} | {:error, term()}
   def require_source_ids(args) do
     case Map.get(args, "source_ids") do
       ids when is_list(ids) -> {:ok, ids}

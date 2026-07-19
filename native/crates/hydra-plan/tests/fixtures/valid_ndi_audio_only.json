@@ -1,0 +1,32 @@
+{
+  "route_id": "route-audio",
+  "config_revision": "revision-audio",
+  "process_instance_id": "process-audio",
+  "source": {
+    "id": "audio-source",
+    "kind": "ndi",
+    "ndi": {
+      "source_name": "MACHINE (AUDIO)",
+      "url_address": null,
+      "receiver_name": "Hydra audio route",
+      "bandwidth": "audio_only",
+      "color_format": "best",
+      "timestamp_mode": "receive-time-vs-timestamp",
+      "media_policy": "audio_only",
+      "connect_timeout_ms": 1000,
+      "receive_timeout_ms": 60000,
+      "track_discovery_timeout_ms": 10000,
+      "max_queue_length": 1
+    }
+  },
+  "destinations": [
+    {
+      "id": "audio-destination",
+      "kind": "ndi",
+      "ndi": {
+        "sender_name": "Hydra Audio Output",
+        "media_policy": "audio_only"
+      }
+    }
+  ]
+}

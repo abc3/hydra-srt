@@ -52,8 +52,28 @@ defmodule HydraSrt.DbFixtures do
         "port" => unique_port
       })
 
-    {:ok, source} = HydraSrt.Db.create_source(route_id, attrs)
-    source
+    create_source_with_retry(route_id, attrs, 5)
+  end
+
+  def create_source_with_retry(route_id, attrs, attempts_left) do
+    case HydraSrt.Db.create_source(route_id, attrs) do
+      {:ok, source} ->
+        source
+
+      {:error, %Ecto.Changeset{errors: errors}}
+      when attempts_left > 0 and is_list(errors) ->
+        if Keyword.has_key?(errors, :bind_port) do
+          schema = Map.get(attrs, "schema") || Map.get(attrs, :schema) || "UDP"
+          position = Map.get(attrs, "position") || Map.get(attrs, :position) || 0
+          retry_attrs = Map.put(attrs, "port", endpoint_free_port(schema, position))
+          create_source_with_retry(route_id, retry_attrs, attempts_left - 1)
+        else
+          raise "source_fixture failed: #{inspect(errors)}"
+        end
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        raise "source_fixture failed: #{inspect(changeset.errors)}"
+    end
   end
 
   @doc """

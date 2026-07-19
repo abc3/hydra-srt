@@ -16,6 +16,7 @@ alias HydraSrt.Env
 # - PORT / PHX_HOST: HTTP listen port and URL host
 # - RTMP_PORT: RTMP ingest server listen port (default 1935)
 # - PHX_CHECK_ORIGIN: WebSocket origin checks (prod default: disabled)
+# - NDI_FEATURE: enables the NDI feature (default false)
 
 if System.get_env("PHX_SERVER") do
   config :hydra_srt, HydraSrtWeb.Endpoint, server: true
@@ -23,6 +24,15 @@ end
 
 config :hydra_srt, demo_data: Env.get_boolean("DEMO_DATA", false)
 config :hydra_srt, rtmp_port: Env.get_integer("RTMP_PORT", 1935)
+
+# NDI stays off unless NDI_FEATURE is set. Parsed to booleans here so
+# HydraSrt.Ndi.FeaturePolicy only ever reads already-typed flags.
+ndi_feature? = Env.get_boolean("NDI_FEATURE", false)
+
+config :hydra_srt, :ndi,
+  enabled: ndi_feature?,
+  receive: ndi_feature?,
+  send: ndi_feature?
 
 config :hydra_srt,
   rtmp_bootstrap_ttl_ms: Env.get_integer("RTMP_BOOTSTRAP_TTL_MS", :timer.seconds(30)),

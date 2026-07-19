@@ -18,16 +18,17 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtToUdpTest do
     ProcessRegistry.cleanup_all!()
     source_port = Helpers.free_srt_port!()
     udp_port = Helpers.free_udp_port!()
+    route_id = "rs_demo_#{System.unique_integer([:positive])}"
 
     {:ok, udp_listener} = UdpListener.start_link(port: udp_port, test_pid: self())
 
-    config = Helpers.srt_to_udp_config(source_port, udp_port)
+    config = Helpers.srt_to_udp_config(source_port, udp_port, route_id: route_id)
     config = maybe_deny_localhost(config, context)
 
     {:ok, harness} =
       Harness.start_link(
         test_pid: self(),
-        route_id: "rs_demo_#{System.unique_integer([:positive])}",
+        route_id: route_id,
         config: config
       )
 
@@ -156,17 +157,15 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtToUdpTest do
   end
 
   def maybe_deny_localhost(config, %{deny_localhost: true}) do
-    put_in(
-      config,
-      ["source"],
-      Map.merge(config["source"], %{
+    update_in(config, ["source", "legacy", "props"], fn props ->
+      Map.merge(props, %{
         "streamid" => "test1",
         "authentication" => true,
         "hydra_limit_access" => true,
         "hydra_allowed_list" => [],
         "hydra_denied_list" => ["127.0.0.1"]
       })
-    )
+    end)
   end
 
   def maybe_deny_localhost(config, _context), do: config

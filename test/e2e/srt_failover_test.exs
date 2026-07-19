@@ -112,13 +112,15 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
     assert route_after_switch["active_source_id"] == backup_source_id
     assert route_after_switch["last_switch_reason"] == "manual"
 
-    events = wait_for_route_events(base_url, token, route_id, 12_000)
+    switched? = fn event ->
+      event["event_type"] == "source_switch" and
+        event["to_source_id"] == backup_source_id and
+        event["reason"] == "manual"
+    end
 
-    assert Enum.any?(events, fn event ->
-             event["event_type"] == "source_switch" and
-               event["to_source_id"] == backup_source_id and
-               event["reason"] == "manual"
-           end)
+    events = wait_for_route_events(base_url, token, route_id, 35_000, [switched?])
+
+    assert Enum.any?(events, switched?)
 
     assert primary_source_id != backup_source_id
   end
@@ -226,17 +228,20 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
 
     assert bytes_after > bytes_before
 
-    # EventLogger flushes historical events on a ~5s timer; polling until the window ends
-    # avoids returning the first partial batch (see wait_for_route_events/4).
-    events = wait_for_route_events(base_url, token, route_id, 14_000)
+    switched_to = fn source_id ->
+      fn event ->
+        event["event_type"] == "source_switch" and event["to_source_id"] == source_id
+      end
+    end
 
-    assert Enum.any?(events, fn event ->
-             event["event_type"] == "source_switch" and event["to_source_id"] == s1
-           end)
+    events =
+      wait_for_route_events(base_url, token, route_id, 35_000, [
+        switched_to.(s1),
+        switched_to.(s2)
+      ])
 
-    assert Enum.any?(events, fn event ->
-             event["event_type"] == "source_switch" and event["to_source_id"] == s2
-           end)
+    assert Enum.any?(events, switched_to.(s1))
+    assert Enum.any?(events, switched_to.(s2))
 
     assert s0 != s1 and s1 != s2
   end
@@ -294,22 +299,34 @@ defmodule HydraSrt.E2E.SrtFailoverTest do
     Jason.decode!(resp) |> get_in(["data", "events"]) || []
   end
 
-  defp wait_for_route_events(base_url, token, route_id, timeout_ms) do
+  defp wait_for_route_events(base_url, token, route_id, timeout_ms, awaited) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait_for_route_events(base_url, token, route_id, deadline, [])
+    do_wait_for_route_events(base_url, token, route_id, deadline, [], awaited)
   end
 
-  # Poll until the deadline and return the longest event list seen. EventLogger
-  # batches writes (~5s), so the first non-empty API response is often incomplete.
-  defp do_wait_for_route_events(base_url, token, route_id, deadline, best) do
+  # Poll until every awaited event has been seen, returning as soon as they all
+  # are; without them, poll to the deadline and return the longest list seen.
+  #
+  # Two separate delays sit between a switch happening and it being queryable:
+  # EventLogger batches writes on a ~5s timer, and an event whose labels form a
+  # time series the metrics store has not indexed yet stays invisible several
+  # seconds longer than one reusing an existing series. A source_switch to a
+  # backup is exactly that case, so the budget has to cover both while an early
+  # return keeps the usual path fast.
+  defp do_wait_for_route_events(base_url, token, route_id, deadline, best, awaited) do
     events = api_list_route_events!(base_url, token, route_id)
     best = if length(events) >= length(best), do: events, else: best
 
-    if System.monotonic_time(:millisecond) >= deadline do
-      best
-    else
-      Process.sleep(400)
-      do_wait_for_route_events(base_url, token, route_id, deadline, best)
+    cond do
+      awaited != [] and Enum.all?(awaited, fn match -> Enum.any?(best, match) end) ->
+        best
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        best
+
+      true ->
+        Process.sleep(400)
+        do_wait_for_route_events(base_url, token, route_id, deadline, best, awaited)
     end
   end
 

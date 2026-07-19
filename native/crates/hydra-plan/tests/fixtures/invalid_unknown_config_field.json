@@ -1,0 +1,24 @@
+{
+  "unexpected_field": true,
+  "route_id": "route-version",
+  "config_revision": "revision-version",
+  "process_instance_id": "process-version",
+  "source": {
+    "id": "legacy-source",
+    "kind": "srt",
+    "srt": {
+      "uri": "srt://127.0.0.1:9000?mode=listener",
+      "mode": "listener"
+    }
+  },
+  "destinations": [
+    {
+      "id": "legacy-destination",
+      "kind": "udp",
+      "udp": {
+        "address": "127.0.0.1",
+        "port": 5000
+      }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "route_id": "route-mixed",
+  "config_revision": "revision-mixed",
+  "process_instance_id": "process-mixed",
+  "source": {
+    "id": "source-ndi",
+    "kind": "ndi",
+    "ndi": {
+      "source_name": "MACHINE (CHANNEL)",
+      "url_address": null,
+      "receiver_name": "Hydra route",
+      "bandwidth": "highest",
+      "color_format": "uyvy-bgra",
+      "timestamp_mode": "receive-time-vs-timestamp",
+      "media_policy": "video_only",
+      "connect_timeout_ms": 10000,
+      "receive_timeout_ms": 5000,
+      "track_discovery_timeout_ms": 10000,
+      "max_queue_length": 4
+    }
+  },
+  "destinations": [
+    {
+      "id": "legacy-destination",
+      "name": "Legacy Destination",
+      "kind": "srt",
+      "srt": {
+        "uri": "srt://127.0.0.1:9001?mode=caller",
+        "mode": "caller"
+      }
+    }
+  ]
+}

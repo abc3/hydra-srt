@@ -30,6 +30,38 @@ defmodule HydraSrt.RouteHandlerTest do
     def get_interface_by_sys_name(_), do: {:error, :not_found}
   end
 
+  # Full RouteHandler data map matching init/1 (including W3b recovery keys).
+  @spec base_route_data(map()) :: map()
+  def base_route_data(overrides \\ %{}) when is_map(overrides) do
+    Map.merge(
+      %{
+        id: "route-base",
+        port: nil,
+        route: %{},
+        port_buffer: "",
+        shutdown_reason: nil,
+        active_source_id: nil,
+        last_manual_source_id: nil,
+        process_instance_id: nil,
+        endpoint_health: %{},
+        route_terminal: nil,
+        source_loss_since_ms: nil,
+        source_loss_signal: nil,
+        cooldown_until: nil,
+        primary_stable_since_ms: nil,
+        last_primary_probe_ms: nil,
+        primary_probe_inflight?: false,
+        retry_scheduled?: false,
+        retry_attempt: 0,
+        retry_prev_backoff_ms: nil,
+        retry_circuit_open?: false,
+        recovery_blocked?: false,
+        recovering?: false
+      },
+      overrides
+    )
+  end
+
   test "source_from_record with valid SRT schema" do
     record = %{
       "schema" => "SRT",
@@ -45,15 +77,24 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
-    assert source["type"] == "srtsrc"
-    assert source["uri"] =~ "srt://127.0.0.1:4201"
-    assert source["uri"] =~ "mode=listener"
-    assert source["latency"] == 200
-    assert source["auto-reconnect"] == true
-    assert source["keep-listening"] == true
-    assert source["hydra_limit_access"] == true
-    assert source["hydra_allowed_list"] == ["127.0.0.1", "10.10.0.0/16"]
-    assert source["hydra_denied_list"] == ["192.0.2.10"]
+    assert source["kind"] == "srt"
+    srt = source["srt"]
+    assert srt["uri"] =~ "srt://127.0.0.1:4201"
+    assert srt["uri"] =~ "mode=listener"
+    assert srt["mode"] == "listener"
+    assert srt["latency"] == 200
+    assert srt["auto_reconnect"] == true
+    assert srt["keep_listening"] == true
+    assert srt["localaddress"] == "127.0.0.1"
+    assert srt["localport"] == 4201
+
+    assert srt["access"] == %{
+             "limit" => true,
+             "allowed" => ["127.0.0.1", "10.10.0.0/16"],
+             "denied" => ["192.0.2.10"]
+           }
+
+    refute Map.has_key?(srt, "streamid")
   end
 
   test "source_from_record does not pass access ranges when limit_access is false" do
@@ -68,9 +109,7 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
-    refute Map.has_key?(source, "hydra_limit_access")
-    refute Map.has_key?(source, "hydra_allowed_list")
-    refute Map.has_key?(source, "hydra_denied_list")
+    refute Map.has_key?(source["srt"], "access")
   end
 
   test "source_from_record with SRT schema and passphrase" do
@@ -84,11 +123,14 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
-    assert source["type"] == "srtsrc"
-    assert source["uri"] =~ "srt://127.0.0.1:4201"
-    assert source["uri"] =~ "mode=listener"
-    assert source["uri"] =~ "passphrase=secret"
-    assert source["uri"] =~ "pbkeylen=16"
+    assert source["kind"] == "srt"
+    srt = source["srt"]
+    assert srt["uri"] =~ "srt://127.0.0.1:4201"
+    assert srt["uri"] =~ "mode=listener"
+    assert srt["uri"] =~ "passphrase=secret"
+    assert srt["uri"] =~ "pbkeylen=16"
+    assert srt["passphrase"] == "secret"
+    assert srt["pbkeylen"] == 16
   end
 
   test "build_srt_uri uses remote address and port in caller mode" do
@@ -173,11 +215,11 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
-    refute Map.has_key?(source, "streamid")
-    refute URI.decode_query(URI.parse(source["uri"]).query) |> Map.has_key?("streamid")
+    refute Map.has_key?(source["srt"], "streamid")
+    refute URI.decode_query(URI.parse(source["srt"]["uri"]).query) |> Map.has_key?("streamid")
   end
 
-  test "source_from_record sends caller streamid only through the URI" do
+  test "source_from_record sends caller streamid through URI and typed payload" do
     record = %{
       "schema" => "SRT",
       "mode" => "caller",
@@ -187,8 +229,8 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
-    refute Map.has_key?(source, "streamid")
-    assert URI.decode_query(URI.parse(source["uri"]).query)["streamid"] == "#!::r=channel"
+    assert source["srt"]["streamid"] == "#!::r=channel"
+    assert URI.decode_query(URI.parse(source["srt"]["uri"]).query)["streamid"] == "#!::r=channel"
   end
 
   test "strip_cidr_suffix removes netmask from discovered interface ip" do
@@ -243,11 +285,10 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
-    assert source["type"] == "udpsrc"
-    assert source["address"] == "127.0.0.1"
-    assert source["port"] == 4201
-    assert source["buffer-size"] == 65536
-    assert source["mtu"] == 1500
+    assert source["kind"] == "udp"
+    assert source["udp"] == %{"address" => "127.0.0.1", "port" => 4201}
+    refute Map.has_key?(source["udp"], "buffer-size")
+    refute Map.has_key?(source["udp"], "mtu")
   end
 
   test "source_from_record with UDP schema and minimal options" do
@@ -258,9 +299,9 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
-    assert source["type"] == "udpsrc"
-    assert source["address"] == "127.0.0.1"
-    assert source["port"] == 4201
+    assert source["kind"] == "udp"
+    assert source["udp"]["address"] == "127.0.0.1"
+    assert source["udp"]["port"] == 4201
   end
 
   test "source_from_record normalizes UDP host to udpsrc address" do
@@ -271,9 +312,9 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
-    assert source["type"] == "udpsrc"
-    assert source["address"] == "127.0.0.1"
-    refute Map.has_key?(source, "host")
+    assert source["kind"] == "udp"
+    assert source["udp"]["address"] == "127.0.0.1"
+    refute Map.has_key?(source["udp"], "host")
   end
 
   test "source_from_record emits explicit UDP multicast options" do
@@ -286,12 +327,14 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
-    assert source["type"] == "udpsrc"
-    assert source["address"] == "239.1.1.1"
-    assert source["port"] == 5000
-    assert source["auto-multicast"] == true
-    assert source["multicast-iface"] == "eno2"
-    refute Map.has_key?(source, "multicast")
+    assert source["kind"] == "udp"
+
+    assert source["udp"] == %{
+             "address" => "239.1.1.1",
+             "port" => 5000,
+             "auto_multicast" => true,
+             "multicast_iface" => "eno2"
+           }
   end
 
   test "source_from_record with RTP schema" do
@@ -302,10 +345,9 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
-    assert source["type"] == "udpsrc"
-    assert source["address"] == "127.0.0.1"
-    assert source["port"] == 5004
-    assert source["hydra_source_schema"] == "RTP"
+    assert source["kind"] == "rtp"
+    assert source["rtp"] == %{"address" => "127.0.0.1", "port" => 5004}
+    refute Map.has_key?(source, "hydra_source_schema")
   end
 
   test "source_from_record keeps RTP depay marker with multicast options" do
@@ -326,14 +368,17 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
-    assert source["type"] == "udpsrc"
-    assert source["address"] == "239.1.1.2"
-    assert source["port"] == 5004
-    assert source["auto-multicast"] == true
-    assert source["multicast-iface"] == "en0"
-    assert source["hydra_source_schema"] == "RTP"
-    refute Map.has_key?(source, "host")
-    refute Map.has_key?(source, "interface_sys_name")
+    assert source["kind"] == "rtp"
+
+    assert source["rtp"] == %{
+             "address" => "239.1.1.2",
+             "port" => 5004,
+             "auto_multicast" => true,
+             "multicast_iface" => "en0"
+           }
+
+    refute Map.has_key?(source["rtp"], "host")
+    refute Map.has_key?(source["rtp"], "interface_sys_name")
   end
 
   test "source_from_record with invalid schema" do
@@ -502,48 +547,202 @@ defmodule HydraSrt.RouteHandlerTest do
     assert RouteHandler.in_cooldown?(1001, 1000)
   end
 
-  test "should_trigger_failover? zero_bitrate respects switch threshold and cooldown" do
+  test "should_trigger_source_loss_failover? uses single debounce window and cooldown" do
     data = %{
       route: %{"backup_mode" => "passive", "backup_switch_after_ms" => 3000},
-      zero_bitrate_ticks: 2,
+      source_loss_elapsed_ms: 2500,
       cooldown_until: nil,
       now_ms: 1000
     }
 
-    refute RouteHandler.should_trigger_failover?(data, :zero_bitrate)
+    refute RouteHandler.should_trigger_source_loss_failover?(data)
 
-    assert RouteHandler.should_trigger_failover?(%{data | zero_bitrate_ticks: 3}, :zero_bitrate)
+    assert RouteHandler.should_trigger_source_loss_failover?(%{
+             data
+             | source_loss_elapsed_ms: 3000
+           })
 
-    refute RouteHandler.should_trigger_failover?(
-             %{data | zero_bitrate_ticks: 3, cooldown_until: 2000},
-             :zero_bitrate
-           )
+    refute RouteHandler.should_trigger_source_loss_failover?(%{
+             data
+             | source_loss_elapsed_ms: 3000,
+               cooldown_until: 2000
+           })
   end
 
-  test "should_trigger_failover? reconnecting uses debounce threshold" do
+  test "should_trigger_source_loss_failover? disabled mode blocks auto" do
     data = %{
-      route: %{"backup_mode" => "passive", "backup_switch_after_ms" => 3000},
-      reconnecting_elapsed_ms: 2500,
+      route: %{"backup_mode" => "disabled", "backup_switch_after_ms" => 1000},
+      source_loss_elapsed_ms: 5000,
       now_ms: 1000
     }
 
-    refute RouteHandler.should_trigger_failover?(data, :reconnecting)
-
-    assert RouteHandler.should_trigger_failover?(
-             %{data | reconnecting_elapsed_ms: 3000},
-             :reconnecting
-           )
+    refute RouteHandler.should_trigger_source_loss_failover?(data)
   end
 
-  test "should_trigger_failover? failed is immediate but disabled mode blocks auto" do
-    data = %{route: %{"backup_mode" => "passive"}}
-    assert RouteHandler.should_trigger_failover?(data, :failed)
+  test "observe_source_loss merges reconnecting and zero_bitrate into one window" do
+    base = %{
+      id: "route-soft-1",
+      active_source_id: "s1",
+      route: %{"backup_mode" => "passive", "backup_switch_after_ms" => 60_000},
+      source_loss_since_ms: nil,
+      source_loss_signal: nil,
+      cooldown_until: nil,
+      retry_scheduled?: false,
+      retry_circuit_open?: false,
+      recovery_blocked?: false
+    }
 
-    data_disabled = %{route: %{"backup_mode" => "disabled"}}
-    refute RouteHandler.should_trigger_failover?(data_disabled, :failed)
+    after_reconnect = RouteHandler.observe_source_loss(base, :reconnecting)
+    assert is_integer(after_reconnect.source_loss_since_ms)
+    assert after_reconnect.source_loss_signal == :reconnecting
+
+    after_zero = RouteHandler.observe_source_loss(after_reconnect, :zero_bitrate)
+    # Same soft budget — do not restart the debounce clock.
+    assert after_zero.source_loss_since_ms == after_reconnect.source_loss_since_ms
+    assert after_zero.source_loss_signal == :zero_bitrate
+    refute after_zero[:retry_scheduled?]
   end
 
-  test "sink_from_record includes hydra destination metadata for SRT" do
+  test "observe_source_loss is suppressed when hard-retry already owns recovery" do
+    data = %{
+      id: "route-soft-2",
+      active_source_id: "s1",
+      route: %{"backup_mode" => "passive", "backup_switch_after_ms" => 1},
+      source_loss_since_ms: nil,
+      source_loss_signal: nil,
+      cooldown_until: nil,
+      retry_scheduled?: true,
+      retry_circuit_open?: false,
+      recovery_blocked?: false
+    }
+
+    next = RouteHandler.observe_source_loss(data, :zero_bitrate)
+    assert next.source_loss_since_ms == nil
+    assert next.retry_scheduled? == true
+  end
+
+  test "next_retry_backoff_ms stays within base..ceiling and grows with attempt" do
+    base_ms = :timer.seconds(1)
+    ceiling_ms = :timer.seconds(30)
+
+    for attempt <- 1..6, _ <- 1..20 do
+      delay = RouteHandler.next_retry_backoff_ms(nil, attempt)
+      assert delay >= base_ms
+      assert delay <= ceiling_ms
+    end
+
+    # Attempt 1 exp floor 1s → upper 3s; attempt 5 exp floor 16s → upper 30s.
+    # Sample many draws; max observed for attempt 5 should exceed max for attempt 1.
+    max_a1 =
+      1..40
+      |> Enum.map(fn _ -> RouteHandler.next_retry_backoff_ms(base_ms, 1) end)
+      |> Enum.max()
+
+    max_a5 =
+      1..40
+      |> Enum.map(fn _ -> RouteHandler.next_retry_backoff_ms(base_ms, 5) end)
+      |> Enum.max()
+
+    assert max_a1 <= :timer.seconds(3)
+    assert max_a5 > max_a1
+  end
+
+  describe "retry circuit and terminal failure (stubbed runtime status)" do
+    # These paths call HydraSrt.mark_route_failed/1; unit tests assert in-memory
+    # recovery state only — stub the DB boundary like route_handler_failover_test.
+    setup do
+      :meck.new(HydraSrt.Db, [:passthrough])
+      :meck.new(HydraSrt, [:passthrough])
+      :meck.new(HydraSrt.Stats.EventLogger, [:passthrough])
+
+      :meck.expect(HydraSrt, :mark_route_failed, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :mark_route_started, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :mark_route_stopped, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :mark_route_terminated, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :set_route_runtime_status, fn _id, _status -> {:ok, %{}} end)
+      :meck.expect(HydraSrt.Db, :update_route_runtime_status, fn _id, _status -> {:ok, %{}} end)
+
+      on_exit(fn -> :meck.unload() end)
+      :ok
+    end
+
+    test "schedule_retry_restart opens circuit after max attempts and schedules nothing" do
+      data =
+        base_route_data(%{
+          id: "route-circuit-1",
+          active_source_id: "s1",
+          retry_scheduled?: false,
+          retry_attempt: 5,
+          retry_prev_backoff_ms: :timer.seconds(30),
+          retry_circuit_open?: false,
+          recovery_blocked?: false
+        })
+
+      next = RouteHandler.schedule_retry_restart(data)
+
+      assert next.retry_circuit_open? == true
+      assert next.recovery_blocked? == true
+      assert next.retry_scheduled? == false
+      refute_receive :retry_start, 50
+    end
+
+    test "mark_terminal_failure blocks further retry scheduling" do
+      data =
+        base_route_data(%{
+          id: "route-term-fail-1",
+          active_source_id: "s1",
+          retry_scheduled?: false,
+          retry_attempt: 0,
+          retry_prev_backoff_ms: nil,
+          retry_circuit_open?: false,
+          recovery_blocked?: false,
+          source_loss_since_ms: 100,
+          source_loss_signal: :reconnecting
+        })
+
+      next = RouteHandler.mark_terminal_failure(data, "NDI_DISABLED")
+
+      assert next.recovery_blocked? == true
+      assert next.retry_scheduled? == false
+      assert next.source_loss_since_ms == nil
+
+      assert RouteHandler.schedule_retry_restart(next) == next
+      refute_receive :retry_start, 50
+    end
+  end
+
+  test "schedule_retry_restart uses backoff and sets single retry timer" do
+    data = %{
+      id: "route-retry-1",
+      active_source_id: "s1",
+      retry_scheduled?: false,
+      retry_attempt: 0,
+      retry_prev_backoff_ms: nil,
+      retry_circuit_open?: false,
+      recovery_blocked?: false
+    }
+
+    next = RouteHandler.schedule_retry_restart(data)
+
+    assert next.retry_scheduled? == true
+    assert next.retry_attempt == 1
+    assert is_integer(next.retry_prev_backoff_ms)
+    assert next.retry_prev_backoff_ms >= :timer.seconds(1)
+    assert next.retry_prev_backoff_ms <= :timer.seconds(30)
+
+    # Second call while scheduled is a no-op (single-owner).
+    assert RouteHandler.schedule_retry_restart(next) == next
+
+    assert_receive :retry_start, next.retry_prev_backoff_ms + 100
+  end
+
+  test "policy_deny_reason? recognizes NDI_DISABLED" do
+    assert RouteHandler.policy_deny_reason?("NDI_DISABLED")
+    refute RouteHandler.policy_deny_reason?("other")
+    refute RouteHandler.policy_deny_reason?(:enoent)
+  end
+
+  test "sink_from_record includes destination id and name for SRT" do
     record = %{
       "id" => "dest1",
       "name" => "Destination 1",
@@ -555,12 +754,16 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, sink} = RouteHandler.sink_from_record(record)
-    assert sink["type"] == "srtsink"
-    assert sink["hydra_destination_id"] == "dest1"
-    assert sink["hydra_destination_name"] == "Destination 1"
-    assert sink["hydra_destination_schema"] == "SRT"
-    refute Map.has_key?(sink, "streamid")
-    assert URI.decode_query(URI.parse(sink["uri"]).query)["streamid"] == "#!::r=destination"
+    assert sink["id"] == "dest1"
+    assert sink["name"] == "Destination 1"
+    assert sink["kind"] == "srt"
+    assert sink["srt"]["mode"] == "caller"
+    assert sink["srt"]["streamid"] == "#!::r=destination"
+
+    assert URI.decode_query(URI.parse(sink["srt"]["uri"]).query)["streamid"] ==
+             "#!::r=destination"
+
+    refute Map.has_key?(sink["srt"], "access")
   end
 
   test "sink_from_record does not send preserved streamid to a listener pipeline" do
@@ -574,11 +777,11 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, sink} = RouteHandler.sink_from_record(record)
-    refute Map.has_key?(sink, "streamid")
-    refute URI.decode_query(URI.parse(sink["uri"]).query) |> Map.has_key?("streamid")
+    refute Map.has_key?(sink["srt"], "streamid")
+    refute URI.decode_query(URI.parse(sink["srt"]["uri"]).query) |> Map.has_key?("streamid")
   end
 
-  test "sink_from_record includes hydra destination metadata for UDP" do
+  test "sink_from_record includes destination id and name for UDP" do
     record = %{
       "id" => "dest2",
       "name" => "Destination 2",
@@ -588,10 +791,10 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, sink} = RouteHandler.sink_from_record(record)
-    assert sink["type"] == "udpsink"
-    assert sink["hydra_destination_id"] == "dest2"
-    assert sink["hydra_destination_name"] == "Destination 2"
-    assert sink["hydra_destination_schema"] == "UDP"
+    assert sink["id"] == "dest2"
+    assert sink["name"] == "Destination 2"
+    assert sink["kind"] == "udp"
+    assert sink["udp"] == %{"address" => "127.0.0.1", "port" => 4203}
   end
 
   test "sink_from_record returns error for RTMP destination without location" do
@@ -605,7 +808,7 @@ defmodule HydraSrt.RouteHandlerTest do
     assert {:error, :invalid_destination} = RouteHandler.sink_from_record(record)
   end
 
-  test "sink_from_record includes hydra destination metadata for RTMP" do
+  test "sink_from_record includes destination id and name for RTMP" do
     record = %{
       "id" => "dest-rtmp",
       "enabled" => true,
@@ -617,11 +820,10 @@ defmodule HydraSrt.RouteHandlerTest do
     assert {:ok, sink} = RouteHandler.sink_from_record(record)
 
     assert sink == %{
-             "type" => "rtmpsink",
-             "location" => "rtmp://127.0.0.1:1935/live/stream",
-             "hydra_destination_id" => "dest-rtmp",
-             "hydra_destination_name" => "RTMP destination",
-             "hydra_destination_schema" => "RTMP"
+             "id" => "dest-rtmp",
+             "name" => "RTMP destination",
+             "kind" => "rtmp",
+             "rtmp" => %{"location" => "rtmp://127.0.0.1:1935/live/stream"}
            }
   end
 
@@ -637,11 +839,14 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, sink} = RouteHandler.sink_from_record(record)
-    assert sink["type"] == "udpsink"
-    assert sink["host"] == "239.1.1.1"
-    assert sink["port"] == 5004
-    assert sink["bind-address"] == "10.10.0.2"
-    assert sink["multicast-iface"] == "eno2"
+    assert sink["kind"] == "udp"
+
+    assert sink["udp"] == %{
+             "address" => "239.1.1.1",
+             "port" => 5004,
+             "bind_address" => "10.10.0.2",
+             "multicast_iface" => "eno2"
+           }
   end
 
   test "sink_from_record drops bind-address for IPv6 multicast with link-local interface ip" do
@@ -658,14 +863,14 @@ defmodule HydraSrt.RouteHandlerTest do
     assert {:ok, sink} = RouteHandler.sink_from_record(record)
 
     assert sink == %{
-             "type" => "udpsink",
-             "address" => "ff15::1234",
-             "host" => "ff15::1234",
-             "port" => 5000,
-             "multicast-iface" => "eno2",
-             "hydra_destination_id" => "dest4",
-             "hydra_destination_name" => "Destination 4",
-             "hydra_destination_schema" => "UDP"
+             "id" => "dest4",
+             "name" => "Destination 4",
+             "kind" => "udp",
+             "udp" => %{
+               "address" => "ff15::1234",
+               "port" => 5000,
+               "multicast_iface" => "eno2"
+             }
            }
   end
 
@@ -692,7 +897,7 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, [sink]} = RouteHandler.sinks_from_record(record)
-    assert sink["hydra_destination_id"] == "dest-enabled"
+    assert sink["id"] == "dest-enabled"
   end
 
   test "sinks_from_record includes only explicitly enabled destinations" do
@@ -725,7 +930,129 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, [sink]} = RouteHandler.sinks_from_record(record)
-    assert sink["hydra_destination_id"] == "dest-enabled"
+    assert sink["id"] == "dest-enabled"
+  end
+
+  test "sinks_from_record preserves declared destination order" do
+    record = %{
+      "destinations" => [
+        %{
+          "id" => "dest-first",
+          "enabled" => true,
+          "schema" => "UDP",
+          "host" => "127.0.0.1",
+          "port" => 4203
+        },
+        %{
+          "id" => "dest-second",
+          "enabled" => true,
+          "schema" => "UDP",
+          "host" => "127.0.0.1",
+          "port" => 4204
+        }
+      ]
+    }
+
+    assert {:ok, sinks} = RouteHandler.sinks_from_record(record)
+
+    assert Enum.map(sinks, & &1["id"]) == [
+             "dest-first",
+             "dest-second"
+           ]
+  end
+
+  test "build_config emits typed per-kind endpoints" do
+    source_record = %{"id" => "source-1", "name" => "Source One", "schema" => "SRT"}
+
+    source = %{
+      "kind" => "srt",
+      "srt" => %{
+        "uri" => "srt://127.0.0.1:4201?mode=listener",
+        "mode" => "listener",
+        "latency" => 200,
+        "localaddress" => "127.0.0.1",
+        "localport" => 4201
+      }
+    }
+
+    first_sink = %{
+      "id" => "dest-first",
+      "name" => "First",
+      "kind" => "srt",
+      "srt" => %{
+        "uri" => "srt://127.0.0.1:4202?mode=caller",
+        "mode" => "caller"
+      }
+    }
+
+    second_sink = %{
+      "id" => "dest-second",
+      "name" => "Second",
+      "kind" => "udp",
+      "udp" => %{"address" => "127.0.0.1", "port" => 4203}
+    }
+
+    config =
+      RouteHandler.build_config(
+        "route-1",
+        source_record,
+        source,
+        [first_sink, second_sink]
+      )
+
+    assert config["route_id"] == "route-1"
+    refute Map.has_key?(config, "processing_profiles")
+    assert "boot-" <> revision = config["config_revision"]
+    assert {:ok, _} = Ecto.UUID.cast(revision)
+    assert {:ok, _} = Ecto.UUID.cast(config["process_instance_id"])
+
+    assert config["source"] == %{
+             "id" => "source-1",
+             "name" => "Source One",
+             "kind" => "srt",
+             "srt" => source["srt"]
+           }
+
+    refute Map.has_key?(config["source"], "legacy")
+    refute Map.has_key?(config["source"], "element_type")
+
+    assert Enum.map(config["destinations"], & &1["id"]) == ["dest-first", "dest-second"]
+
+    assert config["destinations"] == [
+             %{
+               "id" => "dest-first",
+               "name" => "First",
+               "kind" => "srt",
+               "srt" => first_sink["srt"]
+             },
+             %{
+               "id" => "dest-second",
+               "name" => "Second",
+               "kind" => "udp",
+               "udp" => second_sink["udp"]
+             }
+           ]
+  end
+
+  test "native_route_args emits the route CLI contract" do
+    assert RouteHandler.native_route_args("route-1", "piid-1") == [
+             "route",
+             "--route-id",
+             "route-1",
+             "--process-instance-id",
+             "piid-1"
+           ]
+  end
+
+  test "build_config creates fresh spawn identities" do
+    source_record = %{"id" => "source-1", "schema" => "UDP"}
+    source = %{"kind" => "udp", "udp" => %{"address" => "127.0.0.1", "port" => 4201}}
+
+    first = RouteHandler.build_config("route-1", source_record, source, [])
+    second = RouteHandler.build_config("route-1", source_record, source, [])
+
+    refute first["config_revision"] == second["config_revision"]
+    refute first["process_instance_id"] == second["process_instance_id"]
   end
 
   test "callback_mode returns handle_event_function" do
@@ -915,6 +1242,560 @@ defmodule HydraSrt.RouteHandlerTest do
       assert log.message =~ "stream_id=test"
       assert log.message =~ "allowed=false"
       assert log.message =~ "reason=denied_list"
+    end
+  end
+
+  describe "NDI source and destination mapping" do
+    test "source_from_record maps discovery_name mode with W1 defaults" do
+      route = %{"id" => "route-ndi", "name" => "Studio A"}
+
+      record = %{
+        "id" => "src-ndi",
+        "schema" => "NDI",
+        "ndi_selection_mode" => "discovery_name",
+        "ndi_source_name" => "MACHINE (CHANNEL)"
+      }
+
+      assert {:ok, source} = RouteHandler.source_from_record(record, route)
+      assert source["kind"] == "ndi"
+
+      assert source["ndi"] == %{
+               "source_name" => "MACHINE (CHANNEL)",
+               "receiver_name" => "Hydra Studio A",
+               "bandwidth" => "highest",
+               "color_format" => "uyvy-bgra",
+               "media_policy" => "video_and_audio_required",
+               "connect_timeout_ms" => 10_000,
+               "receive_timeout_ms" => 5_000,
+               "track_discovery_timeout_ms" => 10_000,
+               "max_queue_length" => 4
+             }
+
+      refute Map.has_key?(source["ndi"], "url_address")
+      refute Map.has_key?(source["ndi"], "timestamp_mode")
+    end
+
+    test "source_from_record maps direct_address mode and preserves explicit options" do
+      route = %{"id" => "route-ndi", "name" => "Studio B"}
+
+      record = %{
+        "id" => "src-ndi",
+        "schema" => "NDI",
+        "ndi_selection_mode" => "direct_address",
+        "ndi_source_address" => "192.0.2.10:5960",
+        "ndi_receiver_name" => "Custom Receiver",
+        "ndi_bandwidth" => "audio_only",
+        "ndi_color_format" => "best",
+        "ndi_timestamp_mode" => "receive-time-vs-timestamp",
+        "ndi_media_policy" => "audio_only",
+        "ndi_connect_timeout_ms" => 2000,
+        "ndi_receive_timeout_ms" => 3000,
+        "ndi_track_discovery_timeout_ms" => 4000,
+        "ndi_max_queue_length" => 8
+      }
+
+      assert {:ok, source} = RouteHandler.source_from_record(record, route)
+      assert source["kind"] == "ndi"
+
+      assert source["ndi"] == %{
+               "url_address" => "192.0.2.10:5960",
+               "receiver_name" => "Custom Receiver",
+               "bandwidth" => "audio_only",
+               "color_format" => "best",
+               "timestamp_mode" => "receive-time-vs-timestamp",
+               "media_policy" => "audio_only",
+               "connect_timeout_ms" => 2000,
+               "receive_timeout_ms" => 3000,
+               "track_discovery_timeout_ms" => 4000,
+               "max_queue_length" => 8
+             }
+
+      refute Map.has_key?(source["ndi"], "source_name")
+    end
+
+    test "sink_from_record maps NDI destination sender_name and media_policy default" do
+      record = %{
+        "id" => "dest-ndi",
+        "name" => "NDI Out",
+        "schema" => "NDI",
+        "ndi_sender_name" => "Hydra (Route Output)"
+      }
+
+      assert {:ok, sink} = RouteHandler.sink_from_record(record)
+
+      assert sink == %{
+               "id" => "dest-ndi",
+               "name" => "NDI Out",
+               "kind" => "ndi",
+               "ndi" => %{
+                 "sender_name" => "Hydra (Route Output)",
+                 "media_policy" => "video_and_audio_required"
+               }
+             }
+    end
+
+    test "build_config emits typed NDI source and destinations" do
+      source_record = %{"id" => "src-ndi", "name" => "NDI In", "schema" => "NDI"}
+
+      source = %{
+        "kind" => "ndi",
+        "ndi" => %{
+          "source_name" => "MACHINE (CHANNEL)",
+          "receiver_name" => "Hydra Studio A",
+          "bandwidth" => "highest",
+          "color_format" => "uyvy-bgra",
+          "media_policy" => "video_and_audio_required",
+          "connect_timeout_ms" => 10_000,
+          "receive_timeout_ms" => 5_000,
+          "track_discovery_timeout_ms" => 10_000,
+          "max_queue_length" => 4
+        }
+      }
+
+      sink = %{
+        "id" => "dest-ndi",
+        "name" => "NDI Out",
+        "kind" => "ndi",
+        "ndi" => %{
+          "sender_name" => "Hydra (Route Output)",
+          "media_policy" => "video_and_audio_required"
+        }
+      }
+
+      config = RouteHandler.build_config("route-ndi", source_record, source, [sink])
+
+      assert config["source"] == %{
+               "id" => "src-ndi",
+               "name" => "NDI In",
+               "kind" => "ndi",
+               "ndi" => source["ndi"]
+             }
+
+      assert config["destinations"] == [
+               %{
+                 "id" => "dest-ndi",
+                 "name" => "NDI Out",
+                 "kind" => "ndi",
+                 "ndi" => sink["ndi"]
+               }
+             ]
+    end
+  end
+
+  describe "NDI feature policy start gate" do
+    setup do
+      previous = Application.get_env(:hydra_srt, :ndi)
+
+      on_exit(fn ->
+        if is_nil(previous) do
+          Application.delete_env(:hydra_srt, :ndi)
+        else
+          Application.put_env(:hydra_srt, :ndi, previous)
+        end
+      end)
+
+      :ok
+    end
+
+    test "ensure_ndi_start_allowed denies NDI source when receive is disabled" do
+      Application.put_env(:hydra_srt, :ndi, enabled: true, receive: false, send: true)
+
+      route = %{
+        "destinations" => [
+          %{
+            "id" => "dest-ndi",
+            "enabled" => true,
+            "schema" => "NDI",
+            "ndi_sender_name" => "Out"
+          }
+        ]
+      }
+
+      source = %{"schema" => "NDI"}
+
+      assert {:error, "NDI_DISABLED"} = RouteHandler.ensure_ndi_start_allowed(route, source)
+    end
+
+    test "ensure_ndi_start_allowed denies NDI destination when send is disabled" do
+      Application.put_env(:hydra_srt, :ndi, enabled: true, receive: true, send: false)
+
+      route = %{
+        "destinations" => [
+          %{
+            "id" => "dest-ndi",
+            "enabled" => true,
+            "schema" => "NDI",
+            "ndi_sender_name" => "Out"
+          }
+        ]
+      }
+
+      source = %{"schema" => "SRT"}
+
+      assert {:error, "NDI_DISABLED"} = RouteHandler.ensure_ndi_start_allowed(route, source)
+    end
+
+    test "ensure_ndi_start_allowed allows non-NDI routes regardless of flags" do
+      Application.put_env(:hydra_srt, :ndi, enabled: false, receive: false, send: false)
+
+      route = %{
+        "destinations" => [
+          %{"id" => "dest-udp", "enabled" => true, "schema" => "UDP"}
+        ]
+      }
+
+      source = %{"schema" => "SRT"}
+
+      assert :ok = RouteHandler.ensure_ndi_start_allowed(route, source)
+    end
+
+    test "ensure_ndi_start_allowed allows NDI when enabled receive and send match" do
+      Application.put_env(:hydra_srt, :ndi, enabled: true, receive: true, send: true)
+
+      route = %{
+        "destinations" => [
+          %{
+            "id" => "dest-ndi",
+            "enabled" => true,
+            "schema" => "NDI",
+            "ndi_sender_name" => "Out"
+          }
+        ]
+      }
+
+      source = %{"schema" => "NDI"}
+
+      assert :ok = RouteHandler.ensure_ndi_start_allowed(route, source)
+    end
+  end
+
+  describe "strict destination validation" do
+    test "sinks_from_record aggregates every failing enabled destination id" do
+      record = %{
+        "destinations" => [
+          %{
+            "id" => "dest-ok",
+            "enabled" => true,
+            "schema" => "UDP",
+            "host" => "127.0.0.1",
+            "port" => 4203
+          },
+          %{
+            "id" => "dest-bad-rtmp",
+            "enabled" => true,
+            "schema" => "RTMP"
+          },
+          %{
+            "id" => "dest-bad-ndi",
+            "enabled" => true,
+            "schema" => "NDI"
+          },
+          %{
+            "id" => "dest-disabled-bad",
+            "enabled" => false,
+            "schema" => "RTMP"
+          }
+        ]
+      }
+
+      assert {:error, {:invalid_destinations, ["dest-bad-rtmp", "dest-bad-ndi"]}} =
+               RouteHandler.sinks_from_record(record)
+    end
+  end
+
+  describe "endpoint_health and route_terminal events" do
+    test "parse_native_json_line recognizes endpoint_health and route_terminal" do
+      health =
+        Jason.encode!(%{
+          "event" => "endpoint_health",
+          "route_id" => "route-1",
+          "process_instance_id" => "piid-1",
+          "endpoint_id" => "ep-1",
+          "state" => "connecting"
+        })
+
+      terminal =
+        Jason.encode!(%{
+          "event" => "route_terminal",
+          "route_id" => "route-1",
+          "process_instance_id" => "piid-1",
+          "reason_code" => "NDI_RECEIVE_TIMEOUT",
+          "retryable" => true,
+          "retry_domain" => "route"
+        })
+
+      assert {:endpoint_health, %{"endpoint_id" => "ep-1"}} =
+               RouteHandler.parse_native_json_line(health)
+
+      assert {:route_terminal, %{"reason_code" => "NDI_RECEIVE_TIMEOUT", "retryable" => true}} =
+               RouteHandler.parse_native_json_line(terminal)
+    end
+
+    test "consume_port_output stores matching endpoint_health and broadcasts on item topic" do
+      Phoenix.PubSub.subscribe(HydraSrt.PubSub, "item:route-health-1")
+
+      data = %{
+        id: "route-health-1",
+        process_instance_id: "piid-live",
+        endpoint_health: %{},
+        route_terminal: nil,
+        port_buffer: ""
+      }
+
+      payload = %{
+        "event" => "endpoint_health",
+        "route_id" => "route-health-1",
+        "process_instance_id" => "piid-live",
+        "endpoint_id" => "ep-src",
+        "state" => "streaming",
+        "sequence" => 3
+      }
+
+      next = RouteHandler.consume_port_output(Jason.encode!(payload) <> "\n", data)
+
+      assert next.endpoint_health["ep-src"]["state"] == "streaming"
+      assert_receive {:endpoint_health, ^payload}
+    end
+
+    test "consume_port_output drops stale endpoint_health without broadcasting" do
+      Phoenix.PubSub.subscribe(HydraSrt.PubSub, "item:route-health-2")
+
+      data = %{
+        id: "route-health-2",
+        process_instance_id: "piid-live",
+        endpoint_health: %{},
+        route_terminal: nil,
+        port_buffer: ""
+      }
+
+      payload = %{
+        "event" => "endpoint_health",
+        "route_id" => "route-health-2",
+        "process_instance_id" => "piid-stale",
+        "endpoint_id" => "ep-src",
+        "state" => "failed"
+      }
+
+      next = RouteHandler.consume_port_output(Jason.encode!(payload) <> "\n", data)
+
+      assert next.endpoint_health == %{}
+      refute_receive {:endpoint_health, _}, 50
+    end
+  end
+
+  describe "route_terminal recovery paths (stubbed runtime status)" do
+    # mark_terminal_failure / mark_restarting_runtime touch HydraSrt + Db + EventLogger;
+    # stub the full boundary exactly like route_handler_failover_test — assertions
+    # are in-memory only.
+    setup do
+      :meck.new(HydraSrt.Db, [:passthrough])
+      :meck.new(HydraSrt, [:passthrough])
+      :meck.new(HydraSrt.Stats.EventLogger, [:passthrough])
+
+      :meck.expect(HydraSrt, :mark_route_failed, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :mark_route_started, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :mark_route_stopped, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :mark_route_terminated, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :set_route_runtime_status, fn _id, _status -> {:ok, %{}} end)
+      :meck.expect(HydraSrt.Db, :update_route_runtime_status, fn _id, _status -> {:ok, %{}} end)
+
+      on_exit(fn -> :meck.unload() end)
+      :ok
+    end
+
+    test "consume_port_output stores matching route_terminal for W3b without retrying" do
+      data =
+        base_route_data(%{
+          id: "route-term-1",
+          process_instance_id: "piid-live",
+          active_source_id: "s1",
+          source_loss_since_ms: 42,
+          source_loss_signal: :reconnecting
+        })
+
+      payload = %{
+        "event" => "route_terminal",
+        "route_id" => "route-term-1",
+        "process_instance_id" => "piid-live",
+        "reason_code" => "NDI_SOURCE_EOS",
+        "retryable" => false,
+        "retry_domain" => "none",
+        "detail" => "eos",
+        "observed_at_ms" => 1,
+        "sequence" => 9
+      }
+
+      next = RouteHandler.consume_port_output(Jason.encode!(payload) <> "\n", data)
+
+      assert next.route_terminal == %{
+               reason_code: "NDI_SOURCE_EOS",
+               retryable: false,
+               retry_domain: "none",
+               detail: "eos",
+               observed_at_ms: 1,
+               sequence: 9
+             }
+
+      assert next.recovery_blocked? == true
+      assert next.retry_scheduled? == false
+      assert next.source_loss_since_ms == nil
+      refute_receive :retry_start, 50
+    end
+
+    test "retryable route_terminal drives exactly one hard-retry timer" do
+      data =
+        base_route_data(%{
+          id: "route-term-2",
+          process_instance_id: "piid-live",
+          active_source_id: "s1",
+          route: %{"backup_mode" => "passive"},
+          source_loss_since_ms: 99,
+          source_loss_signal: :zero_bitrate
+        })
+
+      payload = %{
+        "event" => "route_terminal",
+        "route_id" => "route-term-2",
+        "process_instance_id" => "piid-live",
+        "reason_code" => "NDI_RECEIVE_TIMEOUT",
+        "retryable" => true,
+        "retry_domain" => "route",
+        "detail" => "timeout",
+        "observed_at_ms" => 2,
+        "sequence" => 10
+      }
+
+      next = RouteHandler.consume_port_output(Jason.encode!(payload) <> "\n", data)
+
+      assert next.route_terminal.reason_code == "NDI_RECEIVE_TIMEOUT"
+      assert next.retry_scheduled? == true
+      assert next.retry_attempt == 1
+      assert next.source_loss_since_ms == nil
+      assert next.recovery_blocked? == false
+
+      # Soft path must not also arm while hard-retry owns recovery.
+      soft = RouteHandler.observe_source_loss(next, :reconnecting)
+      assert soft.source_loss_since_ms == nil
+      assert soft.retry_scheduled? == true
+
+      assert_receive :retry_start, next.retry_prev_backoff_ms + 100
+    end
+
+    test "single-owner: soft source-loss and hard-retry never double-fire" do
+      data =
+        base_route_data(%{
+          id: "route-owner-1",
+          active_source_id: "s1",
+          route: %{"backup_mode" => "passive", "backup_switch_after_ms" => 1}
+        })
+
+      # Hard-retry arms first.
+      hard = RouteHandler.schedule_retry_restart(data)
+      assert hard.retry_scheduled? == true
+
+      soft = RouteHandler.observe_source_loss(hard, :zero_bitrate)
+      assert soft.source_loss_since_ms == nil
+      assert soft.retry_scheduled? == true
+      assert soft.retry_attempt == 1
+
+      # Only one :retry_start message.
+      assert_receive :retry_start, hard.retry_prev_backoff_ms + 100
+      refute_receive :retry_start, 50
+    end
+  end
+
+  describe "get_endpoint_health/1" do
+    # Spawns a real RouteHandler (:gen_statem). Start failure → mark_restarting_runtime
+    # and terminate → mark_route_stopped both reach HydraSrt → Db.*_with_previous → Repo.
+    # Stub the Db write path the real HydraSrt helpers use (not only update_route_runtime_status/2),
+    # same boundary pattern as route_handler_failover_test.
+    setup do
+      :meck.new(HydraSrt.Db, [:passthrough])
+      :meck.new(HydraSrt, [:passthrough])
+      :meck.new(HydraSrt.Stats.EventLogger, [:passthrough])
+
+      stub_route = %{"id" => "stub-route", "status" => "stopped", "schema_status" => "stopped"}
+      stub_prev = {:ok, %{route: stub_route, previous_status: nil}}
+
+      :meck.expect(HydraSrt, :mark_route_failed, fn _id -> {:ok, stub_route} end)
+      :meck.expect(HydraSrt, :mark_route_started, fn _id -> {:ok, stub_route} end)
+      :meck.expect(HydraSrt, :mark_route_stopped, fn _id -> {:ok, stub_route} end)
+      :meck.expect(HydraSrt, :mark_route_terminated, fn _id -> {:ok, stub_route} end)
+      :meck.expect(HydraSrt, :set_route_runtime_status, fn _id, _status -> {:ok, stub_route} end)
+
+      :meck.expect(HydraSrt.Db, :update_route_runtime_status, fn _id, _status ->
+        {:ok, stub_route}
+      end)
+
+      :meck.expect(HydraSrt.Db, :update_route_runtime_status_with_previous, fn _id, _status ->
+        stub_prev
+      end)
+
+      :meck.expect(
+        HydraSrt.Db,
+        :transition_route_runtime_status_with_previous,
+        fn _id, _attrs, _dest_status, _src_status -> stub_prev end
+      )
+
+      :meck.expect(HydraSrt.Db, :update_route_status_with_previous, fn _id, _attrs ->
+        stub_prev
+      end)
+
+      :meck.expect(HydraSrt.Db, :set_route_active_source, fn _id, _source_id, _reason ->
+        {:ok, stub_route}
+      end)
+
+      :meck.expect(HydraSrt.Stats.EventLogger, :log_pipeline_failed, fn _, _, _, _ -> :ok end)
+      :meck.expect(HydraSrt.Stats.EventLogger, :log_route_status_change, fn _, _, _ -> :ok end)
+
+      on_exit(fn -> :meck.unload() end)
+      :ok
+    end
+
+    test "call returns stored endpoint_health map and process identity" do
+      route_id = "route-health-call-#{System.unique_integer([:positive])}"
+
+      empty_route = %{
+        "id" => route_id,
+        "active_source_id" => nil,
+        "sources" => [],
+        "destinations" => []
+      }
+
+      :meck.expect(HydraSrt.Db, :get_route, fn
+        ^route_id, true -> {:ok, empty_route}
+        _id, _include_dest -> {:error, :not_found}
+      end)
+
+      {:ok, pid} = RouteHandler.start_link(%{id: route_id})
+
+      on_exit(fn ->
+        if Process.alive?(pid), do: :gen_statem.stop(pid, :normal, 1000)
+      end)
+
+      :sys.replace_state(pid, fn {state, data} ->
+        {state,
+         %{
+           data
+           | process_instance_id: "piid-call",
+             endpoint_health: %{
+               "ep-1" => %{
+                 "endpoint_id" => "ep-1",
+                 "state" => "streaming",
+                 "sequence" => 4,
+                 "config_revision" => "rev-call"
+               }
+             }
+         }}
+      end)
+
+      assert {:ok, identity} = RouteHandler.get_endpoint_health(pid)
+      assert identity.process_instance_id == "piid-call"
+      assert identity.config_revision == "rev-call"
+      assert identity.last_sequence == 4
+      assert identity.endpoint_health["ep-1"]["state"] == "streaming"
+
+      :gen_statem.stop(pid, :normal, 1000)
     end
   end
 end

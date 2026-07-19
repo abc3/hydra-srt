@@ -92,6 +92,37 @@ vi.mock('../../../utils/api', () => {
   };
 });
 
+vi.mock('../../../utils/ndiApi', () => ({
+  ndiApi: {
+    getCapabilities: vi.fn(async () => ({
+      data: {
+        feature_enabled: false,
+        plugin: { available: false, revision: null },
+        runtime: { available: false, major: null, version: null },
+        receive: { available: false, reason_codes: ['NDI_DISABLED'], formats: [] },
+        send: { available: false, reason_codes: ['NDI_DISABLED'], formats: [] },
+        discovery: { available: false, reason_codes: ['NDI_DISABLED'], mode: 'mdns' },
+        direct_address: { available: false, reason_codes: ['NDI_DISABLED'] },
+        checked_at: '2026-07-19T00:00:00Z',
+        expires_at: '2026-07-19T00:00:15Z',
+        stale: false,
+        check_in_progress: false,
+        node_id: 'self',
+      },
+    })),
+    getEndpointHealth: vi.fn(async () => ({
+      data: {
+        generated_at: '2026-07-19T00:00:00Z',
+        config_revision: null,
+        process_instance_id: null,
+        last_sequence: 0,
+        endpoints: [],
+      },
+    })),
+    probe: vi.fn(async () => ({ data: { ok: true } })),
+  },
+}));
+
 vi.mock('../../../utils/realtime', () => {
   const itemListeners = new Map<string, RealtimeStatusListener[]>();
   const itemSourceListeners = new Map<string, RealtimeSourceListener[]>();
@@ -148,6 +179,7 @@ vi.mock('../../../utils/realtime', () => {
     subscribeToItemSource,
     subscribeToItemStatus,
     subscribeToStats,
+    subscribeToEndpointHealth: vi.fn(() => () => {}),
     __emitItemSource: emitItemSource,
     __emitItemStatus: emitItemStatus,
     __emitStats: (payload: Record<string, unknown>) => {

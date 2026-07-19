@@ -28,6 +28,9 @@ defmodule HydraSrt.E2E.Native.Harness do
     config = Keyword.fetch!(opts, :config)
     binary = Helpers.rs_native_binary_path()
 
+    process_instance_id = Ecto.UUID.generate()
+    port_env = Keyword.get(opts, :env, Helpers.native_port_env())
+
     port =
       Port.open({:spawn_executable, String.to_charlist(binary)}, [
         :binary,
@@ -35,7 +38,8 @@ defmodule HydraSrt.E2E.Native.Harness do
         :stream,
         :stderr_to_stdout,
         :hide,
-        args: [route_id]
+        args: ["route", "--route-id", route_id, "--process-instance-id", process_instance_id],
+        env: port_env
       ])
 
     os_pid =

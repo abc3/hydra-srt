@@ -1,0 +1,23 @@
+{
+  "route_id": "route-bad-port",
+  "config_revision": "revision-bad-port",
+  "process_instance_id": "process-bad-port",
+  "source": {
+    "id": "source",
+    "kind": "udp",
+    "udp": {
+      "address": "127.0.0.1",
+      "port": 70000
+    }
+  },
+  "destinations": [
+    {
+      "id": "dest",
+      "kind": "udp",
+      "udp": {
+        "address": "127.0.0.1",
+        "port": 5000
+      }
+    }
+  ]
+}

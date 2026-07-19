@@ -1,0 +1,46 @@
+{
+  "source": {
+    "endpoint_id": "optional-source",
+    "endpoint_name": "",
+    "adapter": {
+      "kind": "ndi",
+      "config": {
+        "source_name": "MACHINE (OPTIONAL)",
+        "url_address": null,
+        "receiver_name": "Hydra optional route",
+        "bandwidth": "highest",
+        "color_format": "uyvy-bgra",
+        "timestamp_mode": "receive-time-vs-timestamp",
+        "media_policy": "video_required_audio_optional",
+        "connect_timeout_ms": 10000,
+        "receive_timeout_ms": 5000,
+        "track_discovery_timeout_ms": 10000,
+        "max_queue_length": 4
+      },
+      "media": {
+        "video": "required",
+        "audio": "optional"
+      }
+    }
+  },
+  "branches": [
+    {
+      "endpoint_id": "optional-destination",
+      "endpoint_name": "",
+      "adapter": {
+        "kind": "ndi",
+        "config": {
+          "sender_name": "Hydra Optional Output",
+          "media_policy": "video_required_audio_optional"
+        },
+        "media": {
+          "video": true,
+          "audio": false
+        }
+      },
+      "queue": {
+        "class": "ndi_raw"
+      }
+    }
+  ]
+}

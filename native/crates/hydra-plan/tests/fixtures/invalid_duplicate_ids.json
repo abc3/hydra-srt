@@ -1,0 +1,23 @@
+{
+  "route_id": "route-duplicate",
+  "config_revision": "revision-duplicate",
+  "process_instance_id": "process-duplicate",
+  "source": {
+    "id": "same-id",
+    "kind": "srt",
+    "srt": {
+      "uri": "srt://127.0.0.1:9000?mode=listener",
+      "mode": "listener"
+    }
+  },
+  "destinations": [
+    {
+      "id": "same-id",
+      "kind": "udp",
+      "udp": {
+        "address": "127.0.0.1",
+        "port": 5000
+      }
+    }
+  ]
+}

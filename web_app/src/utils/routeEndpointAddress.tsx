@@ -26,6 +26,17 @@ export const getEndpointAddressString = (endpoint: RouteEndpoint | null | undefi
       return `${getEndpointOption(endpoint, 'host') || getEndpointOption(endpoint, 'address') || 'N/A'}:${getEndpointOption(endpoint, 'port') || 'N/A'}`;
     case 'RTMP':
       return String(getEndpointOption(endpoint, 'path') || getEndpointOption(endpoint, 'location') || 'N/A');
+    case 'NDI': {
+      const selectionMode = getEndpointOption(endpoint, 'ndi_selection_mode');
+      if (selectionMode === 'direct_address') {
+        return String(getEndpointOption(endpoint, 'ndi_source_address') || 'N/A');
+      }
+      return String(
+        getEndpointOption(endpoint, 'ndi_source_name')
+          || getEndpointOption(endpoint, 'ndi_sender_name')
+          || 'N/A',
+      );
+    }
     default:
       return 'N/A';
   }
@@ -52,6 +63,8 @@ export const renderProtocolTag = (schema: string | null | undefined): ReactNode 
       return <Tag color="cyan">UDP</Tag>;
     case 'RTMP':
       return <Tag color="purple">RTMP</Tag>;
+    case 'NDI':
+      return <Tag color="geekblue">NDI</Tag>;
     default:
       return null;
   }

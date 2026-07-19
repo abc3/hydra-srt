@@ -21,7 +21,14 @@ defmodule HydraSrt.RouteBackup do
     address port host latency authentication streamid passphrase pbkeylen
     poll_timeout auto_reconnect keep_listening multicast multicast_iface
     bind_address_option path location allowed_list denied_list limit_access
+    ndi_source_name ndi_source_address ndi_selection_mode
+    ndi_observed_address_snapshot ndi_observed_name_snapshot ndi_selection_observed_at
+    ndi_receiver_name ndi_media_policy ndi_bandwidth ndi_color_format
+    ndi_timestamp_mode ndi_connect_timeout_ms ndi_receive_timeout_ms
+    ndi_track_discovery_timeout_ms ndi_max_queue_length ndi_sender_name
   )
+
+  @type endpoint_field :: String.t()
 
   @spec export() :: {:ok, map()} | {:error, term()}
   def export do
@@ -105,7 +112,7 @@ defmodule HydraSrt.RouteBackup do
     |> Map.put("position", source["position"])
   end
 
-  @spec export_endpoint(map()) :: map()
+  @spec export_endpoint(%{optional(endpoint_field()) => term()}) :: %{endpoint_field() => term()}
   def export_endpoint(endpoint), do: Map.take(endpoint, @endpoint_fields)
 
   @spec validate_routes([map()]) :: :ok | {:error, atom()}

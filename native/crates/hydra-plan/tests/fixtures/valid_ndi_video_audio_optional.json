@@ -1,0 +1,32 @@
+{
+  "route_id": "route-optional",
+  "config_revision": "revision-optional",
+  "process_instance_id": "process-optional",
+  "source": {
+    "id": "optional-source",
+    "kind": "ndi",
+    "ndi": {
+      "source_name": "MACHINE (OPTIONAL)",
+      "url_address": null,
+      "receiver_name": "Hydra optional route",
+      "bandwidth": "highest",
+      "color_format": "uyvy-bgra",
+      "timestamp_mode": "receive-time-vs-timestamp",
+      "media_policy": "video_required_audio_optional",
+      "connect_timeout_ms": 10000,
+      "receive_timeout_ms": 5000,
+      "track_discovery_timeout_ms": 10000,
+      "max_queue_length": 4
+    }
+  },
+  "destinations": [
+    {
+      "id": "optional-destination",
+      "kind": "ndi",
+      "ndi": {
+        "sender_name": "Hydra Optional Output",
+        "media_policy": "video_required_audio_optional"
+      }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "route_id": "route-empty",
+  "config_revision": "revision-empty",
+  "process_instance_id": "process-empty",
+  "source": {
+    "id": "legacy-source",
+    "kind": "srt",
+    "srt": {
+      "uri": "srt://127.0.0.1:9000?mode=listener",
+      "mode": "listener"
+    }
+  },
+  "destinations": []
+}

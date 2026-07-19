@@ -1,0 +1,35 @@
+{
+  "route_id": "route-legacy",
+  "config_revision": "revision-legacy",
+  "process_instance_id": "process-legacy",
+  "source": {
+    "id": "legacy-source",
+    "name": "Legacy Source",
+    "kind": "srt",
+    "srt": {
+      "uri": "srt://127.0.0.1:9000?mode=listener",
+      "mode": "listener",
+      "latency": 120
+    }
+  },
+  "destinations": [
+    {
+      "id": "srt-destination",
+      "name": "SRT Destination",
+      "kind": "srt",
+      "srt": {
+        "uri": "srt://127.0.0.1:9001?mode=caller",
+        "mode": "caller"
+      }
+    },
+    {
+      "id": "udp-destination",
+      "name": "UDP Destination",
+      "kind": "udp",
+      "udp": {
+        "address": "239.1.1.1",
+        "port": 5000
+      }
+    }
+  ]
+}

@@ -17,6 +17,9 @@ import type { EndpointFormValues, RouteDestEditProps, RouteSummary } from '../..
 import type { AppError } from '../../types/errors';
 import { getErrorMessage } from '../../types/errors';
 import type { InterfaceOption, InterfaceRecord } from '../../types/interfaces';
+import ProtocolSchemaRadio from './ProtocolSchemaRadio';
+import NdiOutputFields from './NdiOutputFields';
+import { useNdiCapabilities } from './useNdiCapabilities';
 
 const { Title } = Typography;
 const ANY_INTERFACE_OPTION: InterfaceOption = { label: 'Any interface', value: '' };
@@ -33,6 +36,8 @@ const RouteDestEdit = ({ initialValues, onChange }: RouteDestEditProps) => {
     const [routeData, setRouteData] = useState<RouteSummary | null>(null);
     const [destData, setDestData] = useState<EndpointFormValues | null>(null);
     const [routeLoading, setRouteLoading] = useState(true);
+    const { capabilities, loading: capabilitiesLoading } = useNdiCapabilities();
+    const ndiFeatureEnabled = capabilities?.feature_enabled === true;
 
     // Set breadcrumb items for the RouteDestEdit page
     useEffect(() => {
@@ -320,11 +325,7 @@ const RouteDestEdit = ({ initialValues, onChange }: RouteDestEditProps) => {
                                         required
                                         rules={[{ required: true, message: 'Please select a destination schema' }]}
                                     >
-                                        <Radio.Group buttonStyle="solid">
-                                            <Radio.Button value="SRT">SRT</Radio.Button>
-                                            <Radio.Button value="UDP">UDP</Radio.Button>
-                                            <Radio.Button value="RTMP">RTMP</Radio.Button>
-                                        </Radio.Group>
+                                        <ProtocolSchemaRadio direction="destination" ndiFeatureEnabled={ndiFeatureEnabled} />
                                     </Form.Item>
 
                                     {/* SRT Specific Options */}
@@ -602,6 +603,17 @@ const RouteDestEdit = ({ initialValues, onChange }: RouteDestEditProps) => {
                                                         <Input placeholder="rtmp://host/app/key" />
                                                     </Form.Item>
                                                 </>
+                                            )
+                                        }
+                                    </Form.Item>
+
+                                    <Form.Item noStyle dependencies={['schema']}>
+                                        {({ getFieldValue }) =>
+                                            getFieldValue('schema') === 'NDI' && (
+                                                <NdiOutputFields
+                                                    capabilities={capabilities}
+                                                    capabilitiesLoading={capabilitiesLoading}
+                                                />
                                             )
                                         }
                                     </Form.Item>

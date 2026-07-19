@@ -46,9 +46,11 @@ defmodule HydraSrt.SourceProbe do
   @spec build_probe_uri(map()) :: {:ok, binary()} | {:error, atom() | binary()}
   def build_probe_uri(route_params) when is_map(route_params) do
     with {:ok, source} <- RouteHandler.source_from_record(route_params) do
-      case source["type"] do
-        "srtsrc" ->
-          case {source["uri"], source["localport"] || source["port"]} do
+      case source["kind"] do
+        "srt" ->
+          srt = source["srt"] || %{}
+
+          case {srt["uri"], srt["localport"] || srt["port"]} do
             {uri, port}
             when is_binary(uri) and byte_size(uri) > 0 and is_integer(port) and port > 0 ->
               {:ok, uri}
@@ -63,14 +65,13 @@ defmodule HydraSrt.SourceProbe do
               {:error, "SRT source is missing a valid URI"}
           end
 
-        "udpsrc" ->
-          case source["port"] do
+        kind when kind in ["udp", "rtp"] ->
+          payload = source[kind] || %{}
+
+          case payload["port"] do
             port when is_integer(port) ->
-              address = source["address"] || "0.0.0.0"
-
-              probe_scheme =
-                if source["hydra_source_schema"] == "RTP", do: "rtp", else: "udp"
-
+              address = payload["address"] || "0.0.0.0"
+              probe_scheme = if kind == "rtp", do: "rtp", else: "udp"
               {:ok, "#{probe_scheme}://#{address}:#{port}"}
 
             _ ->

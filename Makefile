@@ -22,6 +22,7 @@ dev:
 	API_AUTH_USERNAME=${user} \
 	API_AUTH_PASSWORD=${pass} \
 	DEMO_DATA=true \
+	NDI_FEATURE=true \
 	ERL_AFLAGS="-kernel shell_history enabled +zdbbl 2097151" \
 	iex --name hydra@127.0.0.1 --cookie cookie -S mix phx.server --no-halt
 
@@ -158,6 +159,10 @@ test_e2e:
 .PHONY: test_rs_native_e2e
 test_rs_native_e2e:
 	NATIVE_E2E=true mix test test/native_e2e
+
+.PHONY: test_ndi_e2e
+test_ndi_e2e:
+	NDI_E2E=true mix test --only ndi_e2e
 
 .PHONY: test_e2e_encrypted
 test_e2e_encrypted:
