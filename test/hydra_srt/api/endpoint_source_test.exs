@@ -108,6 +108,61 @@ defmodule HydraSrt.Api.EndpointSourceTest do
     assert message == "bind target is already in use"
   end
 
+  test "rejects a second listener on the same interface and port regardless of typed address" do
+    route = route_fixture()
+
+    _ =
+      source_fixture(route, %{
+        schema: "SRT",
+        mode: "listener",
+        interface_sys_name: "eth0",
+        localaddress: "127.0.0.1",
+        localport: 4401
+      })
+
+    # The runtime binds to eth0's own address and ignores what was typed here, so both of
+    # these end up on the same socket.
+    assert {:error, changeset} =
+             %Endpoint{}
+             |> Endpoint.source_changeset(%{
+               route_id: route.id,
+               position: 3,
+               schema: "SRT",
+               mode: "listener",
+               interface_sys_name: "eth0",
+               localaddress: "0.0.0.0",
+               localport: 4401
+             })
+             |> Repo.insert()
+
+    {message, _meta} = changeset.errors[:bind_port]
+    assert message == "bind target is already in use"
+  end
+
+  test "allows the same port on different interfaces" do
+    route = route_fixture()
+
+    _ =
+      source_fixture(route, %{
+        schema: "SRT",
+        mode: "listener",
+        interface_sys_name: "eth0",
+        localport: 4402
+      })
+
+    assert {:ok, _} =
+             %Endpoint{}
+             |> Endpoint.source_changeset(%{
+               route_id: route.id,
+               position: 4,
+               schema: "SRT",
+               mode: "listener",
+               interface_sys_name: "eth1",
+               localport: 4402
+             })
+             |> Repo.insert()
+  end
+
   test "detects duplicate bind target when existing endpoint has empty local fields but address/port set" do
     route = route_fixture()
 

@@ -59,6 +59,18 @@ const METRIC_HELP = {
 
 const STATISTICS_URL = 'https://github.com/Haivision/srt/blob/master/docs/API/statistics.md';
 
+/**
+ * SRT reports the link-capacity estimate in Mbps, and on a LAN or loopback that runs into
+ * the thousands. Rendering "1800 Mbps" next to a single-digit send rate reads as a broken
+ * axis, so switch to Gbps once the number leaves the range a stream is measured in.
+ */
+const GBPS_THRESHOLD_MBPS = 1000;
+
+const formatLinkRate = (valueMbps: number): string =>
+  Math.abs(valueMbps) >= GBPS_THRESHOLD_MBPS
+    ? `${(valueMbps / 1000).toFixed(2)} Gbps`
+    : `${valueMbps.toFixed(2)} Mbps`;
+
 const MetricTitle = ({
   label,
   help,
@@ -221,6 +233,14 @@ const SrtHealthTab = ({
     </div>
   );
 
+  // One unit for the whole bandwidth axis, chosen from its peak, so ticks don't mix
+  // "900 Mbps" with "1.80 Gbps" on the same scale.
+  const bandwidthPeakMbps = selectedPoints.reduce(
+    (peak, point) => Math.max(peak, numeric(point.bandwidth_mbps) ?? 0),
+    0,
+  );
+  const bandwidthInGbps = bandwidthPeakMbps >= GBPS_THRESHOLD_MBPS;
+
   const rateAndBandwidthChart = (
     <div style={{ width: '100%', height: 240 }}>
       <ResponsiveContainer>
@@ -238,11 +258,12 @@ const SrtHealthTab = ({
             yAxisId="bandwidth"
             orientation="right"
             width={72}
-            unit=" Mbps"
+            unit={bandwidthInGbps ? ' Gbps' : ' Mbps'}
             stroke="#52c41a"
             domain={[0, 'auto']}
+            tickFormatter={(value) => (bandwidthInGbps ? (Number(value) / 1000).toFixed(2) : String(value))}
           />
-          <ChartTooltip formatter={(value) => `${Number(value).toFixed(2)} Mbps`} />
+          <ChartTooltip formatter={(value) => formatLinkRate(Number(value))} />
           <Legend
             formatter={(value) => (
               <MetricTitle
@@ -360,9 +381,19 @@ const SrtHealthTab = ({
                         anchor="mbpsbandwidth"
                       />
                     }
-                    value={bandwidth ?? '-'}
+                    value={
+                      bandwidth === undefined || bandwidth === null
+                        ? '-'
+                        : bandwidth >= GBPS_THRESHOLD_MBPS
+                          ? bandwidth / 1000
+                          : bandwidth
+                    }
                     precision={2}
-                    suffix="Mbps"
+                    suffix={
+                      bandwidth !== undefined && bandwidth !== null && bandwidth >= GBPS_THRESHOLD_MBPS
+                        ? 'Gbps'
+                        : 'Mbps'
+                    }
                   />
                 </Card>
               </Col>
@@ -404,7 +435,11 @@ const SrtHealthTab = ({
                     anchor={metricAnchors[rateLabel]}
                   />
                 }
-                extra={<Text type="secondary">Rate scale left · bandwidth scale right</Text>}
+                extra={
+                  <Text type="secondary">
+                    {`Rate left · bandwidth right (${bandwidthInGbps ? 'Gbps' : 'Mbps'})`}
+                  </Text>
+                }
               >
                 {rateAndBandwidthChart}
               </Card>

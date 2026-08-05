@@ -246,9 +246,115 @@ describe('Route form validation', () => {
       throw new Error('Source card was not found');
     }
 
+    // A lone addressable interface is pre-selected, so it shows in the field without opening it.
+    await waitFor(() => {
+      expect(within(sourceCard).getByTitle('eth0 (eth0 - 10.10.10.1/24)')).toBeInTheDocument();
+    });
+
     fireEvent.mouseDown(within(sourceCard).getByLabelText('Interface'));
 
-    expect(await screen.findByText('eth0 (eth0 - 10.10.10.1/24)')).toBeInTheDocument();
+    expect(await within(sourceCard).findByTitle('eth0 (eth0 - 10.10.10.1/24)')).toBeInTheDocument();
+  });
+
+  it('surfaces an interface that has no address instead of implying it resolved', async () => {
+    mockInterfacesApi.getAll.mockResolvedValue({ data: [] });
+    mockInterfacesApi.getSystemInterfaces.mockResolvedValue({
+      data: [
+        { sys_name: 'eth0', ip: '10.10.10.1/24' },
+        { sys_name: 'eth9', ip: '-' },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/routes/new/edit']}>
+        <Routes>
+          <Route path="/routes/:id/edit" element={<RouteSourceEdit />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const sourceTitle = await screen.findByText('Primary Source');
+    const sourceCard = sourceTitle.closest('.ant-card');
+    if (!(sourceCard instanceof HTMLElement)) {
+      throw new Error('Source card was not found');
+    }
+    const sourceScope = within(sourceCard);
+
+    fireEvent.mouseDown(sourceScope.getByLabelText('Interface'));
+    fireEvent.click(await screen.findByTitle('eth9 (eth9 - -)'));
+
+    await waitFor(() => {
+      expect(sourceScope.getByText(/No address found on eth9/)).toBeInTheDocument();
+    });
+    expect(sourceScope.getByLabelText('Bind Address')).toHaveValue('');
+  });
+
+  it('leaves the interface unset when several are addressable', async () => {
+    mockInterfacesApi.getAll.mockResolvedValue({ data: [] });
+    mockInterfacesApi.getSystemInterfaces.mockResolvedValue({
+      data: [
+        { sys_name: 'eth0', ip: '10.10.10.1/24' },
+        { sys_name: 'eth1', ip: '10.10.20.1/24' },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/routes/new/edit']}>
+        <Routes>
+          <Route path="/routes/:id/edit" element={<RouteSourceEdit />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const sourceTitle = await screen.findByText('Primary Source');
+    const sourceCard = sourceTitle.closest('.ant-card');
+    if (!(sourceCard instanceof HTMLElement)) {
+      throw new Error('Source card was not found');
+    }
+
+    await waitFor(() => {
+      expect(mockInterfacesApi.getSystemInterfaces).toHaveBeenCalled();
+    });
+    expect(within(sourceCard).queryByTitle('eth0 (eth0 - 10.10.10.1/24)')).not.toBeInTheDocument();
+    expect(within(sourceCard).queryByTitle('eth1 (eth1 - 10.10.20.1/24)')).not.toBeInTheDocument();
+  });
+
+  it('replaces the bind address field with the interface address', async () => {
+    mockInterfacesApi.getAll.mockResolvedValue({ data: [] });
+    mockInterfacesApi.getSystemInterfaces.mockResolvedValue({
+      data: [{ sys_name: 'eth0', ip: '10.10.10.1/24' }],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/routes/new/edit']}>
+        <Routes>
+          <Route path="/routes/:id/edit" element={<RouteSourceEdit />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const sourceTitle = await screen.findByText('Primary Source');
+    const sourceCard = sourceTitle.closest('.ant-card');
+    if (!(sourceCard instanceof HTMLElement)) {
+      throw new Error('Source card was not found');
+    }
+    const sourceScope = within(sourceCard);
+
+    // The runtime binds to the interface address and ignores whatever is typed here, so the
+    // field must show that address instead of asking for one.
+    await waitFor(() => {
+      expect(sourceScope.getByLabelText('Bind Address')).toBeDisabled();
+    });
+    expect(sourceScope.getByLabelText('Bind Address')).toHaveValue('10.10.10.1');
+    expect(sourceScope.queryByPlaceholderText('Enter bind address')).not.toBeInTheDocument();
+
+    // Clearing the interface hands the field back to the operator.
+    fireEvent.mouseDown(sourceScope.getByLabelText('Interface'));
+    fireEvent.click(await screen.findByTitle('Any interface'));
+
+    await waitFor(() => {
+      expect(sourceScope.getByPlaceholderText('Enter bind address')).toBeEnabled();
+    });
   });
 
   it('saves UDP multicast source settings from the route form', async () => {
@@ -283,8 +389,10 @@ describe('Route form validation', () => {
     fireEvent.click(await sourceScope.findByLabelText('Multicast source'));
     fireEvent.change(sourceScope.getByPlaceholderText('239.1.1.1'), { target: { value: '239.1.1.1' } });
     fireEvent.change(sourceScope.getByLabelText('Port'), { target: { value: '5000' } });
-    fireEvent.mouseDown(sourceScope.getByLabelText('Interface'));
-    fireEvent.click(await screen.findByText('eth0 (eth0 - 10.10.10.1/24)'));
+    // eth0 is the only addressable interface, so the form already selected it.
+    await waitFor(() => {
+      expect(sourceScope.getByTitle('eth0 (eth0 - 10.10.10.1/24)')).toBeInTheDocument();
+    });
 
     const destinationTitle = await screen.findByText('Destination #1');
     const destinationCard = destinationTitle.closest('.ant-card');

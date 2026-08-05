@@ -12,6 +12,7 @@ import { destinationsApi, interfacesApi, routesApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
 import { applyBackendEndpointErrors, clearEndpointBindErrors } from './endpointFormErrors';
 import { flattenEndpointPayload, normalizeEndpointForForm } from './endpointOptions';
+import { buildInterfaceSelection } from './interfaceSelection';
 import type { ApiDataResponse } from '../../types/api';
 import type { EndpointFormValues, RouteDestEditProps, RouteSummary } from '../../types/endpoints';
 import type { AppError } from '../../types/errors';
@@ -22,7 +23,6 @@ import NdiOutputFields from './NdiOutputFields';
 import { useNdiCapabilities } from './useNdiCapabilities';
 
 const { Title } = Typography;
-const ANY_INTERFACE_OPTION: InterfaceOption = { label: 'Any interface', value: '' };
 
 const RouteDestEdit = ({ initialValues, onChange }: RouteDestEditProps) => {
     const [form] = Form.useForm();
@@ -32,6 +32,7 @@ const RouteDestEdit = ({ initialValues, onChange }: RouteDestEditProps) => {
     const [loading, setLoading] = useState(destId !== 'new');
     const [interfacesLoading, setInterfacesLoading] = useState(false);
     const [interfaceOptions, setInterfaceOptions] = useState<InterfaceOption[]>([]);
+    const [interfaceIpBySysName, setInterfaceIpBySysName] = useState<Record<string, string>>({});
     const dataFetchedRef = useRef(false);
     const [routeData, setRouteData] = useState<RouteSummary | null>(null);
     const [destData, setDestData] = useState<EndpointFormValues | null>(null);
@@ -122,50 +123,11 @@ const RouteDestEdit = ({ initialValues, onChange }: RouteDestEditProps) => {
                     ? ((systemResult as ApiDataResponse<unknown[]>).data as InterfaceRecord[])
                     : [];
 
-                const savedBySysName = saved.reduce<Record<string, InterfaceRecord>>((acc, item) => {
-                    if (item?.sys_name) {
-                        acc[item.sys_name] = acc[item.sys_name] || item;
-                    }
-                    return acc;
-                }, {});
-
-                const mergedRows = [
-                    ...system
-                        .filter((item) => typeof item.sys_name === 'string' && item.sys_name.length > 0)
-                        .map((item) => {
-                        const sysName = item.sys_name as string;
-                        const aliasRecord = savedBySysName[sysName];
-                        return {
-                            name: aliasRecord?.name || '',
-                            sys_name: sysName,
-                            ip: item.ip,
-                            enabled: aliasRecord?.enabled ?? true,
-                        };
-                    }),
-                    ...saved
-                        .filter((item) => !system.some((systemItem) => systemItem.sys_name === item.sys_name))
-                        .map((item) => ({
-                            name: item.name,
-                            sys_name: item.sys_name,
-                            ip: item.ip,
-                            enabled: item.enabled ?? true,
-                        })),
-                ];
-
-                const options: InterfaceOption[] = mergedRows.reduce<InterfaceOption[]>((acc, item) => {
-                    if (item?.enabled === false || typeof item?.sys_name !== 'string' || item.sys_name.length === 0) {
-                        return acc;
-                    }
-
-                    acc.push({
-                        label: `${item.name || item.sys_name} (${item.sys_name} - ${item.ip || 'N/A'})`,
-                        value: item.sys_name,
-                    });
-                    return acc;
-                }, []);
+                const selection = buildInterfaceSelection(saved, system);
 
                 if (mounted) {
-                    setInterfaceOptions([ANY_INTERFACE_OPTION, ...options]);
+                    setInterfaceOptions(selection.options);
+                    setInterfaceIpBySysName(selection.ipBySysName);
                 }
             } catch (error) {
                 if (mounted) {
@@ -361,11 +323,13 @@ const RouteDestEdit = ({ initialValues, onChange }: RouteDestEditProps) => {
                                                         />
                                                     </Form.Item>
 
-                                                    <Form.Item noStyle dependencies={[['mode']]}>
+                                                    <Form.Item noStyle dependencies={[['mode'], ['interface_sys_name']]}>
                                                         {({ getFieldValue: getNestedFieldValue }) => {
                                                             const mode = getNestedFieldValue(['mode']);
                                                             const isCaller = mode === 'caller';
                                                             const isRendezvous = mode === 'rendezvous';
+                                                            const boundInterface = getNestedFieldValue(['interface_sys_name']);
+                                                            const interfaceBindIp = boundInterface ? interfaceIpBySysName[boundInterface] : undefined;
 
                                                             return (
                                                                 <>
@@ -391,13 +355,32 @@ const RouteDestEdit = ({ initialValues, onChange }: RouteDestEditProps) => {
                                                                     )}
 
                                                                     {(!isCaller || isRendezvous) && (
-                                                                        <Form.Item
-                                                                            label="Bind Address"
-                                                                            name="localaddress"
-                                                                            extra={isRendezvous ? 'Local address to bind before connecting to the rendezvous peer.' : 'Local address to bind.'}
-                                                                        >
-                                                                            <Input placeholder="Enter bind address" />
-                                                                        </Form.Item>
+                                                                        boundInterface ? (
+                                                                            <Form.Item
+                                                                                label="Bind Address"
+                                                                                htmlFor="destination_interface_bind_address"
+                                                                                validateStatus={interfaceBindIp ? undefined : 'error'}
+                                                                                extra={
+                                                                                    interfaceBindIp
+                                                                                        ? 'Taken from the selected interface.'
+                                                                                        : `No address found on ${boundInterface}. This endpoint cannot bind until the interface has one.`
+                                                                                }
+                                                                            >
+                                                                                <Input
+                                                                                    id="destination_interface_bind_address"
+                                                                                    disabled
+                                                                                    value={interfaceBindIp ?? ''}
+                                                                                />
+                                                                            </Form.Item>
+                                                                        ) : (
+                                                                            <Form.Item
+                                                                                label="Bind Address"
+                                                                                name="localaddress"
+                                                                                extra={isRendezvous ? 'Local address to bind before connecting to the rendezvous peer.' : 'Local address to bind.'}
+                                                                            >
+                                                                                <Input placeholder="Enter bind address" />
+                                                                            </Form.Item>
+                                                                        )
                                                                     )}
                                                                 </>
                                                             );

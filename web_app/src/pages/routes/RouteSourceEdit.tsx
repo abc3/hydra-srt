@@ -40,6 +40,7 @@ import {
   TagOption,
 } from '../../types/routes';
 import { applyBackendEndpointErrors } from './endpointFormErrors';
+import { buildInterfaceSelection } from './interfaceSelection';
 import { flattenEndpointPayload, getEndpointOption, normalizeEndpointForForm } from './endpointOptions';
 import type { EndpointRecord } from './endpointOptions';
 import SrtAccessFields from './SrtAccessFields';
@@ -49,7 +50,6 @@ import NdiOutputFields from './NdiOutputFields';
 import { useNdiCapabilities } from './useNdiCapabilities';
 
 const { Title } = Typography;
-const ANY_INTERFACE_OPTION: InterfaceOption = { label: 'Any interface', value: '' };
 // Positions newly created sources above every persisted one so the insert cannot collide
 // with a source that still holds that slot; the reorder call compacts them back to 0..n-1.
 const STAGING_POSITION = 1000;
@@ -120,6 +120,8 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
   const [testingSourceIndex, setTestingSourceIndex] = useState<number | null>(null);
   const [interfacesLoading, setInterfacesLoading] = useState(false);
   const [interfaceOptions, setInterfaceOptions] = useState<InterfaceOption[]>([]);
+  const [interfaceIpBySysName, setInterfaceIpBySysName] = useState<Record<string, string>>({});
+  const [soleInterface, setSoleInterface] = useState<string | undefined>(undefined);
   const [availableTags, setAvailableTags] = useState<TagOption[]>([]);
   const [routeData, setRouteData] = useState<RouteRecord | null>(null);
   const [testResultOpen, setTestResultOpen] = useState(false);
@@ -170,43 +172,12 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
         const saved = (Array.isArray(savedResult?.data) ? savedResult.data : []) as InterfaceRecord[];
         const system = (Array.isArray(systemResult?.data) ? systemResult.data : []) as InterfaceRecord[];
 
-        const savedBySysName = saved.reduce<Record<string, InterfaceRecord>>((acc, item) => {
-          if (item?.sys_name) {
-            acc[item.sys_name] = acc[item.sys_name] || item;
-          }
-          return acc;
-        }, {});
-
-        const mergedRows = [
-          ...system.map((item: InterfaceRecord) => {
-            const aliasRecord = savedBySysName[item.sys_name as string];
-            return {
-              name: aliasRecord?.name || '',
-              sys_name: item.sys_name,
-              ip: item.ip,
-              enabled: aliasRecord?.enabled ?? true,
-            };
-          }),
-          ...saved
-            .filter((item: InterfaceRecord) => !system.some((systemItem) => systemItem.sys_name === item.sys_name))
-            .map((item: InterfaceRecord) => ({
-              name: item.name,
-              sys_name: item.sys_name,
-              ip: item.ip,
-              enabled: item.enabled ?? true,
-            })),
-        ];
-
-        const options = mergedRows
-          .filter((item) => item?.enabled !== false && item?.sys_name)
-          .map((item) => ({
-            label: `${item.name || item.sys_name} (${item.sys_name} - ${item.ip || 'N/A'})`,
-            value: item.sys_name as string,
-          }))
-          .filter((option): option is InterfaceOption => Boolean(option.value));
+        const selection = buildInterfaceSelection(saved, system);
 
         if (mounted) {
-          setInterfaceOptions([ANY_INTERFACE_OPTION, ...options]);
+          setInterfaceOptions(selection.options);
+          setInterfaceIpBySysName(selection.ipBySysName);
+          setSoleInterface(selection.soleInterface);
         }
       } catch (error) {
         if (mounted) {
@@ -225,6 +196,40 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
       mounted = false;
     };
   }, [messageApi]);
+
+  // With a single usable interface there is nothing to choose, so fill it in rather than
+  // making every new endpoint pick it by hand. Saved endpoints keep whatever they stored,
+  // including a deliberate "Any interface".
+  useEffect(() => {
+    if (!soleInterface || !isNew) {
+      return;
+    }
+
+    const applyToList = (listName: 'sources' | 'destinations') => {
+      const entries = (form.getFieldValue(listName) || []) as EndpointRecord[];
+      if (entries.length === 0) {
+        return;
+      }
+
+      let changed = false;
+      const next = entries.map((entry) => {
+        if (entry && !entry.interface_sys_name) {
+          changed = true;
+          return { ...entry, interface_sys_name: soleInterface };
+        }
+        return entry;
+      });
+
+      // setFieldsValue (not setFieldValue) so the fields that render off this value via
+      // `dependencies` re-run — the bind address field is one of them.
+      if (changed) {
+        form.setFieldsValue({ [listName]: next } as Parameters<typeof form.setFieldsValue>[0]);
+      }
+    };
+
+    applyToList('sources');
+    applyToList('destinations');
+  }, [soleInterface, isNew, form]);
 
   useEffect(() => {
     let mounted = true;
@@ -809,11 +814,13 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                             <ProtocolSchemaRadio direction="source" ndiFeatureEnabled={ndiFeatureEnabled} />
                           </Form.Item>
 
-                          <Form.Item noStyle dependencies={[['sources', field.name, 'schema'], ['sources', field.name, 'mode'], ['sources', field.name, 'multicast']]}>
+                          <Form.Item noStyle dependencies={[['sources', field.name, 'schema'], ['sources', field.name, 'mode'], ['sources', field.name, 'multicast'], ['sources', field.name, 'interface_sys_name']]}>
                             {({ getFieldValue }) => {
                               const schema = getFieldValue(['sources', field.name, 'schema']);
                               const mode = getFieldValue(['sources', field.name, 'mode']);
                               const isMulticast = getFieldValue(['sources', field.name, 'multicast']) === true;
+                              const boundInterface = getFieldValue(['sources', field.name, 'interface_sys_name']);
+                              const interfaceBindIp = boundInterface ? interfaceIpBySysName[boundInterface] : undefined;
 
                               if (schema === 'SRT') {
                                 const isCaller = mode === 'caller';
@@ -873,16 +880,37 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                                       </Form.Item>
                                     )}
 
-                                    <Form.Item
-                                      key={`source-${field.key}-bind-address`}
-                                      label="Bind Address"
-                                      name={[field.name, 'localaddress']}
-                                      hidden={!showBind}
-                                      preserve
-                                      rules={showBind ? [{ required: true, message: 'Please enter a bind address' }] : []}
-                                    >
-                                      <Input placeholder="Enter bind address" />
-                                    </Form.Item>
+                                    {boundInterface ? (
+                                      <Form.Item
+                                        key={`source-${field.key}-bind-address-iface`}
+                                        label="Bind Address"
+                                        htmlFor={`sources_${field.name}_interface_bind_address`}
+                                        hidden={!showBind}
+                                        validateStatus={interfaceBindIp ? undefined : 'error'}
+                                        extra={
+                                          interfaceBindIp
+                                            ? 'Taken from the selected interface.'
+                                            : `No address found on ${boundInterface}. This endpoint cannot bind until the interface has one.`
+                                        }
+                                      >
+                                        <Input
+                                          id={`sources_${field.name}_interface_bind_address`}
+                                          disabled
+                                          value={interfaceBindIp ?? ''}
+                                        />
+                                      </Form.Item>
+                                    ) : (
+                                      <Form.Item
+                                        key={`source-${field.key}-bind-address`}
+                                        label="Bind Address"
+                                        name={[field.name, 'localaddress']}
+                                        hidden={!showBind}
+                                        preserve
+                                        rules={showBind ? [{ required: true, message: 'Please enter a bind address' }] : []}
+                                      >
+                                        <Input placeholder="Enter bind address" />
+                                      </Form.Item>
+                                    )}
                                     <Form.Item
                                       key={`source-${field.key}-bind-port`}
                                       label="Bind Port"
@@ -1025,7 +1053,7 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                         </Card>
                       ))}
 
-                      <Button icon={<PlusOutlined />} onClick={() => add({ ...DEFAULT_SOURCE, name: `Backup ${fields.length}` })}>
+                      <Button icon={<PlusOutlined />} onClick={() => add({ ...DEFAULT_SOURCE, name: `Backup ${fields.length}`, ...(soleInterface ? { interface_sys_name: soleInterface } : {}) })}>
                         Add Backup Source
                       </Button>
                     </Space>
@@ -1094,13 +1122,15 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                                         <Select allowClear loading={interfacesLoading} options={interfaceOptions} placeholder="Select interface" />
                                       </Form.Item>
 
-                                      <Form.Item noStyle dependencies={[[field.name, 'mode']]}>
+                                      <Form.Item noStyle dependencies={[[field.name, 'mode'], [field.name, 'interface_sys_name']]}>
                                         {({ getFieldValue: getNestedFieldValue }) => {
                                           const mode = getNestedFieldValue(['destinations', field.name, 'mode']);
                                           const isCaller = mode === 'caller';
                                           const isRendezvous = mode === 'rendezvous';
                                           const showRemote = isCaller || isRendezvous;
                                           const showBind = !isCaller || isRendezvous;
+                                          const boundInterface = getNestedFieldValue(['destinations', field.name, 'interface_sys_name']);
+                                          const interfaceBindIp = boundInterface ? interfaceIpBySysName[boundInterface] : undefined;
 
                                           return (
                                             <>
@@ -1115,16 +1145,36 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                                                 <Input placeholder="Enter remote address" />
                                               </Form.Item>
 
-                                              <Form.Item
-                                                label="Bind Address"
-                                                name={[field.name, 'localaddress']}
-                                                hidden={!showBind}
-                                                preserve
-                                                rules={showBind ? [{ required: true, message: 'Please enter a bind address' }] : []}
-                                                extra={isRendezvous ? 'Local address to bind before connecting to the rendezvous peer.' : 'Local address to bind.'}
-                                              >
-                                                <Input placeholder="Enter bind address" />
-                                              </Form.Item>
+                                              {boundInterface ? (
+                                                <Form.Item
+                                                  label="Bind Address"
+                                                  htmlFor={`destinations_${field.name}_interface_bind_address`}
+                                                  hidden={!showBind}
+                                                  validateStatus={interfaceBindIp ? undefined : 'error'}
+                                                  extra={
+                                                    interfaceBindIp
+                                                      ? 'Taken from the selected interface.'
+                                                      : `No address found on ${boundInterface}. This endpoint cannot bind until the interface has one.`
+                                                  }
+                                                >
+                                                  <Input
+                                                    id={`destinations_${field.name}_interface_bind_address`}
+                                                    disabled
+                                                    value={interfaceBindIp ?? ''}
+                                                  />
+                                                </Form.Item>
+                                              ) : (
+                                                <Form.Item
+                                                  label="Bind Address"
+                                                  name={[field.name, 'localaddress']}
+                                                  hidden={!showBind}
+                                                  preserve
+                                                  rules={showBind ? [{ required: true, message: 'Please enter a bind address' }] : []}
+                                                  extra={isRendezvous ? 'Local address to bind before connecting to the rendezvous peer.' : 'Local address to bind.'}
+                                                >
+                                                  <Input placeholder="Enter bind address" />
+                                                </Form.Item>
+                                              )}
                                             </>
                                           );
                                         }}
@@ -1314,7 +1364,7 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                           </Card>
                         ))}
 
-                        <Button icon={<PlusOutlined />} onClick={() => add({ ...DEFAULT_DESTINATION, name: `Destination ${fields.length + 1}` })}>
+                        <Button icon={<PlusOutlined />} onClick={() => add({ ...DEFAULT_DESTINATION, name: `Destination ${fields.length + 1}`, ...(soleInterface ? { interface_sys_name: soleInterface } : {}) })}>
                           Add Destination
                         </Button>
                       </Space>
