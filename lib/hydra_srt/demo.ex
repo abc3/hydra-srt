@@ -257,13 +257,13 @@ defmodule HydraSrt.Demo do
   defp ensure_demo_udp_destination!(route_id) do
     case find_destination_by_name(route_id, @demo_udp_destination_name) do
       %{} = destination ->
-        maybe_update_endpoint!(destination, %{schema: "UDP", host: "0.0.0.0", port: 4212})
+        maybe_update_endpoint!(destination, %{schema: "UDP", host: "127.0.0.1", port: 4212})
 
       nil ->
         create_destination!(route_id, %{
           name: @demo_udp_destination_name,
           schema: "UDP",
-          host: "0.0.0.0",
+          host: "127.0.0.1",
           port: 4212,
           enabled: true
         })
@@ -315,13 +315,13 @@ defmodule HydraSrt.Demo do
   defp ensure_demo_udp_udp_destination!(route_id) do
     case find_destination_by_name(route_id, @demo_udp_udp_destination_name) do
       %{} = destination ->
-        maybe_update_endpoint!(destination, %{schema: "UDP", host: "0.0.0.0", port: 4214})
+        maybe_update_endpoint!(destination, %{schema: "UDP", host: "127.0.0.1", port: 4214})
 
       nil ->
         create_destination!(route_id, %{
           name: @demo_udp_udp_destination_name,
           schema: "UDP",
-          host: "0.0.0.0",
+          host: "127.0.0.1",
           port: 4214,
           enabled: true
         })
@@ -345,7 +345,7 @@ defmodule HydraSrt.Demo do
       create_destination!(route_id, %{
         name: @demo_rtp_udp_destination_name,
         schema: "UDP",
-        host: "0.0.0.0",
+        host: "127.0.0.1",
         port: 4206,
         enabled: true
       })
