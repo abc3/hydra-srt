@@ -50,6 +50,9 @@ import { useNdiCapabilities } from './useNdiCapabilities';
 
 const { Title } = Typography;
 const ANY_INTERFACE_OPTION: InterfaceOption = { label: 'Any interface', value: '' };
+// Positions newly created sources above every persisted one so the insert cannot collide
+// with a source that still holds that slot; the reorder call compacts them back to 0..n-1.
+const STAGING_POSITION = 1000;
 
 type RouteEditFormValues = Omit<RouteFormValues, 'sources' | 'destinations'> & {
   sources?: EndpointRecord[];
@@ -340,13 +343,24 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
     }
   };
 
-  const normalizeSourcePayload = (source: EndpointRecord, position: number) => ({
-    ...flattenEndpointPayload(source),
-    enabled: source?.enabled !== false,
-    name: source?.name,
-    schema: source?.schema,
-    position,
-  });
+  const normalizeSourcePayload = (source: EndpointRecord, position?: number) => {
+    const payload: EndpointRecord = {
+      ...flattenEndpointPayload(source),
+      enabled: source?.enabled !== false,
+      name: source?.name,
+      schema: source?.schema,
+    };
+
+    if (position === undefined) {
+      // The loaded record carries its stored position; drop it so an update never
+      // writes a position that another source still holds.
+      delete payload.position;
+    } else {
+      payload.position = position;
+    }
+
+    return payload;
+  };
 
   const normalizeDestinationPayload = (destination: EndpointRecord) => ({
     ...flattenEndpointPayload(destination),
@@ -363,14 +377,17 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
 
     for (let index = 0; index < sources.length; index += 1) {
       const source = sources[index];
-      const payload = normalizeSourcePayload(source, index);
 
       try {
         const sourceId = source?.id ? String(source.id) : undefined;
         if (sourceId && existingById.has(sourceId)) {
-          await sourcesApi.update(routeId, sourceId, payload);
+          // Ordering is settled by the reorder call below, which shifts positions out of
+          // the way first. Writing the final position here would trip the
+          // (route_id, position, type) unique index whenever two sources swap places.
+          await sourcesApi.update(routeId, sourceId, normalizeSourcePayload(source));
           keptIds.push(sourceId);
         } else {
+          const payload = normalizeSourcePayload(source, STAGING_POSITION + index);
           const created = (await sourcesApi.create(routeId, payload)) as ApiDataResponse<{ id: string }>;
           if (created.data?.id) {
             keptIds.push(created.data.id);
@@ -401,12 +418,31 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
     return keptIds;
   };
 
-  const createDestinations = async (routeId: string, destinations: EndpointRecord[]) => {
+  const saveDestinations = async (
+    routeId: string,
+    destinations: EndpointRecord[],
+    existingDestinations: RouteEndpoint[] = [],
+  ) => {
+    const existingById = new Map(
+      existingDestinations.filter((d) => d?.id).map((d) => [String(d.id), d]),
+    );
+    const keptIds: string[] = [];
+
     for (let index = 0; index < destinations.length; index += 1) {
       const destination = destinations[index];
       const payload = normalizeDestinationPayload(destination);
+
       try {
-        await destinationsApi.create(routeId, payload);
+        const destinationId = destination?.id ? String(destination.id) : undefined;
+        if (destinationId && existingById.has(destinationId)) {
+          await destinationsApi.update(routeId, destinationId, payload);
+          keptIds.push(destinationId);
+        } else {
+          const created = (await destinationsApi.create(routeId, payload)) as ApiDataResponse<{ id: string }>;
+          if (created.data?.id) {
+            keptIds.push(created.data.id);
+          }
+        }
       } catch (error) {
         const appError = error as AppError & { userFacingMessage?: string };
         if (applyBackendEndpointErrors(form, appError.errors, ['destinations', index])) {
@@ -416,6 +452,16 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
         throw error;
       }
     }
+
+    const deletedIds = existingDestinations
+      .filter((destination) => destination?.id && !keptIds.includes(String(destination.id)))
+      .map((destination) => String(destination.id));
+
+    for (const destinationId of deletedIds) {
+      await destinationsApi.delete(routeId, destinationId);
+    }
+
+    return keptIds;
   };
 
   const handleSave = async () => {
@@ -441,33 +487,35 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
 
       let routeId = id;
 
+      if (sources.length === 0) {
+        loadingMessage();
+        messageApi.error('At least one source is required');
+        return;
+      }
+
+      if (destinations.length === 0) {
+        loadingMessage();
+        messageApi.error('At least one destination is required');
+        return;
+      }
+
       if (isNew) {
-        if (sources.length === 0) {
-          loadingMessage();
-          messageApi.error('At least one source is required');
-          return;
-        }
-
-        if (destinations.length === 0) {
-          loadingMessage();
-          messageApi.error('At least one destination is required');
-          return;
-        }
-
         const created = (await routesApi.create(routePayload)) as ApiDataResponse<{ id: string }>;
         routeId = created.data?.id;
         if (!routeId) {
           throw new Error('Route id missing after create');
         }
-
-        const keptIds = await saveSources(routeId, sources, []);
-        await createDestinations(routeId, destinations);
-
-        if (routeData?.active_source_id && !keptIds.includes(routeData.active_source_id) && keptIds[0]) {
-          await routesApi.switchSource(routeId, keptIds[0]);
-        }
       } else {
         await routesApi.update(routeId as string, routePayload);
+      }
+
+      // Sources and destinations live on their own endpoints, so they are persisted
+      // separately from the route row — on edit as well as on create.
+      const keptIds = await saveSources(routeId as string, sources, routeData?.sources || []);
+      await saveDestinations(routeId as string, destinations, routeData?.destinations || []);
+
+      if (routeData?.active_source_id && !keptIds.includes(routeData.active_source_id) && keptIds[0]) {
+        await routesApi.switchSource(routeId as string, keptIds[0]);
       }
 
       loadingMessage();
