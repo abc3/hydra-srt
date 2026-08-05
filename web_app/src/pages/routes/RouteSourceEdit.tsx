@@ -407,6 +407,13 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
       .filter((source) => source?.id && !keptIds.includes(String(source.id)))
       .map((source) => String(source.id));
 
+    // The backend refuses to delete a route's active source, so hand the active slot to
+    // a surviving source before removing it.
+    const activeSourceId = routeData?.active_source_id ? String(routeData.active_source_id) : undefined;
+    if (activeSourceId && deletedIds.includes(activeSourceId) && keptIds[0]) {
+      await routesApi.switchSource(routeId, keptIds[0]);
+    }
+
     for (const sourceId of deletedIds) {
       await sourcesApi.delete(routeId, sourceId);
     }
@@ -465,9 +472,12 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
   };
 
   const handleSave = async () => {
+    // Declared out here so a failed save can dismiss it — the toast never expires on its own.
+    let loadingMessage: (() => void) | undefined;
+
     try {
       const values = await form.validateFields();
-      const loadingMessage = messageApi.loading('Saving route...', 0);
+      loadingMessage = messageApi.loading('Saving route...', 0);
 
       const routePayload = {
         name: values.name,
@@ -511,12 +521,8 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
 
       // Sources and destinations live on their own endpoints, so they are persisted
       // separately from the route row — on edit as well as on create.
-      const keptIds = await saveSources(routeId as string, sources, routeData?.sources || []);
+      await saveSources(routeId as string, sources, routeData?.sources || []);
       await saveDestinations(routeId as string, destinations, routeData?.destinations || []);
-
-      if (routeData?.active_source_id && !keptIds.includes(routeData.active_source_id) && keptIds[0]) {
-        await routesApi.switchSource(routeId as string, keptIds[0]);
-      }
 
       loadingMessage();
       messageApi.success('Route saved successfully');
@@ -534,6 +540,8 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
         } as Parameters<typeof form.setFieldsValue>[0]);
       }
     } catch (error) {
+      loadingMessage?.();
+
       const saveError = error as AppError & {
         errorFields?: { errors?: string[] }[];
         userFacingMessage?: string;

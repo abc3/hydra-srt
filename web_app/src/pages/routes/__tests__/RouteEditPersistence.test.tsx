@@ -217,6 +217,45 @@ describe('Edit Route persists sources and destinations', () => {
     expect(mockSourcesApi.reorder).toHaveBeenCalledWith('r1', [PRIMARY_SOURCE_ID]);
   });
 
+  it('hands off the active slot before deleting the active source', async () => {
+    // active_source_id points at the primary, and the primary is the one being removed.
+    mockRoutesApi.getById.mockResolvedValue(routeFixture([primarySource, secondSource]));
+    mockRoutesApi.switchSource.mockResolvedValue({ data: {} });
+
+    const callOrder: string[] = [];
+    mockRoutesApi.switchSource.mockImplementation(async () => { callOrder.push('switch'); return { data: {} }; });
+    mockSourcesApi.delete.mockImplementation(async () => { callOrder.push('delete'); return {}; });
+
+    await renderEditPage();
+
+    fireEvent.click(cardScope('Primary Source').getByRole('button', { name: /delete/i }));
+
+    await save();
+
+    await waitFor(() => {
+      expect(mockSourcesApi.delete).toHaveBeenCalledWith('r1', PRIMARY_SOURCE_ID);
+    });
+
+    // The backend rejects deleting a route's active source, so the switch must land first.
+    expect(mockRoutesApi.switchSource).toHaveBeenCalledWith('r1', SECOND_SOURCE_ID);
+    expect(callOrder).toEqual(['switch', 'delete']);
+  });
+
+  it('does not switch the active source when it survives the save', async () => {
+    mockRoutesApi.getById.mockResolvedValue(routeFixture([primarySource, secondSource]));
+
+    await renderEditPage();
+
+    fireEvent.click(cardScope('Backup Source #1').getByRole('button', { name: /delete/i }));
+
+    await save();
+
+    await waitFor(() => {
+      expect(mockSourcesApi.delete).toHaveBeenCalledWith('r1', SECOND_SOURCE_ID);
+    });
+    expect(mockRoutesApi.switchSource).not.toHaveBeenCalled();
+  });
+
   it('does not write colliding positions when sources are reordered', async () => {
     mockRoutesApi.getById.mockResolvedValue(routeFixture([primarySource, secondSource]));
 
