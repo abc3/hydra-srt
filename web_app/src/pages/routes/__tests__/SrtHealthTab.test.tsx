@@ -37,7 +37,7 @@ describe('SrtHealthTab', () => {
       '8.00Mbps',
     );
     expect(screen.getByText('Receive rate and estimated bandwidth')).toBeInTheDocument();
-    expect(screen.getByText('Rate scale left · bandwidth scale right')).toBeInTheDocument();
+    expect(screen.getByText('Rate left · bandwidth right (Mbps)')).toBeInTheDocument();
 
     fireEvent.mouseEnter(screen.getAllByLabelText('About RTT')[0]);
     expect(
@@ -90,5 +90,32 @@ describe('SrtHealthTab', () => {
     );
 
     expect(screen.getByText('This route has no SRT endpoints')).toBeInTheDocument();
+  });
+
+  it('switches the link estimate to Gbps once it leaves stream range', () => {
+    // SRT reports link capacity in Mbps; on a LAN that is thousands, which reads as a
+    // broken axis next to a single-digit send rate.
+    render(
+      <SrtHealthTab
+        sources={[{ id: 's1', name: 'Primary SRT', schema: 'SRT' }]}
+        destinations={[]}
+        activeSourceId="s1"
+        loading={false}
+        error={null}
+        points={[{
+          timestamp: '2026-07-02T20:00:00Z',
+          entity_type: 'source',
+          entity_id: 's1',
+          bandwidth_mbps: 2285.72,
+          rate_mbps: 4,
+        }]}
+      />,
+    );
+
+    // antd's Statistic truncates at the requested precision rather than rounding.
+    expect(screen.getByText('Estimated bandwidth').closest('.ant-statistic')).toHaveTextContent(
+      '2.28Gbps',
+    );
+    expect(screen.getByText('Rate left · bandwidth right (Gbps)')).toBeInTheDocument();
   });
 });

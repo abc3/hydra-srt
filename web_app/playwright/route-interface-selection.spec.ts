@@ -152,7 +152,16 @@ test('route and destination edit pages keep selected interfaces and endpoint val
   await page.goto(`/#/routes/${routeId}/edit`);
   await expect(page.getByRole('heading', { name: 'Edit Route' })).toBeVisible();
   await expect(page.locator('input[value="198.51.100.20"]').first()).toBeVisible();
-  await expect(page.locator('input[value="10.0.0.10"]').first()).toBeVisible();
+
+  // The interface decides the bind address at runtime and the stored one is discarded, so
+  // the form shows the interface's address rather than the '10.0.0.10' this source was
+  // created with.
+  const interfaceBindIp = systemInterface.ip.split('/')[0];
+  const bindAddressInput = page.locator('#sources_0_interface_bind_address');
+  await expect(bindAddressInput).toHaveValue(interfaceBindIp);
+  await expect(bindAddressInput).toBeDisabled();
+  await expect(page.locator('input[value="10.0.0.10"]')).toHaveCount(0);
+
   await expectInterfaceSelection(page, aliasName, systemInterface.sys_name);
   await expect(page.getByRole('radio', { name: 'Rendezvous' })).toBeChecked();
 

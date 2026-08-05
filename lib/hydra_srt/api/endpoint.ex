@@ -4,7 +4,13 @@ defmodule HydraSrt.Api.Endpoint do
   import Ecto.Query, only: [from: 2]
 
   @source_unique_constraint :endpoints_route_id_position_type_index
-  @bind_target_unique_constraint :endpoints_bind_interface_bind_address_bind_port_index
+  # Two partial indexes, because what pins an endpoint to a socket differs: an endpoint that
+  # names an interface is bound to that interface's address at runtime, whichever address the
+  # row happens to carry, so interface + port decides. Everything else is keyed on the
+  # address it actually binds.
+  @interface_bind_target_constraint :endpoints_bind_interface_bind_port_index
+  @address_bind_target_constraint :endpoints_bind_address_bind_port_index
+  @bind_target_in_use_message "bind target is already in use"
   # exqlite reports UNIQUE failures via Ecto's default derived name
   # (`table_column_index`), not the migration's custom partial-index name.
   @ndi_sender_name_key_unique_constraint :endpoints_ndi_sender_name_key_index
@@ -223,8 +229,12 @@ defmodule HydraSrt.Api.Endpoint do
     |> put_bind_target_fields()
     |> unique_constraint([:route_id, :position, :type], name: @source_unique_constraint)
     |> unique_constraint(:bind_port,
-      name: @bind_target_unique_constraint,
-      message: "bind target is already in use"
+      name: @interface_bind_target_constraint,
+      message: @bind_target_in_use_message
+    )
+    |> unique_constraint(:bind_port,
+      name: @address_bind_target_constraint,
+      message: @bind_target_in_use_message
     )
     |> optimistic_lock(:lock_version)
   end
@@ -244,8 +254,12 @@ defmodule HydraSrt.Api.Endpoint do
     |> put_bind_target_fields()
     |> unique_constraint([:route_id, :position, :type], name: @source_unique_constraint)
     |> unique_constraint(:bind_port,
-      name: @bind_target_unique_constraint,
-      message: "bind target is already in use"
+      name: @interface_bind_target_constraint,
+      message: @bind_target_in_use_message
+    )
+    |> unique_constraint(:bind_port,
+      name: @address_bind_target_constraint,
+      message: @bind_target_in_use_message
     )
     |> unique_constraint(:ndi_sender_name_key,
       name: @ndi_sender_name_key_unique_constraint,
