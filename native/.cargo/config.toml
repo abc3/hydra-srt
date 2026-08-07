@@ -1,0 +1,11 @@
+# The unit tests build and tear down real GStreamer pipelines. libtest runs tests on one
+# thread per core by default, which drives concurrent element creation and disposal through
+# the GStreamer C library inside a single process — the crates here contain no `unsafe`, yet
+# that concurrency has aborted the test binary with glibc heap corruption
+# ("malloc_consolidate(): unaligned fastbin chunk detected", SIGABRT) on CI.
+#
+# Nothing in production does this: `hydra_srt_pipeline` runs one route pipeline per process.
+# Serialising the tests matches that model and makes the suite deterministic, on CI and
+# locally alike.
+[env]
+RUST_TEST_THREADS = "1"
