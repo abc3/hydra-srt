@@ -101,6 +101,7 @@ impl RtmpLinkError {
             | gst::PadLinkError::Refused => match context {
                 "failed to link parsebin to parser" => Self::LinkParsebinToParser(error),
                 "failed to link parser to flvmux" => Self::LinkParserToMux(error),
+                "failed to link queue to flvmux" => Self::LinkParserToMux(error),
                 "failed to link parsebin to flvmux" => Self::LinkParsebinToMux(error),
                 _ => Self::Other(format!("{context}: {error:?}")),
             },
@@ -388,10 +389,10 @@ fn try_link_destination_pad(
     }
     let caps = caps_for_pad(src_pad).ok_or(RtmpLinkError::NoCaps)?;
     let structure = caps.structure(0).ok_or(RtmpLinkError::NoCapsStructure)?;
-    let mux_sink = if structure.name().starts_with("video/") {
-        video_pad
+    let (mux_sink, queue_branch) = if structure.name().starts_with("video/") {
+        (video_pad, "video_queue")
     } else if structure.name().starts_with("audio/") {
-        audio_pad
+        (audio_pad, "audio_queue")
     } else {
         return Err(RtmpLinkError::SkipNonAv {
             caps_name: structure.name().to_string(),
@@ -400,42 +401,135 @@ fn try_link_destination_pad(
     if mux_sink.is_linked() {
         return Ok(());
     }
-    if let Some(parser) = parser_for_caps(&caps) {
-        configure_parser(&parser);
-        bin.add(&parser)
-            .map_err(|error| RtmpLinkError::Other(error.to_string()))?;
-        let parser_sink = parser
-            .static_pad("sink")
-            .ok_or(RtmpLinkError::ParserMissingSink)?;
-        let parser_src = parser
-            .static_pad("src")
-            .ok_or(RtmpLinkError::ParserMissingSrc)?;
+
+    // Insert a queue between the parser (or parsebin pad) and each flvmux
+    // request pad — same queue limits as the source remux path. Without this,
+    // parsebin's single streaming thread can push one pad into flvmux
+    // (GstAggregator), block waiting for the other pad's buffer, and never
+    // deliver that buffer — a self-deadlock (intermittent remux hangs).
+    let suffix = sanitize_gst_element_suffix(bin.name().as_str());
+    let queue = gst::ElementFactory::make("queue")
+        .name(rtmp_remux_element_name(&suffix, queue_branch))
+        .build()
+        .map_err(|error| RtmpLinkError::Other(error.to_string()))?;
+    queue.set_property("max-size-buffers", 200_u32);
+    queue.set_property("max-size-bytes", 0_u32);
+    queue.set_property("max-size-time", 0_u64);
+    let parser = parser_for_caps(&caps);
+    bin.add(&queue)
+        .map_err(|error| RtmpLinkError::Other(error.to_string()))?;
+    if let Some(parser) = parser.as_ref() {
+        if let Err(error) = bin.add(parser) {
+            let _ = bin.remove(&queue);
+            return Err(RtmpLinkError::Other(error.to_string()));
+        }
+        configure_parser(parser);
+    }
+
+    let queue_sink = queue
+        .static_pad("sink")
+        .ok_or_else(|| RtmpLinkError::Other("rtmp remux queue has no sink pad".to_string()))?;
+    let queue_src = queue
+        .static_pad("src")
+        .ok_or_else(|| RtmpLinkError::Other("rtmp remux queue has no source pad".to_string()))?;
+
+    let cleanup = || {
+        if let Some(parser) = parser.as_ref() {
+            let _ = bin.remove(parser);
+        }
+        let _ = bin.remove(&queue);
+    };
+
+    if let Some(parser) = parser.as_ref() {
+        let parser_sink = match parser.static_pad("sink") {
+            Some(pad) => pad,
+            None => {
+                cleanup();
+                return Err(RtmpLinkError::ParserMissingSink);
+            }
+        };
+        let parser_src = match parser.static_pad("src") {
+            Some(pad) => pad,
+            None => {
+                cleanup();
+                return Err(RtmpLinkError::ParserMissingSrc);
+            }
+        };
+        // parsebin -> parser -> queue -> flvmux
         if let Err(error) = src_pad.link(&parser_sink) {
-            let _ = bin.remove(&parser);
+            cleanup();
             return Err(RtmpLinkError::from_link_failure(
                 "failed to link parsebin to parser",
                 error,
             ));
         }
-        if let Err(error) = parser_src.link(mux_sink) {
+        if let Err(error) = parser_src.link(&queue_sink) {
             let _ = src_pad.unlink(&parser_sink);
-            let _ = bin.remove(&parser);
+            cleanup();
             return Err(RtmpLinkError::from_link_failure(
                 "failed to link parser to flvmux",
                 error,
             ));
         }
-        if let Err(error) = parser.sync_state_with_parent() {
-            let _ = parser_src.unlink(mux_sink);
+        if let Err(error) = queue_src.link(mux_sink) {
+            let _ = parser_src.unlink(&queue_sink);
             let _ = src_pad.unlink(&parser_sink);
-            let _ = bin.remove(&parser);
+            cleanup();
+            return Err(RtmpLinkError::from_link_failure(
+                "failed to link queue to flvmux",
+                error,
+            ));
+        }
+    } else {
+        // parsebin -> queue -> flvmux
+        if let Err(error) = src_pad.link(&queue_sink) {
+            cleanup();
+            return Err(RtmpLinkError::from_link_failure(
+                "failed to link parsebin to flvmux",
+                error,
+            ));
+        }
+        if let Err(error) = queue_src.link(mux_sink) {
+            let _ = src_pad.unlink(&queue_sink);
+            cleanup();
+            return Err(RtmpLinkError::from_link_failure(
+                "failed to link parsebin to flvmux",
+                error,
+            ));
+        }
+    }
+
+    // pad-added runs after the bin is already PLAYING — sync dynamically added
+    // elements to the parent state, same as other remux inserts in this file.
+    // On sync failure, unlink + remove so a later probe retry is not short-circuited
+    // by src_pad.is_linked() leaving a dead NULL-state branch in the bin.
+    if let Err(error) = queue.sync_state_with_parent() {
+        let _ = queue_src.unlink(mux_sink);
+        if let Some(parser) = parser.as_ref() {
+            if let (Some(parser_sink), Some(parser_src)) =
+                (parser.static_pad("sink"), parser.static_pad("src"))
+            {
+                let _ = parser_src.unlink(&queue_sink);
+                let _ = src_pad.unlink(&parser_sink);
+            }
+        } else {
+            let _ = src_pad.unlink(&queue_sink);
+        }
+        cleanup();
+        return Err(RtmpLinkError::Other(error.to_string()));
+    }
+    if let Some(parser) = parser.as_ref() {
+        if let Err(error) = parser.sync_state_with_parent() {
+            let _ = queue_src.unlink(mux_sink);
+            if let (Some(parser_sink), Some(parser_src)) =
+                (parser.static_pad("sink"), parser.static_pad("src"))
+            {
+                let _ = parser_src.unlink(&queue_sink);
+                let _ = src_pad.unlink(&parser_sink);
+            }
+            cleanup();
             return Err(RtmpLinkError::SyncParser(error));
         }
-    } else if let Err(error) = src_pad.link(mux_sink) {
-        return Err(RtmpLinkError::from_link_failure(
-            "failed to link parsebin to flvmux",
-            error,
-        ));
     }
     Ok(())
 }
