@@ -18,8 +18,15 @@ defmodule HydraSrt.SourceNdiSelectionTest do
     :ok
   end
 
+  # `Capabilities.mint_selection_token/4` derives the cache TTL from the wall clock
+  # (`DateTime.diff(expires_at, DateTime.utc_now())`, floored at 1ms). A hardcoded reference
+  # date therefore mints a token that is already expired in real time and survives ~1ms,
+  # leaving every assertion that needs it to resolve in a race with the cache. Anchor the
+  # test clock to real time so the token lives for the interval the test asks for.
+  defp reference_now, do: DateTime.utc_now()
+
   test "discovery_name resolves selection_token into snapshot fields and strips the token" do
-    now = ~U[2026-07-19 10:00:00Z]
+    now = reference_now()
     expires = DateTime.add(now, 60, :second)
     principal = "principal-x4"
 
@@ -52,7 +59,7 @@ defmodule HydraSrt.SourceNdiSelectionTest do
   end
 
   test "expired selection_token returns a stable error" do
-    now = ~U[2026-07-19 10:00:00Z]
+    now = reference_now()
     expires = DateTime.add(now, 5, :second)
     principal = "principal-x4-exp"
 
@@ -81,7 +88,7 @@ defmodule HydraSrt.SourceNdiSelectionTest do
   end
 
   test "mismatched ndi_source_name against token returns a stable error" do
-    now = ~U[2026-07-19 10:00:00Z]
+    now = reference_now()
     expires = DateTime.add(now, 60, :second)
     principal = "principal-x4-mis"
 
