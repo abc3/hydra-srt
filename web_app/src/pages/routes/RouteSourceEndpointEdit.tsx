@@ -34,6 +34,7 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
     const [interfacesLoading, setInterfacesLoading] = useState(false);
     const [interfaceOptions, setInterfaceOptions] = useState<InterfaceOption[]>([]);
     const [interfaceIpBySysName, setInterfaceIpBySysName] = useState<Record<string, string>>({});
+    const [soleInterface, setSoleInterface] = useState<string | undefined>(undefined);
     const dataFetchedRef = useRef(false);
     const [routeData, setRouteData] = useState<RouteSummary | null>(null);
     const [sourceData, setSourceData] = useState<EndpointFormValues | null>(null);
@@ -129,6 +130,7 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                 if (mounted) {
                     setInterfaceOptions(selection.options);
                     setInterfaceIpBySysName(selection.ipBySysName);
+                    setSoleInterface(selection.soleInterface);
                 }
             } catch (error) {
                 if (mounted) {
@@ -147,6 +149,22 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
             mounted = false;
         };
     }, [messageApi]);
+
+    // With a single usable interface there is nothing to choose, so fill it in for a new
+    // source. A saved source keeps whatever it stored, including a deliberate "Any interface".
+    useEffect(() => {
+        if (!soleInterface || sourceId !== 'new') {
+            return;
+        }
+
+        if (form.getFieldValue('interface_sys_name')) {
+            return;
+        }
+
+        // setFieldsValue (not setFieldValue) so fields that render off this value via
+        // `dependencies` re-run — the bind address field is one of them.
+        form.setFieldsValue({ interface_sys_name: soleInterface });
+    }, [soleInterface, sourceId, form]);
 
     const handleValuesChange = (changedValues: Partial<EndpointFormValues>, allValues: EndpointFormValues) => {
         const changedKeys = Object.keys(changedValues || {});
