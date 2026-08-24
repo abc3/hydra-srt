@@ -169,6 +169,46 @@ defmodule HydraSrt.RouteHandlerTest do
            }
   end
 
+  test "build_srt_uri percent-encodes spaces instead of emitting '+'" do
+    opts = %{
+      "mode" => "caller",
+      "address" => "198.51.100.20",
+      "port" => 4209,
+      "streamid" => "live feed",
+      "passphrase" => "my secret pass 42",
+      "pbkeylen" => 16
+    }
+
+    uri = RouteHandler.build_srt_uri(opts)
+    query = URI.parse(uri).query
+
+    # GStreamer only percent-decodes the SRT query, so a `+` would reach SRT verbatim.
+    refute query =~ "+"
+    assert query =~ "passphrase=my%20secret%20pass%2042"
+    assert query =~ "streamid=live%20feed"
+
+    assert URI.decode_query(query) == %{
+             "mode" => "caller",
+             "streamid" => "live feed",
+             "passphrase" => "my secret pass 42",
+             "pbkeylen" => "16"
+           }
+  end
+
+  test "build_srt_uri percent-encodes reserved characters in the passphrase" do
+    uri =
+      RouteHandler.build_srt_uri(%{
+        "mode" => "caller",
+        "address" => "198.51.100.20",
+        "port" => 4209,
+        "passphrase" => "^Aa1Bb2Cc3Dd4Ee5^FG&H",
+        "pbkeylen" => 16
+      })
+
+    assert URI.parse(uri).query =~ "passphrase=%5EAa1Bb2Cc3Dd4Ee5%5EFG%26H"
+    assert URI.decode_query(URI.parse(uri).query)["passphrase"] == "^Aa1Bb2Cc3Dd4Ee5^FG&H"
+  end
+
   test "build_srt_uri supports streamid in rendezvous mode" do
     uri =
       RouteHandler.build_srt_uri(%{

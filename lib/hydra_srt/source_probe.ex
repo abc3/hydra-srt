@@ -3,10 +3,10 @@ defmodule HydraSrt.SourceProbe do
 
   require Logger
 
+  alias HydraSrt.LogSanitizer
   alias HydraSrt.RouteHandler
 
   @default_ffprobe_timeout_ms 15_000
-  @passphrase_mask "[REDACTED]"
 
   @spec probe(map(), keyword()) :: {:ok, map()} | {:error, atom() | binary()}
   def probe(route_params, opts \\ [])
@@ -195,7 +195,7 @@ defmodule HydraSrt.SourceProbe do
   defp sanitize_output(value), do: value
 
   defp sanitize_uri(value) when is_binary(value) do
-    Regex.replace(~r/(passphrase=)[^&\s]+/, value, "\\1#{@passphrase_mask}")
+    LogSanitizer.mask_passphrase(value)
   end
 
   defp sanitize_uri(value), do: value
