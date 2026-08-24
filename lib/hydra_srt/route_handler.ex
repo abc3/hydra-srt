@@ -14,6 +14,7 @@ defmodule HydraSrt.RouteHandler do
 
   alias HydraSrt.Db
   alias HydraSrt.Helpers
+  alias HydraSrt.LogSanitizer
   alias HydraSrt.Ndi.FeaturePolicy
   alias HydraSrt.SystemInterfaces
   alias HydraSrt.Stats.EventLogger
@@ -523,7 +524,10 @@ defmodule HydraSrt.RouteHandler do
   defp send_initial_command(port, params) do
     with {:ok, params} <- Jason.encode(params),
          payload = params <> "\n",
-         _ = Logger.info("RouteHandler: initial command payload: #{params}"),
+         _ =
+           Logger.info(
+             "RouteHandler: initial command payload: #{LogSanitizer.sanitize_payload(params)}"
+           ),
          :ok <- command_port(port, payload) do
       Logger.info("RouteHandler: sent initial command")
       :ok
@@ -1778,13 +1782,32 @@ defmodule HydraSrt.RouteHandler do
       scheme: "srt",
       host: host,
       port: port,
-      query: URI.encode_query(query_params)
+      query: encode_srt_query(query_params)
     })
   end
 
   @doc false
   @spec build_srt_uri(term()) :: nil
   def build_srt_uri(_), do: nil
+
+  # RFC 3986 percent-encoding, not `application/x-www-form-urlencoded`.
+  # `URI.encode_query/1` would emit `+` for a space; GStreamer's `srtsrc`/`srtsink`
+  # only percent-decode the query, so a `+` reaches SRT verbatim and corrupts any
+  # `passphrase` or `streamid` that contains a space.
+  @spec encode_srt_query(json_map()) :: String.t()
+  defp encode_srt_query(params) when is_map(params) do
+    params
+    |> Enum.map(fn {key, value} ->
+      "#{percent_encode(key)}=#{percent_encode(value)}"
+    end)
+    |> Enum.join("&")
+  end
+
+  defp percent_encode(value) do
+    value
+    |> to_string()
+    |> URI.encode(&URI.char_unreserved?/1)
+  end
 
   @doc false
   @spec srt_remote_address(json_map()) :: String.t() | nil
