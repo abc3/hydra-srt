@@ -183,6 +183,43 @@ defmodule HydraSrt.E2E.Native.Helpers do
   end
 
   @doc """
+  Caller-mode SRT source route config: the native pipeline dials out to
+  `srt_host:srt_port` instead of listening. Used against a real peer started
+  separately (`start_gst_srt_listener!/2`) or against a port with nothing bound
+  to it, to exercise the caller-mode connect/no-data/auth-failure paths.
+  """
+  def srt_caller_source_config(srt_port, udp_port, opts \\ []) do
+    srt_host = Keyword.get(opts, :srt_host, "127.0.0.1")
+    source_uri = build_srt_uri(srt_host, srt_port, "caller", opts)
+    route_id = Keyword.get(opts, :route_id, Ecto.UUID.generate())
+
+    %{
+      "route_id" => route_id,
+      "config_revision" => "boot-" <> Ecto.UUID.generate(),
+      "process_instance_id" => Ecto.UUID.generate(),
+      "source" => %{
+        "id" => "source_demo",
+        "name" => "source_demo",
+        "kind" => "srt",
+        "srt" =>
+          %{"uri" => source_uri, "mode" => "caller"}
+          |> maybe_put_passphrase(opts)
+      },
+      "destinations" => [
+        %{
+          "id" => "udp_demo",
+          "name" => "udp_demo",
+          "kind" => "udp",
+          "udp" => %{
+            "address" => "127.0.0.1",
+            "port" => udp_port
+          }
+        }
+      ]
+    }
+  end
+
+  @doc """
   Typed NDI→NDI route config (no legacy `element_type`/`props`).
   """
   def ndi_to_ndi_config(opts \\ []) do
@@ -765,6 +802,98 @@ defmodule HydraSrt.E2E.Native.Helpers do
       })
 
     proc
+  end
+
+  @doc """
+  Starts a real `gst-launch-1.0` SRT listener fixture: a live encoded video test
+  pattern served over `srtsink` in listener mode on `port`, optionally protected by
+  a passphrase. Used to be the "far side" peer for tests that exercise a native
+  route's SRT *caller*-mode source against a real SRT connection, without depending
+  on a second copy of the pipeline under test.
+
+  Returns `%{port, os_pid, log_path}`; verified alive after a short settle window,
+  the same way `start_gst_ndi_sender!/1` is - a listener that fails to bind (e.g. the
+  port is already taken) must not be indistinguishable from "the caller just hasn't
+  connected yet".
+  """
+  def start_gst_srt_listener!(srt_port, opts \\ []) do
+    passphrase = Keyword.get(opts, :passphrase)
+    pbkeylen = Keyword.get(opts, :pbkeylen, 16)
+    tag = "gst_srt_listener_#{System.unique_integer([:positive])}"
+
+    uri_query =
+      if is_binary(passphrase) do
+        "mode=listener&passphrase=#{passphrase}&pbkeylen=#{pbkeylen}"
+      else
+        "mode=listener"
+      end
+
+    pipeline = [
+      "videotestsrc",
+      "is-live=true",
+      "!",
+      "video/x-raw,width=320,height=240,framerate=15/1",
+      "!",
+      "x264enc",
+      "tune=zerolatency",
+      "speed-preset=ultrafast",
+      "key-int-max=15",
+      "!",
+      "mpegtsmux",
+      "!",
+      "srtsink",
+      "uri=srt://0.0.0.0:#{srt_port}?#{uri_query}",
+      "wait-for-connection=false"
+    ]
+
+    case System.find_executable("gst-launch-1.0") do
+      nil ->
+        raise ExUnit.AssertionError, message: "gst-launch-1.0 required for SRT listener fixtures"
+
+      gst_launch ->
+        log_path = Path.join(System.tmp_dir!(), "hydra_srt_listener_#{tag}.log")
+
+        shell_cmd =
+          Enum.map_join([gst_launch, "-q" | pipeline], " ", &shell_escape/1) <>
+            " > " <> shell_escape(log_path) <> " 2>&1"
+
+        port =
+          Port.open(
+            {:spawn, shell_cmd},
+            [:binary, :exit_status, :stream, :hide, env: native_port_env()]
+          )
+
+        os_pid =
+          case Port.info(port, :os_pid) do
+            {:os_pid, pid} when is_integer(pid) -> pid
+            _ -> nil
+          end
+
+        :ok =
+          ProcessRegistry.register!(make_ref(), %{
+            kind: :gst_srt_listener,
+            tag: tag,
+            os_pid: os_pid,
+            port: port
+          })
+
+        fixture = %{port: port, os_pid: os_pid, tag: tag, log_path: log_path}
+
+        Process.sleep(500)
+
+        unless sender_alive?(fixture) do
+          raise ExUnit.AssertionError,
+            message: """
+            SRT listener fixture on port #{srt_port} (tag=#{tag}) exited immediately \
+            after launch (os_pid=#{inspect(os_pid)}).
+
+            --- captured listener output (#{log_path}) ---
+            #{read_sender_output(fixture)}
+            """
+        end
+
+        fixture
+    end
   end
 
   defp build_srt_uri(host, port, mode, opts) do

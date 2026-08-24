@@ -1,10 +1,11 @@
 defmodule HydraSrt.EndpointHealth do
   @moduledoc """
-  Builds the per-route endpoint-health snapshot.
+  Builds the per-route endpoint-health snapshot, across every transport
+  (SRT, UDP, RTMP, NDI) the route is configured with.
 
   Live RouteHandler state is authoritative while a handler exists. When no
   handler is present, records are derived as stopped/unknown from persisted
-  NDI endpoints — never a stale healthy projection.
+  endpoints — never a stale healthy projection.
   """
 
   alias HydraSrt.Db
@@ -27,21 +28,21 @@ defmodule HydraSrt.EndpointHealth do
 
     case Db.get_route(route_id, true) do
       {:ok, route} ->
-        ndi_endpoints = saved_ndi_endpoints(route)
+        route_endpoints = saved_route_endpoints(route)
 
         case lookup_fun.(route_id) do
           {:ok, pid} when is_pid(pid) ->
             case health_fun.(pid) do
               {:ok, identity} ->
-                {:ok, live_snapshot(ndi_endpoints, identity, now)}
+                {:ok, live_snapshot(route_endpoints, identity, now)}
 
               {:error, _reason} ->
                 # Fail closed: never invent healthy state when the handler call fails.
-                {:ok, stopped_snapshot(ndi_endpoints, now)}
+                {:ok, stopped_snapshot(route_endpoints, now)}
             end
 
           {:error, _reason} ->
-            {:ok, stopped_snapshot(ndi_endpoints, now)}
+            {:ok, stopped_snapshot(route_endpoints, now)}
         end
 
       {:error, _} ->
@@ -49,35 +50,41 @@ defmodule HydraSrt.EndpointHealth do
     end
   end
 
-  @spec saved_ndi_endpoints(map()) :: [map()]
-  def saved_ndi_endpoints(route) when is_map(route) do
+  # Every configured source/destination gets a row here, regardless of
+  # transport - this snapshot is the one truthful, transport-agnostic view of
+  # "what is this route's endpoint actually doing right now". It used to be
+  # filtered down to NDI endpoints only (from when this module predated the
+  # native side reporting SRT/UDP/RTMP endpoint_health at all), which silently
+  # dropped every SRT endpoint's live health from this API - the operator saw
+  # `endpoints: []` for an SRT route no matter what the pipeline was actually
+  # reporting.
+  @spec saved_route_endpoints(map()) :: [map()]
+  def saved_route_endpoints(route) when is_map(route) do
     sources =
       (route["sources"] || [])
-      |> Enum.filter(&ndi_endpoint?/1)
       |> Enum.map(&Map.put(&1, "_direction", "source"))
 
     destinations =
       (route["destinations"] || [])
-      |> Enum.filter(&ndi_endpoint?/1)
       |> Enum.map(&Map.put(&1, "_direction", "destination"))
 
     sources ++ destinations
   end
 
-  @spec ndi_endpoint?(term()) :: boolean()
-  def ndi_endpoint?(%{"schema" => schema}) when is_binary(schema),
-    do: String.upcase(schema) == "NDI"
+  @spec endpoint_transport(map()) :: String.t()
+  def endpoint_transport(%{"schema" => schema}) when is_binary(schema),
+    do: String.downcase(schema)
 
-  def ndi_endpoint?(_), do: false
+  def endpoint_transport(_), do: "unknown"
 
   @spec live_snapshot([map()], RouteHandler.endpoint_health_identity(), DateTime.t()) ::
           snapshot()
-  def live_snapshot(ndi_endpoints, identity, now)
-      when is_list(ndi_endpoints) and is_map(identity) and is_struct(now, DateTime) do
+  def live_snapshot(route_endpoints, identity, now)
+      when is_list(route_endpoints) and is_map(identity) and is_struct(now, DateTime) do
     health = identity[:endpoint_health] || %{}
 
     endpoints =
-      Enum.map(ndi_endpoints, fn endpoint ->
+      Enum.map(route_endpoints, fn endpoint ->
         endpoint_id = endpoint["id"]
 
         case health[endpoint_id] do
@@ -85,7 +92,7 @@ defmodule HydraSrt.EndpointHealth do
             record
             |> Map.put("endpoint_id", endpoint_id)
             |> Map.put_new("direction", endpoint["_direction"])
-            |> Map.put_new("transport", "ndi")
+            |> Map.put_new("transport", endpoint_transport(endpoint))
 
           _ ->
             derived_record(endpoint, "unknown")
@@ -102,10 +109,10 @@ defmodule HydraSrt.EndpointHealth do
   end
 
   @spec stopped_snapshot([map()], DateTime.t()) :: snapshot()
-  def stopped_snapshot(ndi_endpoints, now)
-      when is_list(ndi_endpoints) and is_struct(now, DateTime) do
+  def stopped_snapshot(route_endpoints, now)
+      when is_list(route_endpoints) and is_struct(now, DateTime) do
     endpoints =
-      Enum.map(ndi_endpoints, fn endpoint ->
+      Enum.map(route_endpoints, fn endpoint ->
         state =
           if endpoint["enabled"] == false do
             "disabled"
@@ -130,7 +137,7 @@ defmodule HydraSrt.EndpointHealth do
     %{
       "endpoint_id" => endpoint["id"],
       "direction" => endpoint["_direction"],
-      "transport" => "ndi",
+      "transport" => endpoint_transport(endpoint),
       "state" => state,
       "reason_code" => nil,
       "retryable" => nil,

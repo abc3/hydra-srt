@@ -112,6 +112,84 @@ defmodule HydraSrt.EndpointHealthTest do
     assert by_id[other_id]["state"] == "unknown"
   end
 
+  test "live snapshot surfaces SRT endpoint health, not just NDI" do
+    route = route_fixture()
+
+    {:ok, source} =
+      Api.create_source(route.id, %{
+        position: 0,
+        schema: "SRT",
+        enabled: true,
+        name: "srt-src",
+        mode: "caller",
+        host: "127.0.0.1",
+        port: 5001
+      })
+
+    identity = %{
+      process_instance_id: "piid-srt",
+      config_revision: "rev-1",
+      last_sequence: 3,
+      endpoint_health: %{
+        source.id => %{
+          "endpoint_id" => source.id,
+          "state" => "failed",
+          "reason_code" => "SRT_AUTH_FAILED",
+          "retryable" => true,
+          "retry_domain" => "none",
+          "detail" => "Failed to authenticate: Incorrect passphrase",
+          "sequence" => 3,
+          "config_revision" => "rev-1",
+          "process_instance_id" => "piid-srt"
+        }
+      }
+    }
+
+    now = ~U[2026-08-24 12:00:00Z]
+
+    assert {:ok, snapshot} =
+             EndpointHealth.snapshot(route.id,
+               lookup_fun: fn _ -> {:ok, self()} end,
+               health_fun: fn _pid -> {:ok, identity} end,
+               now: now
+             )
+
+    assert [record] = snapshot.endpoints
+    assert record["endpoint_id"] == source.id
+    assert record["state"] == "failed"
+    assert record["reason_code"] == "SRT_AUTH_FAILED"
+    assert record["transport"] == "srt"
+    assert record["direction"] == "source"
+  end
+
+  test "stopped snapshot derives a transport-correct record for a non-NDI source" do
+    route = route_fixture()
+
+    {:ok, source} =
+      Api.create_source(route.id, %{
+        position: 0,
+        schema: "SRT",
+        enabled: true,
+        name: "srt-src",
+        mode: "listener",
+        host: "127.0.0.1",
+        port: 5002
+      })
+
+    now = ~U[2026-08-24 12:05:00Z]
+
+    assert {:ok, snapshot} =
+             EndpointHealth.snapshot(route.id,
+               lookup_fun: fn _ -> {:error, :not_found} end,
+               now: now
+             )
+
+    assert [record] = snapshot.endpoints
+    assert record["endpoint_id"] == source.id
+    assert record["state"] == "stopped"
+    assert record["transport"] == "srt"
+  end
+
   test "RouteHandler.endpoint_health_identity derives revision and sequence" do
     data = %{
       id: "route-1",

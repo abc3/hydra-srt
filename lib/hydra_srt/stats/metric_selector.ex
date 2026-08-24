@@ -6,7 +6,7 @@ defmodule HydraSrt.Stats.MetricSelector do
     {"srt_negotiated_latency_ms", "negotiated-latency-ms"},
     {"srt_bandwidth_mbps", "bandwidth-mbps"},
     {"srt_rate_mbps", "receive-rate-mbps"},
-    {"srt_packet_loss", "packet-recv-loss"},
+    {"srt_packet_loss", "packets-received-lost"},
     {"srt_packet_loss_percent", "packet-loss-percent"},
     {"srt_retransmitted_packets_per_sec", "retransmitted-packets-per-sec"},
     {"srt_dropped_packets_per_sec", "dropped-packets-per-sec"},
@@ -18,11 +18,20 @@ defmodule HydraSrt.Stats.MetricSelector do
     {"srt_negotiated_latency_ms", "negotiated-latency-ms"},
     {"srt_bandwidth_mbps", "bandwidth-mbps"},
     {"srt_rate_mbps", "send-rate-mbps"},
+    {"srt_packet_loss", "packets-sent-lost"},
     {"srt_packet_loss_percent", "packet-loss-percent"},
     {"srt_retransmitted_packets_per_sec", "retransmitted-packets-per-sec"},
     {"srt_dropped_packets_per_sec", "dropped-packets-per-sec"},
     {"srt_nack_packets_per_sec", "nack-packets-per-sec"}
   ]
+
+  @doc false
+  @spec source_srt_metrics() :: [{String.t(), String.t()}]
+  def source_srt_metrics, do: @source_srt_metrics
+
+  @doc false
+  @spec destination_srt_metrics() :: [{String.t(), String.t()}]
+  def destination_srt_metrics, do: @destination_srt_metrics
 
   @spec select_rows(%{
           required(:route_id) => binary(),

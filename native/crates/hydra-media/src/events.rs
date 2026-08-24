@@ -129,6 +129,9 @@ pub struct EventSink {
     identity: RouteIdentity,
     sequence: Arc<AtomicU64>,
     route_terminal_emitted: Arc<AtomicBool>,
+    // Only meaningful once `route_terminal_emitted` is true; set in the same
+    // write as the emitted flag so the two never disagree.
+    route_terminal_retryable: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for EventSink {
@@ -146,6 +149,7 @@ impl EventSink {
             identity,
             sequence: Arc::new(AtomicU64::new(1)),
             route_terminal_emitted: Arc::new(AtomicBool::new(false)),
+            route_terminal_retryable: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -155,6 +159,7 @@ impl EventSink {
             identity,
             sequence: self.sequence,
             route_terminal_emitted: self.route_terminal_emitted,
+            route_terminal_retryable: self.route_terminal_retryable,
         }
     }
 
@@ -204,6 +209,8 @@ impl EventSink {
         {
             return Ok(());
         }
+        self.route_terminal_retryable
+            .store(retryable, Ordering::Release);
         let event = RouteTerminalEvent {
             event: "route_terminal",
             route_id: &self.identity.route_id,
@@ -224,8 +231,42 @@ impl EventSink {
         Ok(())
     }
 
+    /// Emits a `pipeline_log` event for a diagnostic line originating directly from a
+    /// GStreamer bus message (bus `Error`/`Warning`), as opposed to the periodic
+    /// GST_DEBUG text stream. `element` is the name of the GStreamer object the message
+    /// came from; it is omitted from the wire event entirely when the bus message carried
+    /// no source object, rather than being filled in with a placeholder.
+    pub fn emit_pipeline_log(
+        &self,
+        level: &str,
+        category: &str,
+        element: Option<&str>,
+        message: &str,
+    ) -> Result<()> {
+        let event = PipelineLogEvent {
+            event: "pipeline_log",
+            route_id: &self.identity.route_id,
+            config_revision: &self.identity.config_revision,
+            process_instance_id: &self.identity.process_instance_id,
+            sequence: self.next_sequence(),
+            level,
+            category,
+            element,
+            message,
+            observed_at_ms: observed_at_ms(),
+        };
+
+        self.write_event(&event)
+    }
+
     pub fn route_terminal_emitted(&self) -> bool {
         self.route_terminal_emitted.load(Ordering::Acquire)
+    }
+
+    /// Whether the (at most one) emitted `route_terminal` was retryable. Meaningless
+    /// unless `route_terminal_emitted()` is true; callers must check that first.
+    pub fn route_terminal_retryable(&self) -> bool {
+        self.route_terminal_retryable.load(Ordering::Acquire)
     }
 
     fn next_sequence(&self) -> u64 {
@@ -257,6 +298,21 @@ struct EndpointHealthEvent<'a> {
     retry_domain: Option<RetryDomain>,
     observed_at_ms: u64,
     detail: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PipelineLogEvent<'a> {
+    event: &'static str,
+    route_id: &'a str,
+    config_revision: &'a str,
+    process_instance_id: &'a str,
+    sequence: u64,
+    level: &'a str,
+    category: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    element: Option<&'a str>,
+    message: &'a str,
+    observed_at_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -495,5 +551,84 @@ mod tests {
         assert!(payload["retry_domain"].is_null());
         assert!(payload["detail"].is_null());
         assert!(payload["observed_at_ms"].is_number());
+    }
+
+    #[test]
+    fn pipeline_log_payload_carries_level_category_element_and_message() {
+        let (sink, messages) = build_sink(sample_identity());
+
+        sink.emit_pipeline_log(
+            "ERROR",
+            "gst_bus",
+            Some("srtsrc0"),
+            "Failed to authenticate: Incorrect passphrase (10)",
+        )
+        .expect("pipeline log");
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&messages.lock().expect("messages lock")[0])
+                .expect("pipeline log json");
+
+        assert_eq!(payload["event"], "pipeline_log");
+        assert_eq!(payload["route_id"], "route-1");
+        assert_eq!(payload["config_revision"], "rev-1");
+        assert_eq!(payload["process_instance_id"], "proc-1");
+        assert_eq!(payload["level"], "ERROR");
+        assert_eq!(payload["category"], "gst_bus");
+        assert_eq!(payload["element"], "srtsrc0");
+        assert_eq!(
+            payload["message"],
+            "Failed to authenticate: Incorrect passphrase (10)"
+        );
+        assert!(payload["observed_at_ms"].is_number());
+    }
+
+    #[test]
+    fn pipeline_log_omits_element_field_entirely_when_genuinely_absent() {
+        let (sink, messages) = build_sink(sample_identity());
+
+        sink.emit_pipeline_log(
+            "WARN",
+            "gst_bus",
+            None,
+            "streaming stopped, reason error (-5)",
+        )
+        .expect("pipeline log");
+
+        let raw = messages.lock().expect("messages lock")[0].clone();
+        let payload: serde_json::Value = serde_json::from_str(&raw).expect("pipeline log json");
+
+        // Hard rule: no placeholder/"unknown" filler for a missing element - the key
+        // must not appear at all, not appear with a null/empty value.
+        assert!(
+            !payload.as_object().expect("object").contains_key("element"),
+            "element key must be omitted, not null, when absent: {raw}"
+        );
+        assert_eq!(payload["level"], "WARN");
+    }
+
+    #[test]
+    fn pipeline_log_sequence_advances_independently_of_other_event_types() {
+        let (sink, messages) = build_sink(sample_identity());
+
+        sink.emit_endpoint_health(
+            "endpoint-1",
+            EndpointDirection::Source,
+            Transport::Srt,
+            EndpointState::Failed,
+            Some(ErrorCode::RuntimeError),
+            Some(true),
+            Some(RetryDomain::Route),
+            None,
+        )
+        .expect("endpoint health");
+        sink.emit_pipeline_log("ERROR", "gst_bus", Some("srtsrc0"), "boom")
+            .expect("pipeline log");
+
+        let messages = messages.lock().expect("messages lock");
+        let first: serde_json::Value = serde_json::from_str(&messages[0]).expect("first json");
+        let second: serde_json::Value = serde_json::from_str(&messages[1]).expect("second json");
+
+        assert!(second["sequence"].as_u64().unwrap() > first["sequence"].as_u64().unwrap());
     }
 }
