@@ -185,8 +185,9 @@ defmodule HydraSrt.E2E.Native.Helpers do
   @doc """
   Caller-mode SRT source route config: the native pipeline dials out to
   `srt_host:srt_port` instead of listening. Used against a real peer started
-  separately (`start_gst_srt_listener!/2`) or against a port with nothing bound
-  to it, to exercise the caller-mode connect/no-data/auth-failure paths.
+  separately (`start_gst_srt_listener!/2`) or against a silent peer
+  (`start_silent_udp_peer!/1`) that absorbs packets without speaking SRT, to
+  exercise the caller-mode connect/no-data/auth-failure paths.
   """
   def srt_caller_source_config(srt_port, udp_port, opts \\ []) do
     srt_host = Keyword.get(opts, :srt_host, "127.0.0.1")
@@ -802,6 +803,41 @@ defmodule HydraSrt.E2E.Native.Helpers do
       })
 
     proc
+  end
+
+  @doc """
+  Binds a plain UDP socket on `port` that never speaks SRT, so a caller-mode
+  `srtsrc` dialing that port has its handshake packets silently absorbed by
+  the OS instead of provoking an ICMP port-unreachable. On Linux, a UDP
+  datagram sent to a closed local port comes back as ICMP port-unreachable and
+  `srtsrc` fails fast with a bus error; on macOS the datagram is simply
+  dropped. Holding the port open with a socket that reads and discards
+  everything reproduces the "silent peer" scenario (no response, ever) on both
+  platforms, which is what the "no data since start" health monitor needs to
+  exercise deterministically.
+
+  Returns the socket; close it with `stop_silent_udp_peer!/1` before handing
+  the port to a real listener.
+  """
+  def start_silent_udp_peer!(port) do
+    # `active: false`: the datagrams only need to land somewhere that isn't
+    # "closed port" to the kernel. Nobody reads them, and with `active: true`
+    # every SRT handshake retry would otherwise land an unrelated `{:udp, ...}`
+    # message in the calling test process's mailbox.
+    {:ok, socket} =
+      :gen_udp.open(port, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+    socket
+  end
+
+  @doc """
+  Closes a socket returned by `start_silent_udp_peer!/1`. Safe to call more
+  than once (e.g. once explicitly before reusing the port, and again from
+  `on_exit`).
+  """
+  def stop_silent_udp_peer!(socket) do
+    :gen_udp.close(socket)
+    :ok
   end
 
   @doc """
