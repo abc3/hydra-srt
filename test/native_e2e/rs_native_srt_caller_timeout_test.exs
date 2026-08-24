@@ -28,6 +28,14 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtCallerTimeoutTest do
     udp_port = Helpers.free_udp_port!()
     route_id = "rs_srt_no_data_#{System.unique_integer([:positive])}"
 
+    # Hold source_port open with a peer that never speaks SRT. A caller
+    # pointed at a genuinely closed local UDP port gets an ICMP
+    # port-unreachable on Linux (but not on macOS), which makes srtsrc fail
+    # fast on the GStreamer bus instead of retrying in silence - a different,
+    # already-covered scenario, not the "no data since start" one these
+    # tests are about. See Helpers.start_silent_udp_peer!/1.
+    silent_peer = Helpers.start_silent_udp_peer!(source_port)
+
     config = Helpers.srt_caller_source_config(source_port, udp_port, route_id: route_id)
 
     {:ok, harness} =
@@ -40,9 +48,10 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtCallerTimeoutTest do
     on_exit(fn ->
       ProcessRegistry.cleanup_all!()
       if Process.alive?(harness), do: Harness.stop(harness)
+      Helpers.stop_silent_udp_peer!(silent_peer)
     end)
 
-    {:ok, harness: harness, source_port: source_port}
+    {:ok, harness: harness, source_port: source_port, silent_peer: silent_peer}
   end
 
   @tag timeout: @no_data_threshold_ms + @slack_ms + 15_000
@@ -84,7 +93,8 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtCallerTimeoutTest do
   @tag timeout: @no_data_threshold_ms + @slack_ms + 30_000
   test "recovers automatically and reports healthy once the far side comes back", %{
     harness: harness,
-    source_port: source_port
+    source_port: source_port,
+    silent_peer: silent_peer
   } do
     assert_receive {:rs_native_route_id, "rs_srt_no_data_" <> _}, 5_000
 
@@ -100,7 +110,9 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtCallerTimeoutTest do
     # the (still running, still retrying) caller has been dialing the whole time.
     # Nobody restarts the route, nobody touches the process: recovery has to be
     # automatic, driven entirely by srtsrc's own reconnect loop plus this route's
-    # first-buffer probe.
+    # first-buffer probe. Release the silent peer first so the real listener can
+    # bind the same port.
+    Helpers.stop_silent_udp_peer!(silent_peer)
     listener = Helpers.start_gst_srt_listener!(source_port)
 
     on_exit(fn -> Helpers.stop_os_process!(listener) end)
