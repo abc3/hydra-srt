@@ -10,8 +10,8 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtCallerTimeoutTest do
   # Must track native/crates/hydra-media/src/adapters/srt.rs::SRT_NO_DATA_SINCE_START_THRESHOLD_MS.
   # Deliberately not configurable (a route-level override would churn hydra-plan's
   # deny_unknown_fields plus every call site for a single test's convenience). That
-  # means this test genuinely waits out the real threshold: it is deterministic (a
-  # caller pointed at a port nothing is bound on can never connect), just slow -
+  # means this test genuinely waits out the real threshold: it is deterministic (the
+  # peer below accepts the SRT handshake and then never sends anything), just slow -
   # budget generously around it instead of trying to make it fast.
   @no_data_threshold_ms 30_000
   @slack_ms 20_000
@@ -28,13 +28,14 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtCallerTimeoutTest do
     udp_port = Helpers.free_udp_port!()
     route_id = "rs_srt_no_data_#{System.unique_integer([:positive])}"
 
-    # Hold source_port open with a peer that never speaks SRT. A caller
-    # pointed at a genuinely closed local UDP port gets an ICMP
-    # port-unreachable on Linux (but not on macOS), which makes srtsrc fail
-    # fast on the GStreamer bus instead of retrying in silence - a different,
-    # already-covered scenario, not the "no data since start" one these
-    # tests are about. See Helpers.start_silent_udp_peer!/1.
-    silent_peer = Helpers.start_silent_udp_peer!(source_port)
+    # A real SRT listener that accepts the caller's handshake and then never emits
+    # a single buffer (see Helpers.start_gst_srt_listener!/2, `no_data: true`). The
+    # connection genuinely completes - there is no bus error, no ICMP, nothing
+    # platform-specific to go wrong - so the only thing that can happen next is the
+    # "no data since start" health monitor firing once the threshold elapses. That
+    # is the actual subject under test, independent of the OS-level failure timing
+    # a dead/absorbing port would otherwise depend on.
+    peer = Helpers.start_gst_srt_listener!(source_port, no_data: true)
 
     config = Helpers.srt_caller_source_config(source_port, udp_port, route_id: route_id)
 
@@ -48,21 +49,20 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtCallerTimeoutTest do
     on_exit(fn ->
       ProcessRegistry.cleanup_all!()
       if Process.alive?(harness), do: Harness.stop(harness)
-      Helpers.stop_silent_udp_peer!(silent_peer)
+      Helpers.stop_os_process!(peer)
     end)
 
-    {:ok, harness: harness, source_port: source_port, silent_peer: silent_peer}
+    {:ok, harness: harness, source_port: source_port, peer: peer}
   end
 
   @tag timeout: @no_data_threshold_ms + @slack_ms + 15_000
-  test "caller SRT source with no listener stays alive, reports non-terminal health instead of dying",
+  test "caller SRT source connected to a peer that never sends data stays alive, reports non-terminal health instead of dying",
        %{harness: harness} do
     assert_receive {:rs_native_route_id, "rs_srt_no_data_" <> _}, 5_000
 
-    # Nothing is ever bound on source_port (see setup): the old design killed the
-    # route here with a synthetic "connect timeout" terminal error. The route must
-    # now stay up and simply not report data - confirm no route_terminal ever
-    # arrives, at any point in this test, not just before the threshold.
+    # The peer accepted the handshake in setup and has been sending nothing since:
+    # the route must stay up and simply not report data - confirm no route_terminal
+    # ever arrives, at any point in this test, not just before the threshold.
     refute_receive {:rs_native_event, %{"event" => "route_terminal"}},
                    @no_data_threshold_ms - 3_000
 
@@ -81,9 +81,9 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtCallerTimeoutTest do
     refute_receive {:rs_native_event, %{"event" => "route_terminal"}}, 3_000
     refute stats_show_flow?(Harness.latest_stats(harness))
 
-    # The pipeline is genuinely still alive and srtsrc is still retrying on its
-    # own - confirmed by the OS process still being reachable, not merely by the
-    # absence of route_terminal above.
+    # The pipeline is genuinely still alive and connected - confirmed by the OS
+    # process still being reachable, not merely by the absence of route_terminal
+    # above.
     %{os_pid: os_pid} = Harness.state(harness)
     assert is_integer(os_pid)
     {_output, exit_code} = System.cmd("kill", ["-0", Integer.to_string(os_pid)])
@@ -91,10 +91,10 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtCallerTimeoutTest do
   end
 
   @tag timeout: @no_data_threshold_ms + @slack_ms + 30_000
-  test "recovers automatically and reports healthy once the far side comes back", %{
+  test "recovers automatically and reports healthy once the connected peer starts sending", %{
     harness: harness,
     source_port: source_port,
-    silent_peer: silent_peer
+    peer: peer
   } do
     assert_receive {:rs_native_route_id, "rs_srt_no_data_" <> _}, 5_000
 
@@ -106,13 +106,14 @@ defmodule HydraSrt.E2E.Native.RsNativeSrtCallerTimeoutTest do
                     }},
                    @no_data_threshold_ms + @slack_ms
 
-    # The far side comes back - a real SRT listener now appears on the exact port
-    # the (still running, still retrying) caller has been dialing the whole time.
-    # Nobody restarts the route, nobody touches the process: recovery has to be
-    # automatic, driven entirely by srtsrc's own reconnect loop plus this route's
-    # first-buffer probe. Release the silent peer first so the real listener can
-    # bind the same port.
-    Helpers.stop_silent_udp_peer!(silent_peer)
+    # The far side comes back - a real, data-emitting SRT listener now appears on
+    # the exact port the (still running, still connected) caller has been dialing
+    # the whole time. Nobody restarts the route, nobody touches the process:
+    # recovery has to be automatic, driven entirely by srtsrc's own reconnect loop
+    # plus this route's first-buffer probe. Stop the no-data peer first so the new
+    # listener can bind the same port; losing the peer this way is exactly the
+    # "connection dropped, reconnect" path srtsrc's auto-reconnect exists for.
+    Helpers.stop_os_process!(peer)
     listener = Helpers.start_gst_srt_listener!(source_port)
 
     on_exit(fn -> Helpers.stop_os_process!(listener) end)

@@ -185,9 +185,9 @@ defmodule HydraSrt.E2E.Native.Helpers do
   @doc """
   Caller-mode SRT source route config: the native pipeline dials out to
   `srt_host:srt_port` instead of listening. Used against a real peer started
-  separately (`start_gst_srt_listener!/2`) or against a silent peer
-  (`start_silent_udp_peer!/1`) that absorbs packets without speaking SRT, to
-  exercise the caller-mode connect/no-data/auth-failure paths.
+  separately with `start_gst_srt_listener!/2` - including with `no_data: true`,
+  which accepts the SRT handshake but never emits media, to exercise the
+  caller-mode no-data/auth-failure paths deterministically.
   """
   def srt_caller_source_config(srt_port, udp_port, opts \\ []) do
     srt_host = Keyword.get(opts, :srt_host, "127.0.0.1")
@@ -806,46 +806,23 @@ defmodule HydraSrt.E2E.Native.Helpers do
   end
 
   @doc """
-  Binds a plain UDP socket on `port` that never speaks SRT, so a caller-mode
-  `srtsrc` dialing that port has its handshake packets silently absorbed by
-  the OS instead of provoking an ICMP port-unreachable. On Linux, a UDP
-  datagram sent to a closed local port comes back as ICMP port-unreachable and
-  `srtsrc` fails fast with a bus error; on macOS the datagram is simply
-  dropped. Holding the port open with a socket that reads and discards
-  everything reproduces the "silent peer" scenario (no response, ever) on both
-  platforms, which is what the "no data since start" health monitor needs to
-  exercise deterministically.
-
-  Returns the socket; close it with `stop_silent_udp_peer!/1` before handing
-  the port to a real listener.
-  """
-  def start_silent_udp_peer!(port) do
-    # `active: false`: the datagrams only need to land somewhere that isn't
-    # "closed port" to the kernel. Nobody reads them, and with `active: true`
-    # every SRT handshake retry would otherwise land an unrelated `{:udp, ...}`
-    # message in the calling test process's mailbox.
-    {:ok, socket} =
-      :gen_udp.open(port, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
-
-    socket
-  end
-
-  @doc """
-  Closes a socket returned by `start_silent_udp_peer!/1`. Safe to call more
-  than once (e.g. once explicitly before reusing the port, and again from
-  `on_exit`).
-  """
-  def stop_silent_udp_peer!(socket) do
-    :gen_udp.close(socket)
-    :ok
-  end
-
-  @doc """
   Starts a real `gst-launch-1.0` SRT listener fixture: a live encoded video test
   pattern served over `srtsink` in listener mode on `port`, optionally protected by
   a passphrase. Used to be the "far side" peer for tests that exercise a native
   route's SRT *caller*-mode source against a real SRT connection, without depending
   on a second copy of the pipeline under test.
+
+  Pass `no_data: true` to keep the listener accepting SRT connections while never
+  emitting any media: a `valve` sits right after the test source with
+  `drop-mode=forward-sticky-events`, so caps/segment/stream-start still reach
+  `srtsink` (letting it start and listen normally - the pipeline is still `is-live`,
+  so it reaches PLAYING without waiting on preroll data) while every buffer is
+  dropped before it gets there. This is the peer for tests that need a caller's SRT
+  handshake to genuinely complete with zero data ever arriving - the "connected, but
+  no media has ever arrived" case the no-data health monitor exists for - without
+  depending on OS-level socket/ICMP behaviour, which differs between Linux and macOS
+  for a port nothing is listening on at all and so cannot be used to make that case
+  deterministic.
 
   Returns `%{port, os_pid, log_path}`; verified alive after a short settle window,
   the same way `start_gst_ndi_sender!/1` is - a listener that fails to bind (e.g. the
@@ -855,6 +832,7 @@ defmodule HydraSrt.E2E.Native.Helpers do
   def start_gst_srt_listener!(srt_port, opts \\ []) do
     passphrase = Keyword.get(opts, :passphrase)
     pbkeylen = Keyword.get(opts, :pbkeylen, 16)
+    no_data? = Keyword.get(opts, :no_data, false)
     tag = "gst_srt_listener_#{System.unique_integer([:positive])}"
 
     uri_query =
@@ -864,23 +842,34 @@ defmodule HydraSrt.E2E.Native.Helpers do
         "mode=listener"
       end
 
-    pipeline = [
-      "videotestsrc",
-      "is-live=true",
-      "!",
-      "video/x-raw,width=320,height=240,framerate=15/1",
-      "!",
-      "x264enc",
-      "tune=zerolatency",
-      "speed-preset=ultrafast",
-      "key-int-max=15",
-      "!",
-      "mpegtsmux",
-      "!",
-      "srtsink",
-      "uri=srt://0.0.0.0:#{srt_port}?#{uri_query}",
-      "wait-for-connection=false"
-    ]
+    gate =
+      if no_data? do
+        ["!", "valve", "drop=true", "drop-mode=forward-sticky-events"]
+      else
+        []
+      end
+
+    pipeline =
+      [
+        "videotestsrc",
+        "is-live=true"
+      ] ++
+        gate ++
+        [
+          "!",
+          "video/x-raw,width=320,height=240,framerate=15/1",
+          "!",
+          "x264enc",
+          "tune=zerolatency",
+          "speed-preset=ultrafast",
+          "key-int-max=15",
+          "!",
+          "mpegtsmux",
+          "!",
+          "srtsink",
+          "uri=srt://0.0.0.0:#{srt_port}?#{uri_query}",
+          "wait-for-connection=false"
+        ]
 
     case System.find_executable("gst-launch-1.0") do
       nil ->
