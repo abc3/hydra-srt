@@ -14,6 +14,9 @@ pub enum ErrorCode {
     LinkFailed,
     NegotiationFailed,
     UnsupportedGraph,
+    SrtAuthFailed,
+    SrtNoDataSinceStart,
+    SrtDataStalledAfterStart,
     RuntimeError,
     Shutdown,
 }
@@ -35,6 +38,9 @@ impl ErrorCode {
             Self::LinkFailed => "LINK_FAILED",
             Self::NegotiationFailed => "NEGOTIATION_FAILED",
             Self::UnsupportedGraph => "UNSUPPORTED_GRAPH",
+            Self::SrtAuthFailed => "SRT_AUTH_FAILED",
+            Self::SrtNoDataSinceStart => "SRT_NO_DATA_SINCE_START",
+            Self::SrtDataStalledAfterStart => "SRT_DATA_STALLED_AFTER_START",
             Self::RuntimeError => "RUNTIME_ERROR",
             Self::Shutdown => "SHUTDOWN",
         }
@@ -82,6 +88,12 @@ mod tests {
             (ErrorCode::LinkFailed, "LINK_FAILED"),
             (ErrorCode::NegotiationFailed, "NEGOTIATION_FAILED"),
             (ErrorCode::UnsupportedGraph, "UNSUPPORTED_GRAPH"),
+            (ErrorCode::SrtAuthFailed, "SRT_AUTH_FAILED"),
+            (ErrorCode::SrtNoDataSinceStart, "SRT_NO_DATA_SINCE_START"),
+            (
+                ErrorCode::SrtDataStalledAfterStart,
+                "SRT_DATA_STALLED_AFTER_START",
+            ),
             (ErrorCode::RuntimeError, "RUNTIME_ERROR"),
             (ErrorCode::Shutdown, "SHUTDOWN"),
         ];

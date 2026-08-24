@@ -48,12 +48,13 @@ defmodule HydraSrt.Stats.EventLogger do
     })
   end
 
-  def log_pipeline_reconnecting(route_id, source_id) do
+  def log_pipeline_reconnecting(route_id, source_id, reason \\ nil) do
     ingest(%{
       route_id: route_id,
       event_type: "pipeline_reconnecting",
       severity: "warning",
       source_id: source_id,
+      reason: reason,
       message: "Pipeline reconnecting"
     })
   end

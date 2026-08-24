@@ -65,6 +65,60 @@ defmodule HydraSrt.RouteHandlerFailoverTest do
     Agent.stop(call_counter)
   end
 
+  test "retry budget is not reset by a spawn that immediately dies" do
+    route = route_with_sources([valid_source("s1", 4100)], "s1")
+
+    :meck.expect(Db, :get_route, fn
+      @route_id, true -> {:ok, route}
+      _id, _include_dest -> {:error, :not_found}
+    end)
+
+    :meck.expect(Db, :set_route_active_source, fn _, _, _ -> {:ok, route} end)
+    :meck.expect(Db, :update_route_runtime_status, fn _, _ -> {:ok, route} end)
+    :meck.expect(HydraSrt, :set_route_runtime_status, fn _, _ -> {:ok, %{}} end)
+    :meck.expect(HydraSrt, :mark_route_started, fn _ -> {:ok, %{}} end)
+    :meck.expect(HydraSrt, :mark_route_failed, fn _ -> {:ok, %{}} end)
+    :meck.expect(HydraSrt, :mark_route_stopped, fn _ -> {:ok, %{}} end)
+    :meck.expect(HydraSrt, :mark_route_terminated, fn _ -> {:ok, %{}} end)
+
+    {:ok, pid} = RouteHandler.start_link(%{id: @route_id})
+
+    assert_eventually(fn ->
+      {_state_name, data} = :sys.get_state(pid)
+      is_port(data.port)
+    end)
+
+    original_port = :sys.get_state(pid) |> elem(1) |> Map.fetch!(:port)
+
+    # Put the handler in the exact state a route is in mid retry-storm: a
+    # few attempts already burned, backoff already grown past the starting
+    # 1-3s window. `:retry_start` is what fires once that backoff elapses.
+    :sys.replace_state(pid, fn {state_name, data} ->
+      {state_name,
+       %{data | retry_scheduled?: false, retry_attempt: 3, retry_prev_backoff_ms: 8_000}}
+    end)
+
+    send(pid, :retry_start)
+
+    # Wait for the retry cycle to actually respawn the process (a new port
+    # replaces the old one) before asserting on the post-spawn state.
+    assert_eventually(fn ->
+      {_state_name, data} = :sys.get_state(pid)
+      is_port(data.port) and data.port != original_port
+    end)
+
+    {_state_name, data} = :sys.get_state(pid)
+
+    # The critical assertion: a bare process spawn is not "recovered". The
+    # attempt counter and backoff must survive it untouched, so a cause that
+    # kills the process again moments later keeps growing the backoff toward
+    # the 30s ceiling instead of resetting to the 1-3s starting window.
+    assert data.retry_attempt == 3
+    assert data.retry_prev_backoff_ms == 8_000
+
+    :gen_statem.stop(pid)
+  end
+
   defp route_with_sources(sources, active_source_id) do
     %{
       "id" => @route_id,

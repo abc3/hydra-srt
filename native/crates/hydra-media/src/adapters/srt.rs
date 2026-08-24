@@ -1,4 +1,6 @@
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use gio::prelude::InetSocketAddressExt;
 use gio::{InetSocketAddress, SocketAddress};
@@ -6,12 +8,636 @@ use glib::object::Cast;
 use glib::value::ToValue;
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use hydra_plan::{ErrorCode, SrtAccess, SrtDestination, SrtSource};
+use hydra_plan::{ErrorCode, SrtAccess, SrtDestination, SrtMode, SrtSource};
 use serde_json::json;
 
 use crate::adapters::element::set_property;
+use crate::events::{EndpointDirection, EndpointState, EventSink, RetryDomain, Transport};
 use crate::output::StatsWriter;
 use std::sync::{Arc, Mutex};
+
+/// How long a caller/rendezvous SRT endpoint may sit without observing any real data
+/// (first buffer received on a source; first confirmed-sent packet on a destination)
+/// before it is reported as unhealthy. This never kills the pipeline: the underlying
+/// `srtsrc`/`srtsink` element keeps retrying its own handshake on its own (~3s per
+/// attempt, libsrt's `SRTO_CONNTIMEO` caller default) for as long as the route runs.
+/// Chosen as roughly 10x that internal retry cadence, so a route is not flagged
+/// unhealthy over a single transient retry cycle.
+///
+/// Listener-mode endpoints wait for an inbound caller by design and are never measured
+/// against this deadline (see `build_source_health_monitor` /
+/// `build_destination_health_monitor`).
+pub const SRT_NO_DATA_SINCE_START_THRESHOLD_MS: u64 = 30_000;
+
+/// How often the non-terminal health signal is re-emitted while an endpoint remains
+/// stuck at zero data past the threshold above. `srtsrc`'s own reconnect attempts log a
+/// bus warning roughly every 2-3s, which would be on the order of a thousand rows an
+/// hour if mirrored 1:1; re-stating "still no data" once a minute keeps the endpoint's
+/// current status fresh for anyone watching without adding to that volume.
+pub const SRT_NO_DATA_REPEAT_CADENCE_MS: u64 = 60_000;
+
+/// Category for the one-time diagnostic line emitted when an endpoint first crosses
+/// the no-data threshold above.
+const SRT_HEALTH_LOG_CATEGORY: &str = "srt_health";
+
+/// Watches a caller/rendezvous SRT source for its first buffer. If no buffer has
+/// arrived by `SRT_NO_DATA_SINCE_START_THRESHOLD_MS`, it reports the source unhealthy
+/// (non-terminal `endpoint_health`, plus one `pipeline_log` line) and keeps repeating
+/// that report every `SRT_NO_DATA_REPEAT_CADENCE_MS` for as long as the situation
+/// persists. Once a buffer does arrive, it reports the source healthy again. It never
+/// touches pipeline or route lifecycle - `srtsrc` is left to retry on its own.
+#[derive(Clone)]
+pub struct SrtSourceHealthMonitor {
+    source: gst::Element,
+    pad: gst::Pad,
+    ever_data: Arc<AtomicBool>,
+    reported_unhealthy: Arc<AtomicBool>,
+    started: Arc<AtomicBool>,
+}
+
+impl SrtSourceHealthMonitor {
+    /// True once `arm` has started watching.
+    pub fn armed(&self) -> bool {
+        self.started.load(Ordering::Acquire)
+    }
+
+    pub fn arm(&self, pipeline: &gst::Pipeline, event_sink: EventSink, endpoint_id: String) {
+        self.arm_with_durations(
+            pipeline,
+            event_sink,
+            endpoint_id,
+            Duration::from_millis(SRT_NO_DATA_SINCE_START_THRESHOLD_MS),
+            Duration::from_millis(SRT_NO_DATA_REPEAT_CADENCE_MS),
+        );
+    }
+
+    /// Same as `arm`, but with the threshold/cadence as parameters instead of the
+    /// production constants, so tests can exercise the full schedule in milliseconds
+    /// instead of the real 30s/60s.
+    fn arm_with_durations(
+        &self,
+        pipeline: &gst::Pipeline,
+        event_sink: EventSink,
+        endpoint_id: String,
+        threshold: Duration,
+        cadence: Duration,
+    ) {
+        self.started.store(true, Ordering::Release);
+
+        let ever_data = self.ever_data.clone();
+        let reported_unhealthy = self.reported_unhealthy.clone();
+        let element_name = self.source.name().to_string();
+
+        // The probe gives an immediate signal the moment data actually starts
+        // flowing, rather than waiting for the next periodic check below.
+        let probe_ever_data = ever_data.clone();
+        let probe_reported_unhealthy = reported_unhealthy.clone();
+        let probe_event_sink = event_sink.clone();
+        let probe_endpoint_id = endpoint_id.clone();
+        self.pad.add_probe(
+            gst::PadProbeType::BUFFER | gst::PadProbeType::BUFFER_LIST,
+            move |_pad, _info| {
+                probe_ever_data.store(true, Ordering::Release);
+                if probe_reported_unhealthy.swap(false, Ordering::AcqRel) {
+                    emit_recovered(
+                        &probe_event_sink,
+                        &probe_endpoint_id,
+                        EndpointDirection::Source,
+                        "SRT source began receiving data",
+                    );
+                }
+                gst::PadProbeReturn::Remove
+            },
+        );
+
+        let pipeline = pipeline.clone();
+        let threshold_secs = threshold.as_secs();
+        glib::timeout_add_once(threshold, move || {
+            if pipeline.current_state() == gst::State::Null || ever_data.load(Ordering::Acquire) {
+                return;
+            }
+            let detail = format!(
+                "no data received from element \"{element_name}\" within {threshold_secs}s of \
+                 starting; the SRT source keeps retrying the connection on its own"
+            );
+            emit_no_data_report(
+                &event_sink,
+                &endpoint_id,
+                EndpointDirection::Source,
+                ErrorCode::SrtNoDataSinceStart,
+                &detail,
+            );
+            emit_no_data_log(&event_sink, Some(&element_name), &detail);
+            reported_unhealthy.store(true, Ordering::Release);
+
+            // Close the race against the pad probe above: if a buffer arrived between
+            // the `ever_data.load` check at the top of this callback and the
+            // `reported_unhealthy.store` just above, the probe ran while
+            // `reported_unhealthy` was still false - it had nothing to recover from
+            // yet, so it emitted nothing. Recheck now and, if data has in fact
+            // arrived in that window, report the recovery immediately instead of
+            // leaving the "no data" report just emitted above standing until the next
+            // `cadence` tick (up to `SRT_NO_DATA_REPEAT_CADENCE_MS` later).
+            if recover_immediately_if_data_arrived(
+                &ever_data,
+                &reported_unhealthy,
+                &event_sink,
+                &endpoint_id,
+            ) {
+                return;
+            }
+
+            schedule_repeat(
+                pipeline,
+                ever_data,
+                reported_unhealthy,
+                event_sink,
+                endpoint_id,
+                EndpointDirection::Source,
+                cadence,
+            );
+        });
+    }
+}
+
+/// Builds the no-data health monitor for an SRT source, or `None` for listener mode
+/// (which waits for an inbound caller by design - an idle listener is healthy, not
+/// stuck). Caller and rendezvous modes both actively dial a peer and get the deadline.
+///
+/// Errors (instead of silently skipping) only if the SRT source element genuinely has
+/// no static "src" pad, which would mean the element itself is broken.
+pub fn build_source_health_monitor(
+    source: &gst::Element,
+    mode: SrtMode,
+) -> Result<Option<SrtSourceHealthMonitor>, (ErrorCode, String)> {
+    if matches!(mode, SrtMode::Listener) {
+        return Ok(None);
+    }
+    let pad = source.static_pad("src").ok_or_else(|| {
+        (
+            ErrorCode::LinkFailed,
+            "SRT source has no static source pad".to_owned(),
+        )
+    })?;
+    Ok(Some(SrtSourceHealthMonitor {
+        source: source.clone(),
+        pad,
+        ever_data: Arc::new(AtomicBool::new(false)),
+        reported_unhealthy: Arc::new(AtomicBool::new(false)),
+        started: Arc::new(AtomicBool::new(false)),
+    }))
+}
+
+/// Watches a caller/rendezvous SRT destination for confirmed-sent data (the SRT
+/// library's own `packets-sent` counter on the sink's `stats` property, not merely
+/// buffers reaching the sink's pad - a caller-mode `srtsink` with
+/// `wait-for-connection=true` can have buffers arrive at its pad while the actual send
+/// blocks waiting on a peer that never shows up, so pad arrival alone would falsely
+/// read as healthy). Reports two distinct, honestly named situations under the same
+/// non-terminal report/repeat/recover shape as the source monitor: never having
+/// confirmed anything sent since starting, and having confirmed sends earlier but
+/// then seeing the confirmed-sent count stop advancing (the peer went away after a
+/// working connection). Monitoring never stops once a destination starts sending -
+/// otherwise a destination that later goes dark would be invisible for the rest of
+/// the route's life. Never touches pipeline or route lifecycle.
+#[derive(Clone)]
+pub struct SrtDestinationHealthMonitor {
+    sink: gst::Element,
+    reported_unhealthy: Arc<AtomicBool>,
+    started: Arc<AtomicBool>,
+    last_confirmed_count: Arc<Mutex<Option<i64>>>,
+}
+
+impl SrtDestinationHealthMonitor {
+    pub fn armed(&self) -> bool {
+        self.started.load(Ordering::Acquire)
+    }
+
+    pub fn arm(&self, pipeline: &gst::Pipeline, event_sink: EventSink, endpoint_id: String) {
+        self.arm_with_durations(
+            pipeline,
+            event_sink,
+            endpoint_id,
+            Duration::from_millis(SRT_NO_DATA_SINCE_START_THRESHOLD_MS),
+            Duration::from_millis(SRT_NO_DATA_REPEAT_CADENCE_MS),
+        );
+    }
+
+    /// Same as `arm`, but with the threshold/cadence as parameters instead of the
+    /// production constants, so tests can exercise the full schedule in milliseconds
+    /// instead of the real 30s/60s.
+    fn arm_with_durations(
+        &self,
+        pipeline: &gst::Pipeline,
+        event_sink: EventSink,
+        endpoint_id: String,
+        threshold: Duration,
+        cadence: Duration,
+    ) {
+        self.started.store(true, Ordering::Release);
+
+        let sink = self.sink.clone();
+        let reported_unhealthy = self.reported_unhealthy.clone();
+        let last_confirmed_count = self.last_confirmed_count.clone();
+        let element_name = self.sink.name().to_string();
+        let pipeline = pipeline.clone();
+        let threshold_secs = threshold.as_secs();
+
+        glib::timeout_add_once(threshold, move || {
+            if pipeline.current_state() == gst::State::Null {
+                return;
+            }
+            process_destination_tick(
+                &sink,
+                &last_confirmed_count,
+                &reported_unhealthy,
+                &event_sink,
+                &endpoint_id,
+                &element_name,
+                threshold_secs,
+            );
+            schedule_destination_repeat(
+                pipeline,
+                sink,
+                last_confirmed_count,
+                reported_unhealthy,
+                event_sink,
+                endpoint_id,
+                element_name,
+                threshold_secs,
+                cadence,
+            );
+        });
+    }
+}
+
+/// Builds the no-data health monitor for an SRT destination, or `None` for listener
+/// mode (an idle listener waiting for an inbound caller is healthy by design).
+pub fn build_destination_health_monitor(
+    sink: &gst::Element,
+    mode: SrtMode,
+) -> Option<SrtDestinationHealthMonitor> {
+    if matches!(mode, SrtMode::Listener) {
+        return None;
+    }
+    Some(SrtDestinationHealthMonitor {
+        sink: sink.clone(),
+        reported_unhealthy: Arc::new(AtomicBool::new(false)),
+        started: Arc::new(AtomicBool::new(false)),
+        last_confirmed_count: Arc::new(Mutex::new(None)),
+    })
+}
+
+/// What reading the destination's `packets-sent` stats field found. `packets-sent` is
+/// a monotonically non-decreasing counter for the life of the element, published by
+/// srtsink as `gint64` - verified live against a real caller/listener srtsink/srtsrc
+/// pair on GStreamer 1.26.7 (`packets-sent GType: gint64`), not the `guint64` a
+/// same-shaped `bytes-sent`/`bytes-sent-total` are published as on the very same
+/// structure. Reading it with the wrong Rust type does not fail loudly by itself -
+/// `StructureRef::get` performs an exact GType check with no i64/u64 coercion, so a
+/// `u64` read against this field returns `Err` on every call, indistinguishable at
+/// that point from the field being absent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PacketsSentReading {
+    /// `stats` is missing, or has no `packets-sent` field yet - nothing has been
+    /// reported by the library at all. Identical in meaning to a genuine zero:
+    /// nothing verified as delivered yet.
+    Absent,
+    /// `packets-sent` is present and was read with the type it actually publishes.
+    Present(i64),
+    /// `packets-sent` is present but not readable as `i64`. This is not "no data" -
+    /// the stats shape this code assumes no longer matches the element actually
+    /// running (a GStreamer/srt-plugin version change, or a bug here), and must be
+    /// surfaced loudly rather than silently treated as zero.
+    WrongType(String),
+}
+
+fn read_packets_sent(stats: Option<&gst::StructureRef>) -> PacketsSentReading {
+    let Some(stats) = stats else {
+        return PacketsSentReading::Absent;
+    };
+    if !stats.has_field("packets-sent") {
+        return PacketsSentReading::Absent;
+    }
+    match stats.get::<i64>("packets-sent") {
+        Ok(count) => PacketsSentReading::Present(count),
+        Err(error) => PacketsSentReading::WrongType(format!(
+            "\"packets-sent\" is present but not readable as i64, the type srtsink \
+             actually publishes it as: {error}"
+        )),
+    }
+}
+
+/// What one destination-monitoring tick learned, and the confirmed-sent count to
+/// remember as the baseline for the next tick. Split out from the timer/event
+/// plumbing in `process_destination_tick` so the never-sent/advancing/stalled
+/// classification can be exercised directly without a live `srtsink` or a glib main
+/// loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestinationProgress {
+    /// Nothing has ever been confirmed sent.
+    NeverSent,
+    /// The confirmed-sent count moved forward since the previous tick, or this is the
+    /// first count ever observed - the destination is healthy.
+    Advancing,
+    /// A confirmed-sent count was seen on an earlier tick and has not moved since -
+    /// the destination was sending and has gone quiet.
+    Stalled,
+}
+
+fn evaluate_progress(
+    previous: Option<i64>,
+    reading: &PacketsSentReading,
+) -> (DestinationProgress, Option<i64>) {
+    match *reading {
+        // An unreadable counter does not erase a confirmed baseline. `WrongType` is
+        // also emitted as an ERROR by the caller, so retaining the baseline here
+        // preserves the last truthful health state without hiding the stats bug.
+        PacketsSentReading::Absent | PacketsSentReading::WrongType(_) => match previous {
+            Some(previous_count) => (DestinationProgress::Stalled, Some(previous_count)),
+            None => (DestinationProgress::NeverSent, None),
+        },
+        PacketsSentReading::Present(count) if count <= 0 => {
+            (DestinationProgress::NeverSent, previous)
+        }
+        PacketsSentReading::Present(count) => match previous {
+            Some(previous_count) if count <= previous_count => {
+                (DestinationProgress::Stalled, Some(count))
+            }
+            _ => (DestinationProgress::Advancing, Some(count)),
+        },
+    }
+}
+
+/// One tick of destination monitoring: read the real stats property, classify it,
+/// update the running baseline, and emit whatever `endpoint_health`/`pipeline_log`
+/// events that classification calls for. Called both by the initial threshold check
+/// and by every subsequent cadence tick in `schedule_destination_repeat`, so the
+/// destination keeps being watched for the life of the route instead of only until
+/// the first confirmed send.
+#[allow(clippy::too_many_arguments)]
+fn process_destination_tick(
+    sink: &gst::Element,
+    last_confirmed_count: &Mutex<Option<i64>>,
+    reported_unhealthy: &AtomicBool,
+    event_sink: &EventSink,
+    endpoint_id: &str,
+    element_name: &str,
+    threshold_secs: u64,
+) {
+    let stats = if sink.has_property("stats", None) {
+        sink.property::<Option<gst::Structure>>("stats")
+    } else {
+        None
+    };
+    let reading = read_packets_sent(stats.as_deref());
+    apply_destination_reading(
+        reading,
+        last_confirmed_count,
+        reported_unhealthy,
+        event_sink,
+        endpoint_id,
+        element_name,
+        threshold_secs,
+    );
+}
+
+/// The pure decide-and-emit half of `process_destination_tick`, split out so the
+/// never-sent/advancing/stalled/recovered state machine can be driven directly with a
+/// chosen sequence of `PacketsSentReading` values in tests, without needing a real
+/// `srtsink` whose `stats` property can be made to say anything in particular on
+/// demand.
+#[allow(clippy::too_many_arguments)]
+fn apply_destination_reading(
+    reading: PacketsSentReading,
+    last_confirmed_count: &Mutex<Option<i64>>,
+    reported_unhealthy: &AtomicBool,
+    event_sink: &EventSink,
+    endpoint_id: &str,
+    element_name: &str,
+    threshold_secs: u64,
+) {
+    if let PacketsSentReading::WrongType(detail) = &reading {
+        emit_stats_type_error_log(event_sink, element_name, detail);
+    }
+
+    let mut baseline = last_confirmed_count
+        .lock()
+        .expect("destination progress lock poisoned");
+    let (progress, updated) = evaluate_progress(*baseline, &reading);
+    *baseline = updated;
+    drop(baseline);
+
+    match progress {
+        DestinationProgress::Advancing => {
+            if reported_unhealthy.swap(false, Ordering::AcqRel) {
+                emit_recovered(
+                    event_sink,
+                    endpoint_id,
+                    EndpointDirection::Destination,
+                    "data resumed",
+                );
+            }
+        }
+        DestinationProgress::NeverSent => {
+            let was_unhealthy = reported_unhealthy.swap(true, Ordering::AcqRel);
+            let detail = if was_unhealthy {
+                "still no data confirmed sent since starting; retrying automatically".to_owned()
+            } else {
+                format!(
+                    "no data confirmed sent from element \"{element_name}\" within \
+                     {threshold_secs}s of starting; the SRT destination keeps retrying \
+                     the connection on its own"
+                )
+            };
+            if !was_unhealthy {
+                emit_no_data_log(event_sink, Some(element_name), &detail);
+            }
+            emit_no_data_report(
+                event_sink,
+                endpoint_id,
+                EndpointDirection::Destination,
+                ErrorCode::SrtNoDataSinceStart,
+                &detail,
+            );
+        }
+        DestinationProgress::Stalled => {
+            let was_unhealthy = reported_unhealthy.swap(true, Ordering::AcqRel);
+            let detail = if was_unhealthy {
+                "still no confirmed-sent progress since it stalled; retrying automatically"
+                    .to_owned()
+            } else {
+                format!(
+                    "element \"{element_name}\" confirmed sending data earlier but the \
+                     sent-packet count has not advanced since the last check; the \
+                     destination appears to have gone dark after a working connection"
+                )
+            };
+            if !was_unhealthy {
+                emit_no_data_log(event_sink, Some(element_name), &detail);
+            }
+            emit_no_data_report(
+                event_sink,
+                endpoint_id,
+                EndpointDirection::Destination,
+                ErrorCode::SrtDataStalledAfterStart,
+                &detail,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn schedule_repeat(
+    pipeline: gst::Pipeline,
+    ever_data: Arc<AtomicBool>,
+    reported_unhealthy: Arc<AtomicBool>,
+    event_sink: EventSink,
+    endpoint_id: String,
+    direction: EndpointDirection,
+    cadence: Duration,
+) {
+    glib::timeout_add(cadence, move || {
+        if pipeline.current_state() == gst::State::Null {
+            return glib::ControlFlow::Break;
+        }
+        if ever_data.load(Ordering::Acquire) {
+            if reported_unhealthy.swap(false, Ordering::AcqRel) {
+                emit_recovered(&event_sink, &endpoint_id, direction, "data resumed");
+            }
+            return glib::ControlFlow::Break;
+        }
+        let detail = "still no data since starting; retrying automatically";
+        emit_no_data_report(
+            &event_sink,
+            &endpoint_id,
+            direction,
+            ErrorCode::SrtNoDataSinceStart,
+            detail,
+        );
+        glib::ControlFlow::Continue
+    });
+}
+
+/// Runs `process_destination_tick` on every `cadence` tick for as long as the
+/// pipeline is alive - deliberately never breaks out on its own (unlike the source's
+/// `schedule_repeat`), because a destination that starts sending must keep being
+/// watched for a later stall, not just for its first confirmed packet.
+#[allow(clippy::too_many_arguments)]
+fn schedule_destination_repeat(
+    pipeline: gst::Pipeline,
+    sink: gst::Element,
+    last_confirmed_count: Arc<Mutex<Option<i64>>>,
+    reported_unhealthy: Arc<AtomicBool>,
+    event_sink: EventSink,
+    endpoint_id: String,
+    element_name: String,
+    threshold_secs: u64,
+    cadence: Duration,
+) {
+    glib::timeout_add(cadence, move || {
+        if pipeline.current_state() == gst::State::Null {
+            return glib::ControlFlow::Break;
+        }
+        process_destination_tick(
+            &sink,
+            &last_confirmed_count,
+            &reported_unhealthy,
+            &event_sink,
+            &endpoint_id,
+            &element_name,
+            threshold_secs,
+        );
+        glib::ControlFlow::Continue
+    });
+}
+
+fn retry_domain_for(direction: EndpointDirection) -> RetryDomain {
+    match direction {
+        EndpointDirection::Source => RetryDomain::Route,
+        EndpointDirection::Destination => RetryDomain::Destination,
+    }
+}
+
+fn emit_no_data_report(
+    event_sink: &EventSink,
+    endpoint_id: &str,
+    direction: EndpointDirection,
+    reason_code: ErrorCode,
+    detail: &str,
+) {
+    let _ = event_sink.emit_endpoint_health(
+        endpoint_id,
+        direction,
+        Transport::Srt,
+        EndpointState::Failed,
+        Some(reason_code),
+        Some(true),
+        Some(retry_domain_for(direction)),
+        Some(detail),
+    );
+}
+
+fn emit_recovered(
+    event_sink: &EventSink,
+    endpoint_id: &str,
+    direction: EndpointDirection,
+    detail: &str,
+) {
+    let _ = event_sink.emit_endpoint_health(
+        endpoint_id,
+        direction,
+        Transport::Srt,
+        EndpointState::Streaming,
+        None,
+        None,
+        None,
+        Some(detail),
+    );
+}
+
+/// Rechecks `ever_data` against `reported_unhealthy` and, if data has arrived since
+/// the last time this pair was consulted, reports the recovery immediately and
+/// returns `true`. Used right after the source threshold callback stores
+/// `reported_unhealthy = true`, to close the race where the pad probe ran (and found
+/// nothing to recover from) *before* that store - without this recheck, the stale
+/// "failed" report would otherwise stand until the next slow `cadence` tick, up to
+/// `SRT_NO_DATA_REPEAT_CADENCE_MS` later, instead of being caught right away.
+fn recover_immediately_if_data_arrived(
+    ever_data: &AtomicBool,
+    reported_unhealthy: &AtomicBool,
+    event_sink: &EventSink,
+    endpoint_id: &str,
+) -> bool {
+    if ever_data.load(Ordering::Acquire) && reported_unhealthy.swap(false, Ordering::AcqRel) {
+        emit_recovered(
+            event_sink,
+            endpoint_id,
+            EndpointDirection::Source,
+            "SRT source began receiving data",
+        );
+        true
+    } else {
+        false
+    }
+}
+
+fn emit_no_data_log(event_sink: &EventSink, element: Option<&str>, detail: &str) {
+    let _ = event_sink.emit_pipeline_log("WARN", SRT_HEALTH_LOG_CATEGORY, element, detail);
+}
+
+/// Always-loud diagnostic line for when a `stats` field is present but not the type
+/// the element actually publishes it as. This is a stats-shape mismatch, not a
+/// data-flow problem, so it is logged at ERROR (never WARN) and is never treated as
+/// equivalent to "no data" for health-reporting purposes.
+fn emit_stats_type_error_log(event_sink: &EventSink, element: &str, detail: &str) {
+    let _ = event_sink.emit_pipeline_log(
+        "ERROR",
+        SRT_HEALTH_LOG_CATEGORY,
+        Some(element),
+        &format!("unreadable SRT stats field on \"{element}\": {detail}"),
+    );
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SrtAccessDecision {
@@ -399,6 +1025,662 @@ mod tests {
             detail.contains("srtsrc") && detail.contains("address"),
             "detail must name the element and property, got: {detail}"
         );
+    }
+
+    struct MemoryWriter(Arc<Mutex<Vec<String>>>);
+
+    impl StatsWriter for MemoryWriter {
+        fn send_message(&mut self, message: &str) -> anyhow::Result<()> {
+            self.0
+                .lock()
+                .expect("messages lock")
+                .push(message.to_string());
+            Ok(())
+        }
+    }
+
+    fn test_event_sink() -> (EventSink, Arc<Mutex<Vec<String>>>) {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(MemoryWriter(messages.clone()))));
+        let identity = crate::events::RouteIdentity {
+            route_id: "route-1".to_string(),
+            config_revision: "rev-1".to_string(),
+            process_instance_id: "proc-1".to_string(),
+        };
+        (EventSink::new(writer, identity), messages)
+    }
+
+    fn events_named(messages: &Mutex<Vec<String>>, event: &str) -> Vec<serde_json::Value> {
+        messages
+            .lock()
+            .expect("messages lock")
+            .iter()
+            .map(|raw| serde_json::from_str::<serde_json::Value>(raw).expect("valid json"))
+            .filter(|value| value["event"] == event)
+            .collect()
+    }
+
+    #[test]
+    fn source_health_monitor_is_built_for_caller_and_rendezvous_but_not_listener() {
+        let _ = gst::init();
+        for mode in [SrtMode::Caller, SrtMode::Rendezvous] {
+            let element = gst::ElementFactory::make("srtsrc")
+                .build()
+                .expect("srtsrc element should be available for tests");
+            let monitor = build_source_health_monitor(&element, mode)
+                .unwrap_or_else(|error| panic!("{mode:?} must build a monitor: {error:?}"));
+            let monitor = monitor.unwrap_or_else(|| panic!("{mode:?} must be armed-eligible"));
+            assert!(
+                !monitor.armed(),
+                "monitor must not be armed until arm() is called"
+            );
+        }
+
+        let element = gst::ElementFactory::make("srtsrc")
+            .build()
+            .expect("srtsrc element should be available for tests");
+        let monitor = build_source_health_monitor(&element, SrtMode::Listener)
+            .expect("listener mode never errors building a monitor");
+        assert!(
+            monitor.is_none(),
+            "listener mode waits for an inbound caller by design and must never be armed"
+        );
+    }
+
+    #[test]
+    fn source_health_monitor_arm_flips_armed_and_is_idempotently_checkable() {
+        let _ = gst::init();
+        let element = gst::ElementFactory::make("srtsrc")
+            .build()
+            .expect("srtsrc element should be available for tests");
+        let monitor = build_source_health_monitor(&element, SrtMode::Caller)
+            .expect("caller mode builds a monitor")
+            .expect("caller mode is armed-eligible");
+        assert!(!monitor.armed());
+        let pipeline = gst::Pipeline::new();
+        let (event_sink, _messages) = test_event_sink();
+        monitor.arm(&pipeline, event_sink, "endpoint-1".to_string());
+        assert!(monitor.armed());
+    }
+
+    #[test]
+    fn destination_health_monitor_is_built_for_caller_and_rendezvous_but_not_listener() {
+        let _ = gst::init();
+        for mode in [SrtMode::Caller, SrtMode::Rendezvous] {
+            let element = gst::ElementFactory::make("srtsink")
+                .build()
+                .expect("srtsink element should be available for tests");
+            let monitor = build_destination_health_monitor(&element, mode)
+                .unwrap_or_else(|| panic!("{mode:?} must be armed-eligible"));
+            assert!(!monitor.armed());
+        }
+
+        let element = gst::ElementFactory::make("srtsink")
+            .build()
+            .expect("srtsink element should be available for tests");
+        assert!(
+            build_destination_health_monitor(&element, SrtMode::Listener).is_none(),
+            "listener mode waits for an inbound caller by design and must never be armed"
+        );
+    }
+
+    #[test]
+    fn packets_sent_reading_is_absent_for_a_fresh_unstarted_sink() {
+        let _ = gst::init();
+        let element = gst::ElementFactory::make("srtsink")
+            .build()
+            .expect("srtsink element should be available for tests");
+        assert!(element.has_property("stats", None));
+        // Freshly created, never linked/started: no stats have been produced yet.
+        let stats = element.property::<Option<gst::Structure>>("stats");
+        assert_eq!(
+            read_packets_sent(stats.as_deref()),
+            PacketsSentReading::Absent
+        );
+    }
+
+    #[test]
+    fn no_data_report_and_recovery_use_the_expected_endpoint_health_shape() {
+        let (event_sink, messages) = test_event_sink();
+        emit_no_data_report(
+            &event_sink,
+            "endpoint-1",
+            EndpointDirection::Source,
+            ErrorCode::SrtNoDataSinceStart,
+            "no data received",
+        );
+        emit_recovered(
+            &event_sink,
+            "endpoint-1",
+            EndpointDirection::Source,
+            "data resumed",
+        );
+
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["state"], "failed");
+        assert_eq!(events[0]["reason_code"], "SRT_NO_DATA_SINCE_START");
+        assert_eq!(events[0]["retryable"], true);
+        assert_eq!(events[0]["retry_domain"], "route");
+        assert_eq!(events[1]["state"], "streaming");
+        assert!(events[1]["reason_code"].is_null());
+    }
+
+    #[test]
+    fn no_data_report_for_a_destination_uses_the_destination_retry_domain() {
+        let (event_sink, messages) = test_event_sink();
+        emit_no_data_report(
+            &event_sink,
+            "dest-1",
+            EndpointDirection::Destination,
+            ErrorCode::SrtNoDataSinceStart,
+            "no data confirmed sent",
+        );
+
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events[0]["direction"], "destination");
+        assert_eq!(events[0]["retry_domain"], "destination");
+    }
+
+    #[test]
+    fn stalled_report_for_a_destination_uses_the_stalled_reason_code() {
+        let (event_sink, messages) = test_event_sink();
+        emit_no_data_report(
+            &event_sink,
+            "dest-1",
+            EndpointDirection::Destination,
+            ErrorCode::SrtDataStalledAfterStart,
+            "confirmed-sent count stopped advancing",
+        );
+
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events[0]["reason_code"], "SRT_DATA_STALLED_AFTER_START");
+        assert_eq!(events[0]["retry_domain"], "destination");
+    }
+
+    #[test]
+    fn read_packets_sent_handles_absent_stats_and_absent_field() {
+        assert_eq!(read_packets_sent(None), PacketsSentReading::Absent);
+
+        let missing_field = gst::Structure::builder("stats")
+            .field("rtt-ms", 12.0)
+            .build();
+        assert_eq!(
+            read_packets_sent(Some(missing_field.as_ref())),
+            PacketsSentReading::Absent
+        );
+    }
+
+    #[test]
+    fn read_packets_sent_reads_the_real_type_srtsink_publishes_it_as() {
+        // `packets-sent` is `gint64` (signed 64-bit), verified live against a real
+        // caller/listener srtsrc/srtsink pair on GStreamer 1.26.7 - see
+        // `packets_sent_is_read_from_a_real_connected_srtsink_stats_structure` below
+        // for the version of this check that reads an actual captured structure
+        // instead of one built here. This case documents the type in isolation.
+        let zero = gst::Structure::builder("stats")
+            .field("packets-sent", 0i64)
+            .build();
+        assert_eq!(
+            read_packets_sent(Some(zero.as_ref())),
+            PacketsSentReading::Present(0)
+        );
+
+        let sent = gst::Structure::builder("stats")
+            .field("packets-sent", 42i64)
+            .build();
+        assert_eq!(
+            read_packets_sent(Some(sent.as_ref())),
+            PacketsSentReading::Present(42)
+        );
+    }
+
+    #[test]
+    fn read_packets_sent_is_loud_not_silently_false_when_the_field_is_the_wrong_type() {
+        // Reproduces exactly the bug this monitor originally shipped with: the field
+        // built as `u64` instead of the `i64` srtsink actually publishes. Before the
+        // fix this silently read as "nothing sent" via `.ok()`, which is what made
+        // every healthy caller-mode SRT destination report permanently failed. Now it
+        // must come back as a distinct, loud `WrongType` outcome instead of being
+        // indistinguishable from `Absent`.
+        let wrong_type = gst::Structure::builder("stats")
+            .field("packets-sent", 42u64)
+            .build();
+        match read_packets_sent(Some(wrong_type.as_ref())) {
+            PacketsSentReading::WrongType(detail) => {
+                assert!(detail.contains("packets-sent"), "detail: {detail}");
+            }
+            other => panic!("expected WrongType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn disappeared_srtsink_stats_retain_a_prior_confirmed_send_as_stalled() {
+        // This is the exact post-disappearance structure captured from a real
+        // GStreamer 1.26.7 caller-mode srtsink on loopback: after its srtsrc peer was
+        // stopped, the stats structure contained only this guint64 field and no
+        // packets-sent field. The prior connected snapshot had packets-sent=476.
+        let peer_disappeared_stats = gst::Structure::builder("application/x-srt-statistics")
+            .field("bytes-sent-total", 2_457_600u64)
+            .build();
+        let reading = read_packets_sent(Some(peer_disappeared_stats.as_ref()));
+        assert_eq!(reading, PacketsSentReading::Absent);
+        assert_eq!(
+            evaluate_progress(Some(476), &reading),
+            (DestinationProgress::Stalled, Some(476))
+        );
+
+        let reported_unhealthy = AtomicBool::new(false);
+        let last_confirmed_count = Mutex::new(Some(476));
+        let (event_sink, messages) = test_event_sink();
+        apply_destination_reading(
+            reading,
+            &last_confirmed_count,
+            &reported_unhealthy,
+            &event_sink,
+            "dest-1",
+            "srtsink0",
+            30,
+        );
+
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["state"], "failed");
+        assert_eq!(events[0]["reason_code"], "SRT_DATA_STALLED_AFTER_START");
+    }
+
+    #[test]
+    fn evaluate_progress_classifies_never_sent_advancing_and_stalled() {
+        // Never sent: no baseline yet, nothing present.
+        assert_eq!(
+            evaluate_progress(None, &PacketsSentReading::Absent),
+            (DestinationProgress::NeverSent, None)
+        );
+        // Never sent: present but zero, no baseline yet.
+        assert_eq!(
+            evaluate_progress(None, &PacketsSentReading::Present(0)),
+            (DestinationProgress::NeverSent, None)
+        );
+        // With no prior baseline, a wrong-type reading cannot establish that data was
+        // sent. The caller still logs the type mismatch loudly.
+        assert_eq!(
+            evaluate_progress(None, &PacketsSentReading::WrongType("boom".to_owned())),
+            (DestinationProgress::NeverSent, None)
+        );
+        // An unreadable reading after a confirmed send is a stall: that observation
+        // remains true even when the next stats structure omits the counter.
+        assert_eq!(
+            evaluate_progress(Some(9), &PacketsSentReading::Absent),
+            (DestinationProgress::Stalled, Some(9))
+        );
+        assert_eq!(
+            evaluate_progress(Some(9), &PacketsSentReading::WrongType("boom".to_owned())),
+            (DestinationProgress::Stalled, Some(9))
+        );
+        // First-ever confirmed count: advancing, becomes the new baseline.
+        assert_eq!(
+            evaluate_progress(None, &PacketsSentReading::Present(5)),
+            (DestinationProgress::Advancing, Some(5))
+        );
+        // Count moved forward since the baseline: advancing.
+        assert_eq!(
+            evaluate_progress(Some(5), &PacketsSentReading::Present(9)),
+            (DestinationProgress::Advancing, Some(9))
+        );
+        // Count identical to the baseline: stalled - this is the "was sending,
+        // stopped" case a monotonic counter cannot express as "> 0" alone.
+        assert_eq!(
+            evaluate_progress(Some(9), &PacketsSentReading::Present(9)),
+            (DestinationProgress::Stalled, Some(9))
+        );
+    }
+
+    fn pump_until<F: Fn() -> bool>(condition: F, timeout: Duration) {
+        let context = glib::MainContext::default();
+        let deadline = std::time::Instant::now() + timeout;
+        while !condition() && std::time::Instant::now() < deadline {
+            context.iteration(true);
+        }
+        assert!(
+            condition(),
+            "timed out waiting for the health monitor's timers to fire"
+        );
+    }
+
+    /// Pumps the default glib main context for at least `duration`, letting any
+    /// `glib::timeout_add`/`timeout_add_once` timers scheduled on it fire on their own
+    /// schedule, without asserting on any particular outcome (unlike `pump_until`).
+    fn pump_for(duration: Duration) {
+        let context = glib::MainContext::default();
+        let deadline = std::time::Instant::now() + duration;
+        while std::time::Instant::now() < deadline {
+            context.iteration(true);
+        }
+    }
+
+    /// Builds a real listener `srtsrc` / caller `srtsink` pair connected over loopback
+    /// SRT on `port` (kept within the 14800-14899 evidence range used elsewhere in
+    /// this repo's verification runs), and blocks until at least `min_buffers` have
+    /// genuinely arrived at the listener side - i.e. until data has actually flowed
+    /// end to end over a real SRT connection, not merely until both elements reached
+    /// PLAYING. `srtsink`'s sink pad accepts `ANY` caps, so a plain `videotestsrc`
+    /// needs no encoder in front of it. Returns both pipelines (left Playing) and the
+    /// caller-mode `srtsink` element, so callers can inspect its real `stats`
+    /// property or arm a destination health monitor against it.
+    fn real_loopback_srt_pair(
+        port: u16,
+        min_buffers: u32,
+    ) -> (gst::Pipeline, gst::Pipeline, gst::Element) {
+        use std::sync::atomic::AtomicU32;
+
+        let _ = gst::init();
+        let listener = gst::parse::launch(&format!(
+            "srtsrc name=src uri=srt://0.0.0.0:{port}?mode=listener ! fakesink name=fsink sync=false"
+        ))
+        .expect("listener pipeline should parse")
+        .downcast::<gst::Pipeline>()
+        .expect("parsed element is a pipeline");
+        let sender = gst::parse::launch(&format!(
+            "videotestsrc is-live=true ! srtsink name=sink uri=srt://127.0.0.1:{port}?mode=caller wait-for-connection=true"
+        ))
+        .expect("sender pipeline should parse")
+        .downcast::<gst::Pipeline>()
+        .expect("parsed element is a pipeline");
+
+        let sink = sender.by_name("sink").expect("sink element present");
+        let fsink = listener.by_name("fsink").expect("fakesink element present");
+
+        let seen = Arc::new(AtomicU32::new(0));
+        let seen_probe = seen.clone();
+        fsink
+            .static_pad("sink")
+            .expect("fakesink has a sink pad")
+            .add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
+                seen_probe.fetch_add(1, Ordering::SeqCst);
+                gst::PadProbeReturn::Ok
+            });
+
+        listener
+            .set_state(gst::State::Playing)
+            .expect("listener reaches playing");
+        // Give the listener a moment to bind before the caller dials in.
+        std::thread::sleep(Duration::from_millis(200));
+        sender
+            .set_state(gst::State::Playing)
+            .expect("sender reaches playing");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while seen.load(Ordering::SeqCst) < min_buffers && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            seen.load(Ordering::SeqCst) >= min_buffers,
+            "expected at least {min_buffers} buffers over a real loopback SRT \
+             connection on port {port}, got {}",
+            seen.load(Ordering::SeqCst)
+        );
+
+        (listener, sender, sink)
+    }
+
+    #[test]
+    fn packets_sent_is_read_from_a_real_connected_srtsink_stats_structure() {
+        // The mandatory real-payload check: instead of asserting
+        // against a hand-built `gst::Structure`, this connects an actual `srtsink` to
+        // an actual `srtsrc` over loopback SRT, lets real data flow, and reads
+        // `read_packets_sent` against the `stats` property GStreamer's own SRT plugin
+        // produced - the same call path production code uses.
+        let (listener, sender, sink) = real_loopback_srt_pair(14801, 5);
+
+        let stats = sink.property::<Option<gst::Structure>>("stats");
+        match read_packets_sent(stats.as_deref()) {
+            PacketsSentReading::Present(count) => assert!(
+                count > 0,
+                "expected a positive confirmed-sent count from a real connected \
+                 srtsink, got {count}"
+            ),
+            other => panic!(
+                "expected Present(n>0) from the real stats structure a connected \
+                 srtsink actually produces, got {other:?}"
+            ),
+        }
+
+        listener
+            .set_state(gst::State::Null)
+            .expect("listener stops");
+        sender.set_state(gst::State::Null).expect("sender stops");
+    }
+
+    #[test]
+    fn destination_health_monitor_never_reports_a_healthy_caller_destination_unhealthy() {
+        // This protects against the original stats-type regression: before the fix, every healthy
+        // caller-mode SRT destination was reported "failed" at the threshold and on
+        // every cadence tick after, forever, because the strict `u64` read against a
+        // real `i64` field always errored and `.ok()` swallowed that into "nothing
+        // sent". With a real, continuously sending loopback destination armed at a
+        // short threshold/cadence, no `endpoint_health` event may ever report
+        // "failed".
+        let (listener, sender, sink) = real_loopback_srt_pair(14802, 5);
+
+        let monitor = build_destination_health_monitor(&sink, SrtMode::Caller)
+            .expect("caller mode is armed-eligible");
+        let (event_sink, messages) = test_event_sink();
+        monitor.arm_with_durations(
+            &sender,
+            event_sink,
+            "endpoint-1".to_string(),
+            Duration::from_millis(40),
+            Duration::from_millis(70),
+        );
+
+        // Run well past the threshold and several cadence ticks while the real
+        // stream keeps sending, so both the initial threshold check and the ongoing
+        // repeat monitoring (which never stops after the first confirmed send) get exercised.
+        pump_for(Duration::from_millis(450));
+
+        let events = events_named(&messages, "endpoint_health");
+        let failed: Vec<_> = events
+            .iter()
+            .filter(|event| event["state"] == "failed")
+            .collect();
+        assert!(
+            failed.is_empty(),
+            "a continuously healthy caller-mode SRT destination must never be \
+             reported failed, got: {failed:?}"
+        );
+
+        listener
+            .set_state(gst::State::Null)
+            .expect("listener stops");
+        sender.set_state(gst::State::Null).expect("sender stops");
+    }
+
+    #[test]
+    fn source_threshold_recovers_immediately_when_data_arrived_in_the_race_window() {
+        // Reproduces the state the threshold race leaves behind - `ever_data` true but
+        // `reported_unhealthy` also true, as if the pad probe ran (and found nothing
+        // to recover from) a moment before the threshold callback's store - and
+        // checks that the fix catches it right away rather than leaving it for the
+        // next `cadence` tick.
+        let (event_sink, messages) = test_event_sink();
+        let ever_data = Arc::new(AtomicBool::new(true));
+        let reported_unhealthy = Arc::new(AtomicBool::new(true));
+
+        let recovered = recover_immediately_if_data_arrived(
+            &ever_data,
+            &reported_unhealthy,
+            &event_sink,
+            "endpoint-1",
+        );
+
+        assert!(
+            recovered,
+            "must recognise data arrived during the race window and recover promptly"
+        );
+        assert!(!reported_unhealthy.load(Ordering::Acquire));
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["state"], "streaming");
+    }
+
+    #[test]
+    fn source_threshold_does_not_recover_when_no_data_has_arrived() {
+        let (event_sink, messages) = test_event_sink();
+        let ever_data = Arc::new(AtomicBool::new(false));
+        let reported_unhealthy = Arc::new(AtomicBool::new(true));
+
+        let recovered = recover_immediately_if_data_arrived(
+            &ever_data,
+            &reported_unhealthy,
+            &event_sink,
+            "endpoint-1",
+        );
+
+        assert!(!recovered);
+        assert!(reported_unhealthy.load(Ordering::Acquire));
+        assert!(events_named(&messages, "endpoint_health").is_empty());
+    }
+
+    #[test]
+    fn destination_stall_after_start_is_reported_and_then_recovers() {
+        // Exercises the full tick-processing
+        // function (`apply_destination_reading`, the pure half of
+        // `process_destination_tick`), driving it with a chosen sequence of
+        // `PacketsSentReading` values: never sent -> advancing (first confirmed send)
+        // -> stalled (peer went dark after a working connection) -> advancing again
+        // (peer came back). A real SRT peer cannot be made to stop sending mid-test
+        // without tearing down the socket, so this is the deterministic equivalent of
+        // that sequence.
+        let reported_unhealthy = Arc::new(AtomicBool::new(false));
+        let last_confirmed_count: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
+        let (event_sink, messages) = test_event_sink();
+
+        let tick = |reading: PacketsSentReading| {
+            apply_destination_reading(
+                reading,
+                &last_confirmed_count,
+                &reported_unhealthy,
+                &event_sink,
+                "dest-1",
+                "sink0",
+                30,
+            );
+        };
+
+        // Tick 1: nothing confirmed yet.
+        tick(PacketsSentReading::Absent);
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["reason_code"], "SRT_NO_DATA_SINCE_START");
+
+        // Tick 2: first confirmed send - recovers from the never-sent report.
+        tick(PacketsSentReading::Present(10));
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1]["state"], "streaming");
+
+        // Tick 3: count unchanged since the last tick - was sending, now stalled.
+        // Must be the honestly distinct stalled reason, never the never-sent one.
+        tick(PacketsSentReading::Present(10));
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[2]["state"], "failed");
+        assert_eq!(events[2]["reason_code"], "SRT_DATA_STALLED_AFTER_START");
+
+        // Tick 4: still stalled - the report repeats but is still the stalled
+        // reason, not the never-sent one.
+        tick(PacketsSentReading::Present(10));
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[3]["reason_code"], "SRT_DATA_STALLED_AFTER_START");
+
+        // Tick 5: the peer comes back - the count advances again and this must be
+        // reported as recovered, not left standing as stalled forever (the earlier bug
+        // this monitor used to have: once `packets-sent > 0`, monitoring stopped for
+        // good, so a stall was never even detected, let alone recovered from).
+        tick(PacketsSentReading::Present(11));
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events.len(), 5);
+        assert_eq!(events[4]["state"], "streaming");
+    }
+
+    #[test]
+    fn source_health_monitor_reports_no_data_then_recovers_when_a_buffer_arrives() {
+        let _ = gst::init();
+        let identity = gst::ElementFactory::make("identity")
+            .build()
+            .expect("identity element should be available for tests");
+        let sink = gst::ElementFactory::make("fakesink")
+            .build()
+            .expect("fakesink element should be available for tests");
+        let pipeline = gst::Pipeline::new();
+        pipeline
+            .add_many([&identity, &sink])
+            .expect("add elements to pipeline");
+        identity.link(&sink).expect("link identity to fakesink");
+        pipeline
+            .set_state(gst::State::Playing)
+            .expect("pipeline reaches playing");
+
+        let monitor = build_source_health_monitor(&identity, SrtMode::Caller)
+            .expect("caller mode builds a monitor")
+            .expect("caller mode is armed-eligible");
+
+        let (event_sink, messages) = test_event_sink();
+        monitor.arm_with_durations(
+            &pipeline,
+            event_sink,
+            "endpoint-1".to_string(),
+            Duration::from_millis(40),
+            Duration::from_millis(70),
+        );
+
+        // No buffer has been pushed yet: the threshold must fire exactly one Failed
+        // report plus exactly one diagnostic log line.
+        pump_until(
+            || !events_named(&messages, "endpoint_health").is_empty(),
+            Duration::from_secs(2),
+        );
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["state"], "failed");
+        assert_eq!(events[0]["reason_code"], "SRT_NO_DATA_SINCE_START");
+        assert_eq!(events[0]["retryable"], true);
+        assert_eq!(events[0]["retry_domain"], "route");
+        assert_eq!(events_named(&messages, "pipeline_log").len(), 1);
+
+        // Still no buffer: the cadence timer must repeat the Failed report without
+        // repeating the log line.
+        pump_until(
+            || events_named(&messages, "endpoint_health").len() >= 2,
+            Duration::from_secs(2),
+        );
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1]["state"], "failed");
+        assert_eq!(
+            events_named(&messages, "pipeline_log").len(),
+            1,
+            "the diagnostic line must not repeat on every cadence tick"
+        );
+
+        // Now a buffer arrives: the probe must report the source healthy immediately.
+        let pad = identity.static_pad("src").expect("identity has a src pad");
+        let _ = pad.push(gst::Buffer::new());
+
+        pump_until(
+            || events_named(&messages, "endpoint_health").len() >= 3,
+            Duration::from_secs(2),
+        );
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[2]["state"], "streaming");
+        assert!(events[2]["reason_code"].is_null());
+
+        pipeline
+            .set_state(gst::State::Null)
+            .expect("pipeline stops");
     }
 
     #[test]

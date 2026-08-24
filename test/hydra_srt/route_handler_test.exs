@@ -47,6 +47,7 @@ defmodule HydraSrt.RouteHandlerTest do
         route_terminal: nil,
         source_loss_since_ms: nil,
         source_loss_signal: nil,
+        healthy_since_ms: nil,
         cooldown_until: nil,
         primary_stable_since_ms: nil,
         last_primary_probe_ms: nil,
@@ -54,6 +55,7 @@ defmodule HydraSrt.RouteHandlerTest do
         retry_scheduled?: false,
         retry_attempt: 0,
         retry_prev_backoff_ms: nil,
+        retry_last_logged_ms: nil,
         retry_circuit_open?: false,
         recovery_blocked?: false,
         recovering?: false
@@ -450,6 +452,149 @@ defmodule HydraSrt.RouteHandlerTest do
     assert log["element"] == "udpsrc"
   end
 
+  test "parse_native_json_line accepts a bus-error pipeline log with no element" do
+    # Mirrors what native/crates/hydra-media/src/health.rs's bus watch now emits for a
+    # gst bus Error message whose source object could not be attributed (element key
+    # omitted rather than sent as null/"unknown").
+    line =
+      Jason.encode!(%{
+        "event" => "pipeline_log",
+        "level" => "ERROR",
+        "category" => "gst_bus",
+        "message" => "Failed to authenticate: Incorrect passphrase (10)"
+      })
+
+    assert {:pipeline_log, log} = RouteHandler.parse_native_json_line(line)
+    assert log["level"] == "ERROR"
+    assert log["category"] == "gst_bus"
+    refute Map.has_key?(log, "element")
+    assert log["message"] == "Failed to authenticate: Incorrect passphrase (10)"
+  end
+
+  describe "publish_native_pipeline_log/2" do
+    setup do
+      Phoenix.PubSub.subscribe(HydraSrt.PubSub, "pipeline_logs")
+      :ok
+    end
+
+    test "broadcasts the native SRT bus-error payload with the route id attached" do
+      route_id = "route-srt-auth"
+
+      data = base_route_data(%{id: route_id, process_instance_id: "piid-1"})
+
+      payload = %{
+        "event" => "pipeline_log",
+        "route_id" => route_id,
+        "process_instance_id" => "piid-1",
+        "level" => "ERROR",
+        "category" => "gst_bus",
+        "element" => "srtsrc0",
+        "message" =>
+          "Failed to authenticate: Incorrect passphrase (10) | debug: gstsrtsrc.c:206:gst_srt_src_fill",
+        "sequence" => 7,
+        "observed_at_ms" => 1_700_000_000_000
+      }
+
+      RouteHandler.publish_native_pipeline_log(data, payload)
+
+      assert_receive {:pipeline_log, log}
+      assert log.route_id == route_id
+      assert log.level == "ERROR"
+      assert log.category == "gst_bus"
+      assert log.element == "srtsrc0"
+      assert log.sequence == 7
+      assert log.observed_at_ms == 1_700_000_000_000
+
+      assert log.message ==
+               "Failed to authenticate: Incorrect passphrase (10) | debug: gstsrtsrc.c:206:gst_srt_src_fill"
+    end
+
+    test "broadcasts a native bus-warning payload with a nil element when absent" do
+      route_id = "route-srt-warn"
+      data = base_route_data(%{id: route_id, process_instance_id: "piid-2"})
+
+      payload = %{
+        "event" => "pipeline_log",
+        "route_id" => route_id,
+        "process_instance_id" => "piid-2",
+        "level" => "WARN",
+        "category" => "gst_bus",
+        "message" => "streaming stopped, reason error (-5)"
+      }
+
+      RouteHandler.publish_native_pipeline_log(data, payload)
+
+      assert_receive {:pipeline_log, log}
+      assert log.route_id == route_id
+      assert log.level == "WARN"
+      assert log.category == "gst_bus"
+      assert log.element == nil
+      assert log.message == "streaming stopped, reason error (-5)"
+    end
+
+    test "drops a pipeline_log from a stale process instance without broadcasting" do
+      route_id = "route-srt-stale"
+      data = base_route_data(%{id: route_id, process_instance_id: "piid-current"})
+
+      payload = %{
+        "event" => "pipeline_log",
+        "route_id" => route_id,
+        "process_instance_id" => "piid-old",
+        "level" => "WARN",
+        "category" => "gst_bus",
+        "message" => "stale process warning"
+      }
+
+      RouteHandler.publish_native_pipeline_log(data, payload)
+
+      refute_receive {:pipeline_log, _}, 50
+    end
+
+    test "rejects a malformed payload instead of inventing a level or message" do
+      route_id = "route-srt-malformed"
+      data = base_route_data(%{id: route_id, process_instance_id: "piid-3"})
+
+      payload = %{
+        "event" => "pipeline_log",
+        "route_id" => route_id,
+        "process_instance_id" => "piid-3",
+        "category" => "gst_bus"
+      }
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          RouteHandler.publish_native_pipeline_log(data, payload)
+        end)
+
+      assert log =~ "malformed native pipeline_log payload"
+      refute_receive {:pipeline_log, _}, 50
+    end
+
+    test "consume_port_output threads a pipeline_log event through process_port_line" do
+      data = base_route_data(%{id: "route-srt-e2e", process_instance_id: "piid-e2e"})
+
+      line =
+        Jason.encode!(%{
+          "event" => "pipeline_log",
+          "route_id" => "route-srt-e2e",
+          "process_instance_id" => "piid-e2e",
+          "level" => "ERROR",
+          "category" => "gst_bus",
+          "message" => "Could not read from resource.",
+          "sequence" => 1,
+          "observed_at_ms" => 1_700_000_000_000
+        })
+
+      _next = RouteHandler.consume_port_output(line <> "\n", data)
+
+      assert_receive {:pipeline_log, log}
+      assert log.route_id == "route-srt-e2e"
+      assert log.message == "Could not read from resource."
+      assert log.sequence == 1
+      assert log.observed_at_ms == 1_700_000_000_000
+    end
+  end
+
   test "source_record_from_route picks active source id when present" do
     route = %{
       "active_source_id" => "s2",
@@ -609,14 +754,24 @@ defmodule HydraSrt.RouteHandlerTest do
            })
   end
 
-  test "should_trigger_source_loss_failover? disabled mode blocks auto" do
+  test "should_trigger_source_loss_failover? still acts (visibility) once debounced in disabled mode" do
+    # backup_mode "disabled" must not suppress the debounced source-loss
+    # action entirely - only the actual failover target lookup
+    # (next_source_for_failover/next_enabled_source, tested elsewhere) is nil
+    # for "disabled" mode. The visible "reconnecting" state a dead source
+    # produces is not conditioned on backup switching being configured.
     data = %{
       route: %{"backup_mode" => "disabled", "backup_switch_after_ms" => 1000},
       source_loss_elapsed_ms: 5000,
       now_ms: 1000
     }
 
-    refute RouteHandler.should_trigger_source_loss_failover?(data)
+    assert RouteHandler.should_trigger_source_loss_failover?(data)
+
+    refute RouteHandler.should_trigger_source_loss_failover?(%{
+             data
+             | source_loss_elapsed_ms: 500
+           })
   end
 
   test "observe_source_loss merges reconnecting and zero_bitrate into one window" do
@@ -661,6 +816,134 @@ defmodule HydraSrt.RouteHandlerTest do
     assert next.retry_scheduled? == true
   end
 
+  describe "source loss with no failover target becomes visible instead of a silent no-op (stubbed runtime status)" do
+    setup do
+      :meck.new(HydraSrt, [:passthrough])
+      :meck.new(HydraSrt.Stats.EventLogger, [:passthrough])
+
+      :meck.expect(HydraSrt, :set_route_runtime_status, fn _id, _status -> {:ok, %{}} end)
+
+      on_exit(fn -> :meck.unload() end)
+      :ok
+    end
+
+    test "single-source route in zero-bitrate marks the route reconnecting instead of doing nothing" do
+      route_id = "route-no-target-1"
+      test_pid = self()
+
+      :meck.expect(HydraSrt, :set_route_runtime_status, fn id, status ->
+        send(test_pid, {:set_route_runtime_status, id, status})
+        {:ok, %{}}
+      end)
+
+      :meck.expect(HydraSrt.Stats.EventLogger, :log_pipeline_reconnecting, fn id,
+                                                                              source_id,
+                                                                              reason ->
+        send(test_pid, {:log_pipeline_reconnecting, id, source_id, reason})
+        :ok
+      end)
+
+      data =
+        base_route_data(%{
+          id: route_id,
+          active_source_id: "s1",
+          route: %{
+            "backup_mode" => "passive",
+            "backup_switch_after_ms" => 0,
+            "sources" => [%{"id" => "s1", "position" => 0, "enabled" => true}]
+          }
+        })
+
+      next = RouteHandler.observe_source_loss(data, :zero_bitrate)
+
+      # Visible: status flips, the reason is recorded - and it never stops the
+      # route or touches the retry machinery (the pipeline process is fine,
+      # only its source stopped delivering data).
+      assert next.recovering? == true
+      assert next.retry_scheduled? == false
+      assert_receive {:set_route_runtime_status, ^route_id, "reconnecting"}
+      assert_receive {:log_pipeline_reconnecting, ^route_id, "s1", "source_loss"}
+    end
+
+    test "no-target source loss does not repeat the log/status write on every later tick" do
+      route_id = "route-no-target-2"
+      test_pid = self()
+
+      :meck.expect(HydraSrt.Stats.EventLogger, :log_pipeline_reconnecting, fn id,
+                                                                              source_id,
+                                                                              reason ->
+        send(test_pid, {:log_pipeline_reconnecting, id, source_id, reason})
+        :ok
+      end)
+
+      data =
+        base_route_data(%{
+          id: route_id,
+          active_source_id: "s1",
+          route: %{
+            "backup_mode" => "passive",
+            "backup_switch_after_ms" => 0,
+            "sources" => [%{"id" => "s1", "position" => 0, "enabled" => true}]
+          }
+        })
+
+      once = RouteHandler.observe_source_loss(data, :zero_bitrate)
+      assert once.recovering? == true
+      assert_receive {:log_pipeline_reconnecting, ^route_id, "s1", "source_loss"}
+
+      # Every stats tick re-observes the same ongoing loss (zero-bitrate fires
+      # every second) - it must not log/write again while still down.
+      twice = RouteHandler.observe_source_loss(once, :zero_bitrate)
+      assert twice.recovering? == true
+      refute_receive {:log_pipeline_reconnecting, _, _, _}, 50
+    end
+
+    test "backup_mode disabled still surfaces the visible reconnecting state instead of reporting healthy" do
+      route_id = "route-backup-disabled"
+      test_pid = self()
+
+      :meck.expect(HydraSrt, :set_route_runtime_status, fn id, status ->
+        send(test_pid, {:set_route_runtime_status, id, status})
+        {:ok, %{}}
+      end)
+
+      :meck.expect(HydraSrt.Stats.EventLogger, :log_pipeline_reconnecting, fn id,
+                                                                              source_id,
+                                                                              reason ->
+        send(test_pid, {:log_pipeline_reconnecting, id, source_id, reason})
+        :ok
+      end)
+
+      # A backup source IS configured, but backup_mode "disabled" means it must
+      # never be switched to automatically - the fix is only about visibility,
+      # not about silently reinstating auto-failover for disabled routes.
+      data =
+        base_route_data(%{
+          id: route_id,
+          active_source_id: "s1",
+          route: %{
+            "backup_mode" => "disabled",
+            "backup_switch_after_ms" => 0,
+            "sources" => [
+              %{"id" => "s1", "position" => 0, "enabled" => true},
+              %{"id" => "s2", "position" => 1, "enabled" => true}
+            ]
+          }
+        })
+
+      next = RouteHandler.observe_source_loss(data, :zero_bitrate)
+
+      # Visible and truthful, exactly like the no-backup-configured case above...
+      assert next.recovering? == true
+      assert_receive {:set_route_runtime_status, ^route_id, "reconnecting"}
+      assert_receive {:log_pipeline_reconnecting, ^route_id, "s1", "source_loss"}
+
+      # ...but "disabled" still means no automatic source switch happened.
+      assert next.active_source_id == "s1"
+      assert next.port == data.port
+    end
+  end
+
   test "next_retry_backoff_ms stays within base..ceiling and grows with attempt" do
     base_ms = :timer.seconds(1)
     ceiling_ms = :timer.seconds(30)
@@ -687,6 +970,60 @@ defmodule HydraSrt.RouteHandlerTest do
     assert max_a5 > max_a1
   end
 
+  describe "hard-retry budget only resets after sustained health, never on a bare spawn" do
+    test "resets once data has flowed continuously for the full reset window" do
+      now = RouteHandler.now_ms()
+
+      data =
+        base_route_data(%{
+          recovering?: false,
+          retry_attempt: 4,
+          retry_prev_backoff_ms: :timer.seconds(16),
+          healthy_since_ms: now - :timer.seconds(31)
+        })
+
+      next = RouteHandler.clear_source_loss_on_bitrate_recovery(data)
+
+      assert next.retry_attempt == 0
+      assert next.retry_prev_backoff_ms == nil
+    end
+
+    test "a fresh healthy tick only starts the clock - it does not reset the budget by itself" do
+      data =
+        base_route_data(%{
+          recovering?: false,
+          retry_attempt: 4,
+          retry_prev_backoff_ms: :timer.seconds(16),
+          healthy_since_ms: nil
+        })
+
+      next = RouteHandler.clear_source_loss_on_bitrate_recovery(data)
+
+      assert next.retry_attempt == 4
+      assert next.retry_prev_backoff_ms == :timer.seconds(16)
+      assert is_integer(next.healthy_since_ms)
+    end
+
+    test "a subsequent zero-bitrate tick clears the in-progress healthy clock" do
+      now = RouteHandler.now_ms()
+
+      data =
+        base_route_data(%{
+          route: %{"backup_mode" => "passive", "backup_switch_after_ms" => 60_000},
+          retry_attempt: 4,
+          retry_prev_backoff_ms: :timer.seconds(16),
+          healthy_since_ms: now - :timer.seconds(20)
+        })
+
+      next = RouteHandler.observe_source_loss(data, :zero_bitrate)
+
+      assert next.healthy_since_ms == nil
+      # Not yet long enough to have reset while it was ticking, and the loss
+      # itself must not trigger a reset either.
+      assert next.retry_attempt == 4
+    end
+  end
+
   describe "retry circuit and terminal failure (stubbed runtime status)" do
     # These paths call HydraSrt.mark_route_failed/1; unit tests assert in-memory
     # recovery state only — stub the DB boundary like route_handler_failover_test.
@@ -706,24 +1043,96 @@ defmodule HydraSrt.RouteHandlerTest do
       :ok
     end
 
-    test "schedule_retry_restart opens circuit after max attempts and schedules nothing" do
+    # A live stream must never latch dead: once the old 5-attempt budget is
+    # exhausted the route keeps retrying forever with backoff pinned at the
+    # ceiling, instead of giving up and marking the route "failed". These two
+    # tests replace the old "circuit opens and gives up" behaviour.
+    test "schedule_retry_restart keeps retrying past the old attempt budget instead of latching" do
+      route_id = "route-circuit-1"
+      test_pid = self()
+
+      :meck.expect(HydraSrt, :set_route_runtime_status, fn id, status ->
+        send(test_pid, {:set_route_runtime_status, id, status})
+        {:ok, %{}}
+      end)
+
+      :meck.expect(HydraSrt.Stats.EventLogger, :log_pipeline_reconnecting, fn id,
+                                                                              source_id,
+                                                                              reason ->
+        send(test_pid, {:log_pipeline_reconnecting, id, source_id, reason})
+        :ok
+      end)
+
       data =
         base_route_data(%{
-          id: "route-circuit-1",
+          id: route_id,
           active_source_id: "s1",
           retry_scheduled?: false,
           retry_attempt: 5,
           retry_prev_backoff_ms: :timer.seconds(30),
-          retry_circuit_open?: false,
-          recovery_blocked?: false
+          route_terminal: %{
+            reason_code: "SRT_CONNECT_TIMEOUT",
+            retryable: true,
+            retry_domain: "route",
+            detail: nil,
+            observed_at_ms: nil,
+            sequence: nil
+          }
         })
 
       next = RouteHandler.schedule_retry_restart(data)
 
-      assert next.retry_circuit_open? == true
-      assert next.recovery_blocked? == true
-      assert next.retry_scheduled? == false
-      refute_receive :retry_start, 50
+      # No latch: a timer is still scheduled and the budget fields never flip.
+      assert next.retry_scheduled? == true
+      assert next.retry_attempt == 6
+      assert next.retry_circuit_open? == false
+      assert next.recovery_blocked? == false
+      assert next.retry_prev_backoff_ms >= :timer.seconds(1)
+      assert next.retry_prev_backoff_ms <= :timer.seconds(30)
+      assert is_integer(next.retry_last_logged_ms)
+
+      # But it is not silent either: status flips to "reconnecting" (not
+      # "failed") and the reason code carried on the route_terminal is visible.
+      assert_receive {:set_route_runtime_status, ^route_id, "reconnecting"}
+      assert_receive {:log_pipeline_reconnecting, ^route_id, "s1", "SRT_CONNECT_TIMEOUT"}
+    end
+
+    test "schedule_retry_restart never latches across many attempts and rate-limits its own logging" do
+      route_id = "route-circuit-2"
+      test_pid = self()
+
+      :meck.expect(HydraSrt.Stats.EventLogger, :log_pipeline_reconnecting, fn id,
+                                                                              source_id,
+                                                                              reason ->
+        send(test_pid, {:log_pipeline_reconnecting, id, source_id, reason})
+        :ok
+      end)
+
+      data =
+        base_route_data(%{
+          id: route_id,
+          active_source_id: "s1",
+          retry_attempt: 5,
+          retry_prev_backoff_ms: :timer.seconds(30)
+        })
+
+      final =
+        Enum.reduce(1..30, data, fn _i, acc ->
+          scheduled = RouteHandler.schedule_retry_restart(%{acc | retry_scheduled?: false})
+          assert scheduled.retry_scheduled? == true
+          assert scheduled.retry_circuit_open? == false
+          assert scheduled.recovery_blocked? == false
+          assert scheduled.retry_prev_backoff_ms >= :timer.seconds(1)
+          assert scheduled.retry_prev_backoff_ms <= :timer.seconds(30)
+          scheduled
+        end)
+
+      assert final.retry_attempt == 35
+
+      # All 30 calls land inside the same rate-limit window in test time, so
+      # exactly one reconnecting event is emitted - not thirty, and not zero.
+      assert_receive {:log_pipeline_reconnecting, ^route_id, "s1", nil}
+      refute_receive {:log_pipeline_reconnecting, _, _, _}, 50
     end
 
     test "mark_terminal_failure blocks further retry scheduling" do
@@ -748,6 +1157,131 @@ defmodule HydraSrt.RouteHandlerTest do
 
       assert RouteHandler.schedule_retry_restart(next) == next
       refute_receive :retry_start, 50
+    end
+  end
+
+  describe "exit_status precision: the route_terminal's retryable flag decides, not the exit code (stubbed runtime status)" do
+    setup do
+      :meck.new(HydraSrt.Db, [:passthrough])
+      :meck.new(HydraSrt, [:passthrough])
+      :meck.new(HydraSrt.Stats.EventLogger, [:passthrough])
+
+      :meck.expect(HydraSrt, :mark_route_failed, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :mark_route_started, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :mark_route_stopped, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :mark_route_terminated, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :set_route_runtime_status, fn _id, _status -> {:ok, %{}} end)
+      :meck.expect(HydraSrt.Db, :update_route_runtime_status, fn _id, _status -> {:ok, %{}} end)
+
+      on_exit(fn -> :meck.unload() end)
+      :ok
+    end
+
+    test "exit status 0 with no route_terminal on record is a normal stop" do
+      port = make_ref()
+      data = base_route_data(%{id: "route-exit-normal", port: port, route_terminal: nil})
+
+      assert {:stop, :normal, next} =
+               RouteHandler.handle_event(:info, {port, {:exit_status, 0}}, :started, data)
+
+      assert next.shutdown_reason == {:port_exit, 0}
+    end
+
+    test "exit status 0 with a retryable route_terminal on record keeps retrying instead of stopping" do
+      # Reproduces the wrong-passphrase bug: the native binary emits a
+      # RETRYABLE route_terminal and then exits 0 (main.rs returns Ok(()) once
+      # route_terminal_emitted() is true). Exit code 0 must not be read as "a
+      # normal stop" here - the GenServer has to stay alive and keep retrying.
+      port = make_ref()
+
+      data =
+        base_route_data(%{
+          id: "route-exit-retryable",
+          active_source_id: "s1",
+          port: port,
+          route_terminal: %{
+            reason_code: "SRT_AUTH_FAILED",
+            retryable: true,
+            retry_domain: "route",
+            detail: "wrong passphrase",
+            observed_at_ms: 1,
+            sequence: 1
+          }
+        })
+
+      assert {:keep_state, next} =
+               RouteHandler.handle_event(:info, {port, {:exit_status, 0}}, :started, data)
+
+      assert next.port == nil
+      assert next.retry_scheduled? == true
+      assert next.retry_attempt == 1
+      assert_receive :retry_start, next.retry_prev_backoff_ms + 100
+    end
+
+    test "exit status 0 with a non-retryable route_terminal on record does not schedule a retry" do
+      port = make_ref()
+
+      data =
+        base_route_data(%{
+          id: "route-exit-nonretryable",
+          active_source_id: "s1",
+          port: port,
+          route_terminal: %{
+            reason_code: "SRT_CONNECT_REFUSED",
+            retryable: false,
+            retry_domain: nil,
+            detail: "refused",
+            observed_at_ms: 1,
+            sequence: 1
+          }
+        })
+
+      assert {:keep_state, next} =
+               RouteHandler.handle_event(:info, {port, {:exit_status, 0}}, :started, data)
+
+      assert next.port == nil
+      assert next.retry_scheduled? == false
+      assert next.recovery_blocked? == false
+      refute_receive :retry_start, 50
+    end
+
+    test "exit status non-zero still drives the hard-retry path exactly as before" do
+      port = make_ref()
+      data = base_route_data(%{id: "route-exit-nonzero", active_source_id: "s1", port: port})
+
+      assert {:keep_state, next} =
+               RouteHandler.handle_event(:info, {port, {:exit_status, 1}}, :started, data)
+
+      assert next.port == nil
+      assert next.retry_scheduled? == true
+      assert_receive :retry_start, next.retry_prev_backoff_ms + 100
+    end
+
+    test "port EXIT with :epipe hard-retries instead of latching the route stopped" do
+      # A broken pipe on our own write side (the far end of the port's stdin
+      # already closed under us) is not "the stream ended by design" the way
+      # a clean `:normal` exit is - it is this process losing its native
+      # pipeline out from under a route whose source may still be perfectly
+      # alive, so it must never park the route "stopped" with no retry.
+      port = make_ref()
+      data = base_route_data(%{id: "route-epipe", active_source_id: "s1", port: port})
+
+      assert {:keep_state, next} =
+               RouteHandler.handle_event(:info, {:EXIT, port, :epipe}, :started, data)
+
+      assert next.port == nil
+      assert next.retry_scheduled? == true
+      assert_receive :retry_start, next.retry_prev_backoff_ms + 100
+    end
+
+    test "port EXIT with :normal still parks the route stopped (a legitimate end)" do
+      port = make_ref()
+      data = base_route_data(%{id: "route-normal-exit", active_source_id: "s1", port: port})
+
+      assert {:stop, :normal, next} =
+               RouteHandler.handle_event(:info, {:EXIT, port, :normal}, :started, data)
+
+      assert next.shutdown_reason == {:port_exit, :normal}
     end
   end
 
@@ -1222,6 +1756,62 @@ defmodule HydraSrt.RouteHandlerTest do
     # so the DB value stays "failed" rather than being overwritten with "stopped".
     assert {:update, "failed"} = RouteHandler.normalize_runtime_status("failed", "runtime_error")
     assert :ignore = RouteHandler.normalize_runtime_status("stopped", "failure")
+  end
+
+  test "normalize_runtime_status ignores a legacy 'failed' status while a hard retry is armed" do
+    # A hard retry already schedules and writes the truthful
+    # "restarting"/"reconnecting" status before the native pipeline's own
+    # legacy `pipeline_status \"failed\"` line for the same cycle is
+    # processed. Without this, the route flip-flopped
+    # restarting -> failed -> restarting on every single retry cycle and
+    # wrote an extra route_status_change row each time.
+    assert :ignore =
+             RouteHandler.normalize_runtime_status("failed", "runtime_error", %{
+               retry_scheduled?: true
+             })
+
+    # No retry in flight (genuinely terminal, or unclassified) - the truthful
+    # "failed" status is written, exactly like the arity-2 (no `data`) form.
+    assert {:update, "failed"} =
+             RouteHandler.normalize_runtime_status("failed", "runtime_error", %{
+               retry_scheduled?: false
+             })
+  end
+
+  test "a legacy 'failed' pipeline_status carries the real route_terminal reason, not the generic bucket" do
+    :meck.new(HydraSrt.Stats.EventLogger, [:passthrough])
+
+    test_pid = self()
+
+    :meck.expect(HydraSrt.Stats.EventLogger, :log_pipeline_failed, fn route_id,
+                                                                      source_id,
+                                                                      reason,
+                                                                      message ->
+      send(test_pid, {:log_pipeline_failed, route_id, source_id, reason, message})
+      :ok
+    end)
+
+    on_exit(fn -> :meck.unload() end)
+
+    data =
+      base_route_data(%{
+        id: "route-legacy-failed",
+        active_source_id: "s1",
+        retry_scheduled?: true,
+        route_terminal: %{
+          reason_code: "SRT_AUTH_FAILED",
+          retryable: true,
+          retry_domain: "none",
+          detail: "Failed to authenticate: Incorrect passphrase",
+          observed_at_ms: nil,
+          sequence: nil
+        }
+      })
+
+    line = ~s({"event":"pipeline_status","status":"failed","reason":"runtime_error"})
+    _ = RouteHandler.process_port_line(line, data)
+
+    assert_receive {:log_pipeline_failed, "route-legacy-failed", "s1", "SRT_AUTH_FAILED", _}
   end
 
   describe "process_port_line pipeline logs" do
@@ -1717,6 +2307,46 @@ defmodule HydraSrt.RouteHandlerTest do
       soft = RouteHandler.observe_source_loss(next, :reconnecting)
       assert soft.source_loss_since_ms == nil
       assert soft.retry_scheduled? == true
+
+      assert_receive :retry_start, next.retry_prev_backoff_ms + 100
+    end
+
+    test "retryable SRT_CONNECT_TIMEOUT route_terminal lands in the hard-retry path" do
+      # Regression for the caller-mode SRT connect deadline: a route pointed at
+      # an unreachable peer must not sit in "starting" forever. It surfaces as a
+      # retryable route_terminal with reason_code "SRT_CONNECT_TIMEOUT" from the
+      # native side, and RouteHandler treats it exactly like any other retryable
+      # reason code (opaque string) - same hard-retry path as NDI_RECEIVE_TIMEOUT
+      # above.
+      data =
+        base_route_data(%{
+          id: "route-term-srt-timeout",
+          process_instance_id: "piid-live",
+          active_source_id: "s1",
+          route: %{"backup_mode" => "passive"},
+          source_loss_since_ms: 99,
+          source_loss_signal: :zero_bitrate
+        })
+
+      payload = %{
+        "event" => "route_terminal",
+        "route_id" => "route-term-srt-timeout",
+        "process_instance_id" => "piid-live",
+        "reason_code" => "SRT_CONNECT_TIMEOUT",
+        "retryable" => true,
+        "retry_domain" => "route",
+        "detail" => "SRT caller did not establish a connection before the connect deadline",
+        "observed_at_ms" => 3,
+        "sequence" => 11
+      }
+
+      next = RouteHandler.consume_port_output(Jason.encode!(payload) <> "\n", data)
+
+      assert next.route_terminal.reason_code == "SRT_CONNECT_TIMEOUT"
+      assert next.retry_scheduled? == true
+      assert next.retry_attempt == 1
+      assert next.source_loss_since_ms == nil
+      assert next.recovery_blocked? == false
 
       assert_receive :retry_start, next.retry_prev_backoff_ms + 100
     end

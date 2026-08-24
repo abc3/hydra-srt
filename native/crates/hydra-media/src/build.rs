@@ -12,7 +12,7 @@ use hydra_plan::{
 use crate::adapters::ndi_source::NdiTrack;
 use crate::adapters::{ndi_sink, ndi_source, rtmp, rtp, srt, udp};
 use crate::branch::{configure_queue, profiles_for, BranchHandle, QueueProfiles};
-use crate::events::{EndpointDirection, Transport};
+use crate::events::{EndpointDirection, EventSink, Transport};
 use crate::lifecycle::{FailureReason, PipelineLifecycleEmitter};
 use crate::metrics::{
     add_destination_metrics_probe, destination_metrics, destination_metrics_with_drops,
@@ -95,6 +95,8 @@ struct GraphCore {
     tees: Vec<(MediaLane, gst::Element)>,
     source_output_pads: Vec<(MediaLane, gst::Pad)>,
     ndi_readiness: Option<ndi_source::NdiReadinessMonitor>,
+    srt_source_health: Option<srt::SrtSourceHealthMonitor>,
+    srt_destination_health: Vec<(String, srt::SrtDestinationHealthMonitor)>,
     endpoints: Vec<EndpointDescriptor>,
 }
 
@@ -165,6 +167,7 @@ pub fn build(
     let dest_metrics: Arc<Mutex<Vec<Arc<DestMetrics>>>> = Arc::new(Mutex::new(Vec::new()));
     let mut branches = Vec::with_capacity(branch_results.len());
     let mut endpoints = vec![source_result.endpoint];
+    let mut srt_destination_health = Vec::new();
     for (plan, result) in branch_results {
         pipeline
             .add(&result.bin)
@@ -173,6 +176,9 @@ pub fn build(
             .lock()
             .map_err(|_| BuildError::new(ErrorCode::RuntimeError, "metrics mutex poisoned"))?
             .push(result.metrics);
+        if let Some(monitor) = result.srt_health {
+            srt_destination_health.push((plan.endpoint_id.clone(), monitor));
+        }
         endpoints.push(endpoint_descriptor_for_branch(plan, &result.bin));
         branches.push(BuiltBranch {
             endpoint_id: plan.endpoint_id.clone(),
@@ -201,6 +207,8 @@ pub fn build(
             tees,
             source_output_pads: source_result.output_pads,
             ndi_readiness: source_result.ndi_readiness,
+            srt_source_health: source_result.srt_source_health,
+            srt_destination_health,
             endpoints,
         },
         branches,
@@ -255,7 +263,7 @@ impl LinkedGraph {
         &self.core.endpoints
     }
 
-    pub fn start(self) -> Result<RunningGraph, BuildError> {
+    pub fn start(self, event_sink: EventSink) -> Result<RunningGraph, BuildError> {
         if let Err(error) = self.core.runtime.lifecycle.emit_starting() {
             release_handles(&self.branch_handles);
             return Err(BuildError::new(ErrorCode::RuntimeError, error.to_string()));
@@ -279,6 +287,22 @@ impl LinkedGraph {
         }
         if let Some(readiness) = self.core.ndi_readiness.as_ref() {
             readiness.arm(&self.core.runtime.pipeline);
+        }
+        if let Some(source_health) = self.core.srt_source_health.as_ref() {
+            // The source endpoint is always endpoints[0] (see `build`).
+            let source_endpoint_id = self.core.endpoints[0].endpoint_id.clone();
+            source_health.arm(
+                &self.core.runtime.pipeline,
+                event_sink.clone(),
+                source_endpoint_id,
+            );
+        }
+        for (endpoint_id, monitor) in &self.core.srt_destination_health {
+            monitor.arm(
+                &self.core.runtime.pipeline,
+                event_sink.clone(),
+                endpoint_id.clone(),
+            );
         }
 
         Ok(RunningGraph {
@@ -321,6 +345,7 @@ struct SourceBuild {
     source: gst::Element,
     output_pads: Vec<(MediaLane, gst::Pad)>,
     ndi_readiness: Option<ndi_source::NdiReadinessMonitor>,
+    srt_source_health: Option<srt::SrtSourceHealthMonitor>,
     endpoint: EndpointDescriptor,
     source_bytes_total: Arc<AtomicU64>,
     processing_pending: Arc<AtomicBool>,
@@ -341,7 +366,11 @@ fn build_source_bin(
             srt::apply_source(&source, config).map_err(adapter_error)?;
             maybe_do_timestamp(&source);
             srt::configure_source(&source, config, writer);
-            finish_program_source(plan, source, LegacyKind::Srt, lifecycle)
+            let source_health =
+                srt::build_source_health_monitor(&source, config.mode()).map_err(adapter_error)?;
+            let mut built = finish_program_source(plan, source, LegacyKind::Srt, lifecycle)?;
+            built.srt_source_health = source_health;
+            Ok(built)
         }
         SourceAdapterPlan::Udp { config, .. } => {
             let source = make_element(source_element_factory(LegacyKind::Udp), "source element")?;
@@ -429,6 +458,7 @@ fn finish_program_source(
         source,
         output_pads: vec![(MediaLane::Program, bin_output_pad)],
         ndi_readiness: None,
+        srt_source_health: None,
         endpoint: EndpointDescriptor {
             bin_name,
             endpoint_id: plan.source.endpoint_id.clone(),
@@ -481,6 +511,7 @@ fn build_ndi_source_bin(
         source: built.source,
         output_pads,
         ndi_readiness: Some(built.readiness),
+        srt_source_health: None,
         endpoint: EndpointDescriptor {
             bin_name,
             endpoint_id: plan.source.endpoint_id.clone(),
@@ -497,6 +528,7 @@ struct DestinationBuild {
     input_pads: Vec<(MediaLane, gst::Pad)>,
     metrics: Arc<DestMetrics>,
     requested_pads: Vec<(gst::Element, gst::Pad)>,
+    srt_health: Option<srt::SrtDestinationHealthMonitor>,
 }
 
 fn build_destination_bin(
@@ -516,7 +548,17 @@ fn build_destination_bin(
             )?;
             srt::apply_destination(&sink, config).map_err(adapter_error)?;
             srt::configure_sink(&sink);
-            finish_program_destination(branch_index, branch, sink, LegacyKind::Srt, writer, true)
+            let health_monitor = srt::build_destination_health_monitor(&sink, config.mode());
+            let mut built = finish_program_destination(
+                branch_index,
+                branch,
+                sink,
+                LegacyKind::Srt,
+                writer,
+                true,
+            )?;
+            built.srt_health = health_monitor;
+            Ok(built)
         }
         SinkAdapterPlan::Udp { config, .. } => {
             let sink = make_element(
@@ -592,6 +634,7 @@ fn finish_program_destination(
         input_pads: vec![(MediaLane::Program, ghost.upcast())],
         metrics,
         requested_pads,
+        srt_health: None,
     })
 }
 
@@ -625,6 +668,7 @@ fn build_ndi_destination_bin(
             .collect(),
         metrics,
         requested_pads: built.requested_pads,
+        srt_health: None,
     })
 }
 

@@ -21,6 +21,17 @@ fn writer() -> Arc<Mutex<Box<dyn StatsWriter>>> {
     Arc::new(Mutex::new(Box::new(StdoutWriter::new())))
 }
 
+fn event_sink() -> crate::events::EventSink {
+    crate::events::EventSink::new(
+        writer(),
+        crate::events::RouteIdentity {
+            route_id: "route-1".to_string(),
+            config_revision: "rev-1".to_string(),
+            process_instance_id: "proc-1".to_string(),
+        },
+    )
+}
+
 fn srt_source(id: &str, name: &str, srt: SrtSource) -> SourceEndpoint {
     SourceEndpoint::Srt {
         id: id.to_string(),
@@ -197,7 +208,7 @@ fn legacy_route_builds_multi_branch_tee_and_reaches_playing() {
         .expect("current built")
         .link()
         .expect("current linked")
-        .start()
+        .start(event_sink())
         .expect("current playing");
     let (_, state, _) = running
         .runtime()
@@ -402,6 +413,73 @@ fn legacy_srtsrc_preserves_explicit_authentication() {
     assert!(built.core.runtime.source.property::<bool>("authentication"));
 }
 
+fn caller_srt_source_plan(source: SrtSource) -> hydra_plan::GraphPlan {
+    plan_route(
+        srt_source("source-a", "Source", source),
+        vec![udp_dest("dest", "Dest", udp_ep("127.0.0.1", 4401))],
+    )
+}
+
+#[test]
+fn srt_source_health_monitor_present_only_for_caller_and_rendezvous_modes() {
+    let _ = gst::init();
+    for (mode, uri) in [
+        (SrtMode::Caller, "srt://127.0.0.1:4207?mode=caller"),
+        (SrtMode::Rendezvous, "srt://127.0.0.1:4207?mode=rendezvous"),
+    ] {
+        let built = build(
+            caller_srt_source_plan(minimal_srt_source(uri, mode)),
+            writer(),
+        )
+        .unwrap_or_else(|error| panic!("{mode:?} SRT source builds: {error}"));
+        let monitor = built
+            .core
+            .srt_source_health
+            .clone()
+            .unwrap_or_else(|| panic!("{mode:?} SRT source must carry a health monitor"));
+        assert!(
+            !monitor.armed(),
+            "monitor must not be armed until the pipeline reaches Playing"
+        );
+    }
+
+    let built = build(caller_srt_source_plan(listener_srt_source()), writer())
+        .expect("listener SRT source builds");
+    assert!(
+        built.core.srt_source_health.is_none(),
+        "listener mode waits for an inbound caller by design and must never carry a health monitor"
+    );
+}
+
+#[test]
+fn srt_source_health_monitor_arms_when_the_route_reaches_playing() {
+    let _ = gst::init();
+    let built = build(
+        caller_srt_source_plan(minimal_srt_source(
+            "srt://127.0.0.1:4209?mode=caller",
+            SrtMode::Caller,
+        )),
+        writer(),
+    )
+    .expect("caller SRT source builds");
+    let monitor = built
+        .core
+        .srt_source_health
+        .clone()
+        .expect("caller SRT source carries a health monitor");
+    assert!(!monitor.armed());
+
+    let running = built
+        .link()
+        .expect("SRT graph links")
+        .start(event_sink())
+        .expect(
+            "SRT graph reaches Playing (caller connect happens async, off the state-change path)",
+        );
+    assert!(monitor.armed());
+    running.shutdown().expect("SRT graph stops");
+}
+
 #[test]
 fn legacy_srtsrc_enables_authentication_for_access_hooks() {
     let _ = gst::init();
@@ -523,7 +601,7 @@ fn shutdown_releases_all_tee_request_pads_on_clean_stop_and_link_error() {
         .expect("built")
         .link()
         .expect("linked")
-        .start()
+        .start(event_sink())
         .expect("running");
     let tee = running
         .runtime()
@@ -660,7 +738,7 @@ fn ndi_start_reports_runtime_missing_before_the_discovery_watchdog_can_arm() {
         .expect("NDI graph carries a readiness monitor");
     let linked = built.link().expect("NDI graph links");
 
-    match linked.start() {
+    match linked.start(event_sink()) {
         // No NDI runtime on this host: ndisrc and ndisink both fail NULL→READY,
         // which fails the whole state change synchronously. The root cause is
         // reported and the derived "required track missing" deadline never runs,

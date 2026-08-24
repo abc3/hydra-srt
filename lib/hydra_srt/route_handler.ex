@@ -3,7 +3,17 @@ defmodule HydraSrt.RouteHandler do
 
   require Logger
   @behaviour :gen_statem
-  @normal_port_exit_reasons [:normal, :epipe]
+
+  # `:normal` is the only port-exit reason that legitimately parks the route as
+  # "stopped" with no retry: it is what a clean, non-`route_terminal` process
+  # exit (an operator-requested stop, or a finite source genuinely reaching
+  # EOS) looks like. `:epipe` (our own write to the port's stdin failing
+  # because its far end already closed) used to be listed here too, but a
+  # broken pipe is not "the stream ended by design" - it is this process
+  # losing its native pipeline out from under a route that may still have a
+  # live source on the other end, so it must retry like any other process
+  # loss, never latch. See the `{:EXIT, port, reason}` handler below.
+  @normal_port_exit_reasons [:normal]
 
   # Hard-retry backoff: exponential with decorrelated jitter, a ceiling, and a
   # circuit breaker after the maximum attempts. The retry budget is re-derived on
@@ -11,6 +21,22 @@ defmodule HydraSrt.RouteHandler do
   @retry_base_ms :timer.seconds(1)
   @retry_ceiling_ms :timer.seconds(30)
   @retry_max_attempts 5
+
+  # A route's hard-retry budget (attempt counter + backoff) resets to zero
+  # only once the route has proven itself by staying continuously healthy -
+  # actual data flowing - for at least this long. A freshly spawned OS
+  # process is NOT "healthy": plenty of retryable failures (a wrong SRT
+  # passphrase, for example) let the process spawn and even accept its
+  # initial command before dying on the real handshake a few hundred
+  # milliseconds later. Resetting the budget at spawn time - the old
+  # behaviour - let that class of failure spawn/die forever at the ~1-3s
+  # starting backoff: the 30s ceiling and the "reconnecting" visibility this
+  # whole retry design exists to provide were never reached. Reusing the
+  # ceiling itself as the health bar means a route is never trusted as
+  # "recovered" faster than the worst case it would already have been
+  # waiting between attempts. This is the one place the reset happens; see
+  # `note_healthy_tick/1`.
+  @retry_budget_reset_after_healthy_ms @retry_ceiling_ms
 
   alias HydraSrt.Db
   alias HydraSrt.Helpers
@@ -57,6 +83,7 @@ defmodule HydraSrt.RouteHandler do
           required(:route_terminal) => route_terminal_t() | nil,
           required(:source_loss_since_ms) => integer() | nil,
           required(:source_loss_signal) => source_loss_signal() | nil,
+          required(:healthy_since_ms) => integer() | nil,
           required(:cooldown_until) => integer() | nil,
           required(:primary_stable_since_ms) => integer() | nil,
           required(:last_primary_probe_ms) => integer() | nil,
@@ -64,6 +91,7 @@ defmodule HydraSrt.RouteHandler do
           required(:retry_scheduled?) => boolean(),
           required(:retry_attempt) => non_neg_integer(),
           required(:retry_prev_backoff_ms) => non_neg_integer() | nil,
+          required(:retry_last_logged_ms) => integer() | nil,
           required(:retry_circuit_open?) => boolean(),
           required(:recovery_blocked?) => boolean(),
           required(:recovering?) => boolean(),
@@ -184,6 +212,7 @@ defmodule HydraSrt.RouteHandler do
       # Soft source-loss window (merged triggers B+C): one debounce clock.
       source_loss_since_ms: nil,
       source_loss_signal: nil,
+      healthy_since_ms: nil,
       cooldown_until: nil,
       primary_stable_since_ms: nil,
       last_primary_probe_ms: nil,
@@ -191,6 +220,7 @@ defmodule HydraSrt.RouteHandler do
       retry_scheduled?: false,
       retry_attempt: 0,
       retry_prev_backoff_ms: nil,
+      retry_last_logged_ms: nil,
       retry_circuit_open?: false,
       recovery_blocked?: false,
       recovering?: false
@@ -268,7 +298,15 @@ defmodule HydraSrt.RouteHandler do
     log_fun = if status == 0, do: &Logger.info/1, else: &Logger.error/1
     log_fun.("RouteHandler: native pipeline exited with status #{status}")
 
-    if status == 0 do
+    # The native process exits 0 whenever it has already emitted a route_terminal
+    # event, including a RETRYABLE one - exit code 0 means "I shut myself down
+    # cleanly", not "nothing is wrong". A clean stop with no route_terminal on
+    # record (operator-initiated stop, or the process simply ending) is the only
+    # case that should end the GenServer here; whenever a route_terminal was
+    # recorded, its own `retryable` flag (already applied when the event was
+    # consumed) is what decides whether we keep retrying or stay parked, exactly
+    # like the non-zero-exit / process-loss path below.
+    if status == 0 and is_nil(data.route_terminal) do
       {:stop, :normal, %{data | shutdown_reason: {:port_exit, 0}}}
     else
       next_data = maybe_schedule_hard_retry_after_process_loss(%{data | port: nil})
@@ -623,13 +661,25 @@ defmodule HydraSrt.RouteHandler do
               observe_source_loss(data, :reconnecting)
 
             "processing" ->
-              clear_source_loss_window(%{data | recovering?: false})
+              %{data | recovering?: false}
+              |> clear_source_loss_window()
+              |> note_healthy_tick()
 
             "failed" ->
+              # `reason` here is the legacy pipeline_status payload's own
+              # field, which native always fills with a generic bucket
+              # ("runtime_error") - it is not the specific cause. The real
+              # cause, when this failure has one, already arrived on the wire
+              # as a route_terminal event (health.rs always emits it before
+              # this line) and is on record in `data.route_terminal`. Prefer
+              # that so the operator-visible event carries the actual reason
+              # (e.g. "SRT_AUTH_FAILED") instead of the generic bucket.
+              event_reason = terminal_reason_code(data[:route_terminal]) || reason || "failed"
+
               EventLogger.log_pipeline_failed(
                 data.id,
                 data.active_source_id,
-                reason || "failed",
+                event_reason,
                 "Pipeline reported failed status"
               )
 
@@ -670,7 +720,7 @@ defmodule HydraSrt.RouteHandler do
         data
 
       {:pipeline_log, log} ->
-        publish_native_pipeline_log(data.id, log)
+        publish_native_pipeline_log(data, log)
         data
 
       {:endpoint_health, payload} ->
@@ -722,12 +772,15 @@ defmodule HydraSrt.RouteHandler do
 
   @spec clear_source_loss_on_bitrate_recovery(data_t()) :: data_t()
   def clear_source_loss_on_bitrate_recovery(data) when is_map(data) do
-    if data.recovering? do
-      HydraSrt.set_route_runtime_status(data.id, "processing")
-      clear_source_loss_window(%{data | recovering?: false})
-    else
-      clear_source_loss_window(data)
-    end
+    data =
+      if data.recovering? do
+        HydraSrt.set_route_runtime_status(data.id, "processing")
+        clear_source_loss_window(%{data | recovering?: false})
+      else
+        clear_source_loss_window(data)
+      end
+
+    note_healthy_tick(data)
   end
 
   @spec clear_source_loss_window(data_t()) :: data_t()
@@ -735,9 +788,40 @@ defmodule HydraSrt.RouteHandler do
     %{data | source_loss_since_ms: nil, source_loss_signal: nil}
   end
 
+  # See @retry_budget_reset_after_healthy_ms: this is the one place the
+  # hard-retry budget resets, and it only does so once data has actually been
+  # observed flowing continuously for that long. Idempotent once the budget
+  # is already at zero, so a route that stays healthy for hours does not
+  # keep touching retry_attempt/retry_prev_backoff_ms on every tick.
+  @spec note_healthy_tick(data_t()) :: data_t()
+  defp note_healthy_tick(data) do
+    now = now_ms()
+    healthy_since = data[:healthy_since_ms] || now
+    data = Map.put(data, :healthy_since_ms, healthy_since)
+
+    cond do
+      data.retry_attempt == 0 and is_nil(data.retry_prev_backoff_ms) ->
+        data
+
+      now - healthy_since < @retry_budget_reset_after_healthy_ms ->
+        data
+
+      true ->
+        Logger.info(
+          "RouteHandler: retry budget reset after sustained health route_id=#{data.id} healthy_ms=#{now - healthy_since}"
+        )
+
+        %{data | retry_attempt: 0, retry_prev_backoff_ms: nil}
+    end
+  end
+
   @spec observe_source_loss(data_t(), source_loss_signal()) :: data_t()
   def observe_source_loss(data, signal)
       when is_map(data) and signal in [:reconnecting, :zero_bitrate] do
+    # Data has stopped flowing - any in-progress "healthy" streak is over,
+    # regardless of the guards below; see @retry_budget_reset_after_healthy_ms.
+    data = Map.put(data, :healthy_since_ms, nil)
+
     # Single soft owner: do not race hard-retry / circuit / non-retryable terminal.
     if Map.get(data, :retry_scheduled?, false) or Map.get(data, :retry_circuit_open?, false) or
          Map.get(data, :recovery_blocked?, false) do
@@ -764,16 +848,11 @@ defmodule HydraSrt.RouteHandler do
 
   @spec trigger_source_loss_failover(data_t()) :: data_t()
   def trigger_source_loss_failover(data) when is_map(data) do
-    reason =
-      case data[:source_loss_signal] do
-        :zero_bitrate -> "source_loss"
-        :reconnecting -> "source_loss"
-        _ -> "source_loss"
-      end
+    reason = "source_loss"
 
     case next_source_for_failover(data) do
       nil ->
-        data
+        mark_source_loss_without_failover_target(data, reason)
 
       next_source ->
         case failover_to_source(data, next_source["id"], reason) do
@@ -781,6 +860,38 @@ defmodule HydraSrt.RouteHandler do
           {:error, _reason, next_data} -> next_data
           {:error, _} -> data
         end
+    end
+  end
+
+  # No backup source configured (or none eligible): the pipeline process itself
+  # is still running, so there is nothing to restart and no failover to drive -
+  # but the source has stopped delivering data and that must not read as
+  # healthy. Flip the runtime status to "reconnecting" once, on the transition
+  # into this condition; `clear_source_loss_on_bitrate_recovery/1` flips it back
+  # to "processing" by itself as soon as data resumes, and until then this is a
+  # no-op on every later stats tick so it doesn't re-log/re-write every second.
+  @spec mark_source_loss_without_failover_target(data_t(), String.t()) :: data_t()
+  defp mark_source_loss_without_failover_target(data, reason) do
+    if data.recovering? do
+      data
+    else
+      Logger.warning(
+        "RouteHandler: source loss with no failover target route_id=#{data.id} signal=#{inspect(data[:source_loss_signal])} reason=#{reason}"
+      )
+
+      EventLogger.log_pipeline_reconnecting(data.id, data.active_source_id, reason)
+
+      case HydraSrt.set_route_runtime_status(data.id, "reconnecting") do
+        {:ok, _route} ->
+          :ok
+
+        {:error, set_reason} ->
+          Logger.warning(
+            "RouteHandler: failed to mark route reconnecting: #{inspect(set_reason)}"
+          )
+      end
+
+      %{data | recovering?: true}
     end
   end
 
@@ -865,11 +976,10 @@ defmodule HydraSrt.RouteHandler do
                      last_manual_source_id: last_manual_source_id,
                      source_loss_since_ms: nil,
                      source_loss_signal: nil,
+                     healthy_since_ms: nil,
                      cooldown_until: now_ms() + cooldown_ms,
                      primary_stable_since_ms: nil,
                      primary_probe_inflight?: false,
-                     retry_attempt: 0,
-                     retry_prev_backoff_ms: nil,
                      retry_circuit_open?: false,
                      recovery_blocked?: false,
                      recovering?: true
@@ -961,6 +1071,18 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
+  # A route must never latch dead: once the far side comes back, however long
+  # that takes, the pipeline has to reconnect on its own with nobody touching
+  # it. So there is no attempt cap here - only a backoff cap. Attempts
+  # 1..@retry_max_attempts behave exactly as before (status "restarting",
+  # logged every time); once that budget is exhausted the backoff is already
+  # pinned at the ceiling and retries simply keep firing forever. That
+  # indefinite phase still has to be visible without flooding the logs, so it
+  # switches the runtime status to "reconnecting" and rate-limits its own
+  # logging/event to once per @retry_log_interval_ms instead of once per
+  # attempt.
+  @retry_log_interval_ms :timer.minutes(5)
+
   @spec schedule_retry_restart(data_t()) :: data_t()
   def schedule_retry_restart(%{retry_scheduled?: true} = data), do: data
 
@@ -969,28 +1091,69 @@ defmodule HydraSrt.RouteHandler do
   def schedule_retry_restart(%{recovery_blocked?: true} = data), do: data
 
   def schedule_retry_restart(data) when is_map(data) do
-    attempt = Map.get(data, :retry_attempt, 0)
+    attempt = Map.get(data, :retry_attempt, 0) + 1
+    delay_ms = next_retry_backoff_ms(Map.get(data, :retry_prev_backoff_ms), attempt)
 
-    if attempt >= @retry_max_attempts do
-      open_retry_circuit(data)
-    else
-      next_attempt = attempt + 1
-      delay_ms = next_retry_backoff_ms(Map.get(data, :retry_prev_backoff_ms), next_attempt)
+    data =
+      if attempt > @retry_max_attempts do
+        note_prolonged_retry(data, attempt, delay_ms)
+      else
+        Logger.info(
+          "RouteHandler: scheduling hard-retry attempt=#{attempt}/#{@retry_max_attempts} backoff_ms=#{delay_ms} route_id=#{data.id}"
+        )
 
-      Logger.info(
-        "RouteHandler: scheduling hard-retry attempt=#{next_attempt}/#{@retry_max_attempts} backoff_ms=#{delay_ms} route_id=#{data.id}"
+        data
+      end
+
+    Process.send_after(self(), :retry_start, delay_ms)
+
+    %{
+      data
+      | retry_scheduled?: true,
+        retry_attempt: attempt,
+        retry_prev_backoff_ms: delay_ms
+    }
+  end
+
+  # Past the old attempt budget: mark the route "reconnecting" (a status the UI
+  # already renders) on every attempt so it never reads as healthy or as
+  # permanently dead, but only *log*/record the reason on a slow cadence so a
+  # route that stays down all night doesn't write one line per ~30s attempt.
+  @spec note_prolonged_retry(data_t(), pos_integer(), pos_integer()) :: data_t()
+  defp note_prolonged_retry(data, attempt, delay_ms) do
+    reason_code = terminal_reason_code(data[:route_terminal])
+    now = now_ms()
+    last_logged_ms = Map.get(data, :retry_last_logged_ms)
+    due_to_log? = is_nil(last_logged_ms) or now - last_logged_ms >= @retry_log_interval_ms
+
+    if due_to_log? do
+      Logger.warning(
+        "RouteHandler: still reconnecting route_id=#{data.id} attempt=#{attempt} backoff_ms=#{delay_ms} reason=#{inspect(reason_code)}"
       )
 
-      Process.send_after(self(), :retry_start, delay_ms)
-
-      %{
-        data
-        | retry_scheduled?: true,
-          retry_attempt: next_attempt,
-          retry_prev_backoff_ms: delay_ms
-      }
+      EventLogger.log_pipeline_reconnecting(data.id, data.active_source_id, reason_code)
     end
+
+    case HydraSrt.set_route_runtime_status(data.id, "reconnecting") do
+      {:ok, _route} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("RouteHandler: failed to mark route reconnecting: #{inspect(reason)}")
+    end
+
+    %{
+      data
+      | recovering?: true,
+        retry_last_logged_ms: if(due_to_log?, do: now, else: last_logged_ms)
+    }
   end
+
+  @spec terminal_reason_code(route_terminal_t() | nil) :: String.t() | nil
+  defp terminal_reason_code(%{reason_code: reason_code}) when is_binary(reason_code),
+    do: reason_code
+
+  defp terminal_reason_code(_), do: nil
 
   @doc """
   Exponential backoff (base 1s, ×2, ceiling 30s) with AWS-style decorrelated jitter:
@@ -1016,30 +1179,6 @@ defmodule HydraSrt.RouteHandler do
     else
       :rand.uniform(upper - lower + 1) + lower - 1
     end
-  end
-
-  @spec open_retry_circuit(data_t()) :: data_t()
-  def open_retry_circuit(data) when is_map(data) do
-    Logger.error(
-      "RouteHandler: retry circuit open route_id=#{data.id} attempts=#{Map.get(data, :retry_attempt, 0)} — operator action required"
-    )
-
-    EventLogger.log_pipeline_failed(
-      data.id,
-      data.active_source_id,
-      "RETRY_CIRCUIT_OPEN",
-      "Retry budget exhausted; operator action required"
-    )
-
-    _ = HydraSrt.mark_route_failed(data.id)
-
-    %{
-      data
-      | retry_circuit_open?: true,
-        retry_scheduled?: false,
-        recovering?: false,
-        recovery_blocked?: true
-    }
   end
 
   @spec policy_deny_reason?(term()) :: boolean()
@@ -1113,6 +1252,14 @@ defmodule HydraSrt.RouteHandler do
            open_and_initialize_native_pipeline(route, data.id, source_id) do
       _ = Db.set_route_active_source(data.id, source_id, "failed")
 
+      # retry_attempt/retry_prev_backoff_ms are deliberately NOT reset here.
+      # This is a process *spawn*, not proof the route is fixed - see
+      # @retry_budget_reset_after_healthy_ms / `note_healthy_tick/1`, which is
+      # the one place that budget resets, once real data has flowed for a
+      # sustained period. Resetting on spawn let a cause that kills the
+      # process moments after every restart (e.g. a wrong SRT passphrase)
+      # pin the attempt counter at 1 forever, so the 30s backoff ceiling and
+      # the "reconnecting" visibility were never reached.
       %{
         data
         | route: route,
@@ -1123,11 +1270,10 @@ defmodule HydraSrt.RouteHandler do
           active_source_id: source_id,
           source_loss_since_ms: nil,
           source_loss_signal: nil,
+          healthy_since_ms: nil,
           cooldown_until: nil,
           primary_stable_since_ms: nil,
           primary_probe_inflight?: false,
-          retry_attempt: 0,
-          retry_prev_backoff_ms: nil,
           retry_circuit_open?: false,
           recovery_blocked?: false,
           recovering?: true
@@ -1382,6 +1528,25 @@ defmodule HydraSrt.RouteHandler do
   def normalize_runtime_status("stopped", "failure", _data), do: :ignore
   def normalize_runtime_status("starting", _reason, _data), do: :ignore
 
+  # A hard retry already in flight has already written the truthful
+  # "restarting"/"reconnecting" status for this cycle (`mark_restarting_runtime/1`
+  # or `note_prolonged_retry/3`, both called before this line runs). The
+  # native pipeline's own legacy `pipeline_status "failed"` line - emitted on
+  # every dying attempt regardless of whether Elixir has already decided to
+  # keep retrying - must not clobber that with a status the operator would
+  # read as permanently dead. Without this, a route mid hard-retry visibly
+  # flip-flopped restarting -> failed -> restarting on every single cycle and
+  # wrote an extra route_status_change row each time. `retry_scheduled?`
+  # unset/false (no retry in flight - a genuinely terminal or unclassified
+  # failure) still writes the truthful "failed".
+  def normalize_runtime_status("failed", _reason, data) when is_map(data) do
+    if Map.get(data, :retry_scheduled?, false) do
+      :ignore
+    else
+      {:update, "failed"}
+    end
+  end
+
   def normalize_runtime_status(status, _reason, _data) when is_binary(status),
     do: {:update, status}
 
@@ -1427,29 +1592,62 @@ defmodule HydraSrt.RouteHandler do
     )
   end
 
+  # `level`/`category`/`message` are always sent by the native emitter for a
+  # real pipeline_log event; a payload missing one is malformed, not a payload
+  # that merely omitted an optional field, so it is rejected loudly instead of
+  # being patched up with an invented level or message. `element` genuinely is
+  # optional on the wire and stays nil when absent. `sequence`/`observed_at_ms`
+  # are carried through so the stored row can be dated by when the native side
+  # actually observed the event, not by when this process happens to flush.
   @doc false
-  def publish_native_pipeline_log(route_id, %{} = payload) when is_binary(route_id) do
-    log = %{
-      route_id: route_id,
-      gst_ts: nil,
-      pid: nil,
-      thread_id: nil,
-      level: Map.get(payload, "level", "WARN"),
-      category: Map.get(payload, "category", "native"),
-      file: Map.get(payload, "file"),
-      line: Map.get(payload, "line"),
-      function: Map.get(payload, "function"),
-      element: Map.get(payload, "element"),
-      message: Map.get(payload, "message", "native pipeline warning"),
-      dropped_count: nil
-    }
+  @spec publish_native_pipeline_log(data_t(), json_map()) :: :ok
+  def publish_native_pipeline_log(data, %{} = payload) when is_map(data) do
+    cond do
+      not matching_process_event?(data, payload) ->
+        Logger.debug(
+          "RouteHandler: dropping stale/unknown pipeline_log route_id=#{inspect(payload["route_id"])} process_instance_id=#{inspect(payload["process_instance_id"])}"
+        )
 
-    Phoenix.PubSub.broadcast(
-      HydraSrt.PubSub,
-      "pipeline_logs",
-      {:pipeline_log, log}
-    )
+        :ok
+
+      not valid_pipeline_log_payload?(payload) ->
+        Logger.error(
+          "RouteHandler: malformed native pipeline_log payload route_id=#{data.id} payload=#{inspect(payload)}"
+        )
+
+        :ok
+
+      true ->
+        log = %{
+          route_id: data.id,
+          gst_ts: nil,
+          pid: nil,
+          thread_id: nil,
+          level: payload["level"],
+          category: payload["category"],
+          file: payload["file"],
+          line: payload["line"],
+          function: payload["function"],
+          element: payload["element"],
+          message: payload["message"],
+          sequence: payload["sequence"],
+          observed_at_ms: payload["observed_at_ms"],
+          dropped_count: nil
+        }
+
+        Phoenix.PubSub.broadcast(HydraSrt.PubSub, "pipeline_logs", {:pipeline_log, log})
+        :ok
+    end
   end
+
+  @spec valid_pipeline_log_payload?(json_map()) :: boolean()
+  defp valid_pipeline_log_payload?(payload) do
+    non_empty_binary?(payload["level"]) and non_empty_binary?(payload["category"]) and
+      non_empty_binary?(payload["message"])
+  end
+
+  @spec non_empty_binary?(term()) :: boolean()
+  defp non_empty_binary?(value), do: is_binary(value) and value != ""
 
   @doc false
   def srt_access_message(ip, allowed?, reason, nil) do
@@ -1530,8 +1728,7 @@ defmodule HydraSrt.RouteHandler do
               :normal,
               :shutdown,
               {:port_exit, 0},
-              {:port_exit, :normal},
-              {:port_exit, :epipe}
+              {:port_exit, :normal}
             ] do
     HydraSrt.mark_route_stopped(route_id)
   end
@@ -2286,19 +2483,28 @@ defmodule HydraSrt.RouteHandler do
 
   def in_cooldown?(_, _), do: false
 
+  # Whether the debounced source-loss window is old enough to act on. "Act on"
+  # does NOT mean "fail over" - `trigger_source_loss_failover/1` (the caller)
+  # still separately asks `next_source_for_failover/1` for an actual target,
+  # which is `nil` in "disabled" mode by construction
+  # (`next_enabled_source/3`). backup_mode must never gate this debounce
+  # itself: the visible "reconnecting" state a dead source produces
+  # (`mark_source_loss_without_failover_target/2`) is not a failover feature,
+  # it is the baseline truthful-status contract every route gets regardless
+  # of whether backup switching is configured. Gating it on backup_mode used
+  # to mean a "disabled"-mode route with a dead source reported "processing"
+  # all night with zero events, for as long as the dead source stayed dead -
+  # the exact silent-lie failure mode this whole retry/visibility rework
+  # exists to eliminate.
   @doc false
   @spec should_trigger_source_loss_failover?(data_t()) :: boolean()
   def should_trigger_source_loss_failover?(data) when is_map(data) do
-    mode = backup_mode(data.route)
     switch_after_ms = backup_switch_after_ms(data.route)
     cooldown_until = Map.get(data, :cooldown_until)
     now_ms = Map.get(data, :now_ms, 0)
     elapsed_ms = Map.get(data, :source_loss_elapsed_ms, 0)
 
     cond do
-      mode == "disabled" ->
-        false
-
       in_cooldown?(cooldown_until, now_ms) ->
         false
 

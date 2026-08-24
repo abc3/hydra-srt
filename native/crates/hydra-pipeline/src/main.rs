@@ -205,7 +205,7 @@ fn run_route(
             return Err(error);
         }
     };
-    let running = match linked.start() {
+    let running = match linked.start(event_sink.clone()) {
         Ok(graph) => graph,
         Err(error) => {
             drain_main_context();
@@ -288,6 +288,16 @@ fn run_runtime(
         return Err(error.into());
     }
     if event_sink.route_terminal_emitted() {
+        if event_sink.route_terminal_retryable() {
+            // A retryable route_terminal means the process is meant to be restarted,
+            // not treated as a clean stop. Exiting 0 here would be indistinguishable
+            // from an operator-requested stop to anything watching this process's exit
+            // status, which would drop the retry on the floor. Exit non-zero instead so
+            // the retryable outcome survives past this process's exit code.
+            return Err(anyhow!(
+                "route terminated for a retryable reason; see the route_terminal event for the cause"
+            ));
+        }
         return Ok(());
     }
     lifecycle.emit_stopped(stop_reason)?;
