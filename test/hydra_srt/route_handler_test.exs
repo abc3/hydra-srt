@@ -2455,6 +2455,196 @@ defmodule HydraSrt.RouteHandlerTest do
     end
   end
 
+  describe "maybe_schedule_hard_retry_after_process_loss idempotency (stubbed runtime status)" do
+    # The route_terminal line and the OS exit/EXIT message are two independent
+    # reports of the same process death, processed back-to-back in the same
+    # retry cycle. Before the idempotency guard, the second one unconditionally
+    # re-ran mark_restarting_runtime and clobbered whatever status the
+    # route_terminal path had already written (e.g. "reconnecting" once past
+    # the retry budget), so the route always rested on "restarting" instead.
+    setup do
+      :meck.new(HydraSrt.Db, [:passthrough])
+      :meck.new(HydraSrt, [:passthrough])
+      :meck.new(HydraSrt.Stats.EventLogger, [:passthrough])
+
+      :meck.expect(HydraSrt, :mark_route_failed, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :mark_route_started, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :mark_route_stopped, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt, :mark_route_terminated, fn _id -> {:ok, %{}} end)
+      :meck.expect(HydraSrt.Db, :update_route_runtime_status, fn _id, _status -> {:ok, %{}} end)
+
+      :meck.expect(HydraSrt.Stats.EventLogger, :log_pipeline_reconnecting, fn _id,
+                                                                              _source_id,
+                                                                              _reason ->
+        :ok
+      end)
+
+      on_exit(fn -> :meck.unload() end)
+      :ok
+    end
+
+    test "retry_scheduled?: true makes the redundant process-loss call a pure no-op" do
+      test_pid = self()
+
+      :meck.expect(HydraSrt, :set_route_runtime_status, fn id, status ->
+        send(test_pid, {:set_route_runtime_status, id, status})
+        {:ok, %{}}
+      end)
+
+      data =
+        base_route_data(%{
+          id: "route-idempotent-1",
+          active_source_id: "s1",
+          retry_scheduled?: true,
+          retry_attempt: 3
+        })
+
+      next = RouteHandler.maybe_schedule_hard_retry_after_process_loss(data)
+
+      assert next == data
+      refute_receive {:set_route_runtime_status, _, _}, 50
+    end
+
+    test "a full retry cycle rests on reconnecting, not restarting, once past the retry budget" do
+      test_pid = self()
+
+      :meck.expect(HydraSrt, :set_route_runtime_status, fn id, status ->
+        send(test_pid, {:set_route_runtime_status, id, status})
+        {:ok, %{}}
+      end)
+
+      port = make_ref()
+
+      data =
+        base_route_data(%{
+          id: "route-idempotent-2",
+          process_instance_id: "piid-idempotent-2",
+          active_source_id: "s1",
+          port: port,
+          retry_attempt: 5,
+          retry_prev_backoff_ms: :timer.seconds(30)
+        })
+
+      payload = %{
+        "event" => "route_terminal",
+        "route_id" => "route-idempotent-2",
+        "process_instance_id" => "piid-idempotent-2",
+        "reason_code" => "SRT_CONNECT_TIMEOUT",
+        "retryable" => true,
+        "retry_domain" => "route",
+        "detail" => "deadline",
+        "observed_at_ms" => 1,
+        "sequence" => 1
+      }
+
+      # Step 1: the native route_terminal line arrives first, exactly as it
+      # does live - past the attempt budget this writes "restarting" then
+      # "reconnecting" (mark_restarting_runtime, then note_prolonged_retry).
+      after_terminal = RouteHandler.consume_port_output(Jason.encode!(payload) <> "\n", data)
+
+      assert after_terminal.retry_scheduled? == true
+
+      # Step 2: the OS reports the same process exiting, one port line later,
+      # exactly as it does live.
+      assert {:keep_state, after_exit} =
+               RouteHandler.handle_event(
+                 :info,
+                 {port, {:exit_status, 1}},
+                 :started,
+                 after_terminal
+               )
+
+      # Exactly two status writes for the whole cycle - not three - and the
+      # cycle rests on the second one, "reconnecting", instead of being
+      # clobbered back to "restarting" by the redundant exit_status call.
+      assert_receive {:set_route_runtime_status, "route-idempotent-2", "restarting"}
+      assert_receive {:set_route_runtime_status, "route-idempotent-2", "reconnecting"}
+      refute_receive {:set_route_runtime_status, _, _}, 50
+
+      assert after_exit.port == nil
+      assert after_exit.retry_scheduled? == true
+    end
+
+    test "a retry cycle within the attempt budget writes status exactly once, not twice" do
+      test_pid = self()
+
+      :meck.expect(HydraSrt, :set_route_runtime_status, fn id, status ->
+        send(test_pid, {:set_route_runtime_status, id, status})
+        {:ok, %{}}
+      end)
+
+      port = make_ref()
+
+      data =
+        base_route_data(%{
+          id: "route-idempotent-3",
+          process_instance_id: "piid-idempotent-3",
+          active_source_id: "s1",
+          port: port,
+          retry_attempt: 0,
+          retry_prev_backoff_ms: nil
+        })
+
+      payload = %{
+        "event" => "route_terminal",
+        "route_id" => "route-idempotent-3",
+        "process_instance_id" => "piid-idempotent-3",
+        "reason_code" => "SRT_CONNECT_TIMEOUT",
+        "retryable" => true,
+        "retry_domain" => "route",
+        "detail" => "deadline",
+        "observed_at_ms" => 1,
+        "sequence" => 1
+      }
+
+      after_terminal = RouteHandler.consume_port_output(Jason.encode!(payload) <> "\n", data)
+
+      assert {:keep_state, _after_exit} =
+               RouteHandler.handle_event(
+                 :info,
+                 {port, {:exit_status, 1}},
+                 :started,
+                 after_terminal
+               )
+
+      # Below the attempt budget, mark_restarting_runtime is the only write in
+      # the whole cycle - one transition, not the two it took before the
+      # guard (a redundant second "restarting" write from the exit_status
+      # message).
+      assert_receive {:set_route_runtime_status, "route-idempotent-3", "restarting"}
+      refute_receive {:set_route_runtime_status, _, _}, 50
+    end
+
+    test "a process that dies without ever emitting a route_terminal still schedules a retry" do
+      test_pid = self()
+
+      :meck.expect(HydraSrt, :set_route_runtime_status, fn id, status ->
+        send(test_pid, {:set_route_runtime_status, id, status})
+        {:ok, %{}}
+      end)
+
+      port = make_ref()
+
+      data =
+        base_route_data(%{
+          id: "route-idempotent-4",
+          active_source_id: "s1",
+          port: port,
+          route_terminal: nil,
+          retry_scheduled?: false
+        })
+
+      assert {:keep_state, next} =
+               RouteHandler.handle_event(:info, {port, {:exit_status, 1}}, :started, data)
+
+      assert next.port == nil
+      assert next.retry_scheduled? == true
+      assert next.retry_attempt == 1
+      assert_receive {:set_route_runtime_status, "route-idempotent-4", "restarting"}
+      assert_receive :retry_start, next.retry_prev_backoff_ms + 100
+    end
+  end
+
   describe "get_endpoint_health/1" do
     # Spawns a real RouteHandler (:gen_statem). Start failure → mark_restarting_runtime
     # and terminate → mark_route_stopped both reach HydraSrt → Db.*_with_previous → Repo.
