@@ -1,0 +1,95 @@
+name: Version Bump
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    types: [ opened, synchronize, reopened ]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: version-bump-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  version_bump:
+    name: Bump VERSION If Untouched
+    runs-on: ubuntu-latest
+    # Forks cannot be pushed to with the workflow token, and Dependabot runs get a
+    # read-only token regardless of the `permissions` block above.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Check out the PR branch itself, not the ephemeral merge commit,
+          # so the bump commit can be pushed back to it.
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.VERSION_BUMP_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Compare VERSION against base branch
+        id: check
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+
+          semver_re='^[0-9]+\.[0-9]+\.[0-9]+$'
+
+          git fetch --no-tags origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+
+          base_version="$(git show "origin/${BASE_BRANCH}:VERSION" | tr -d '[:space:]')"
+          head_version="$(tr -d '[:space:]' < VERSION)"
+
+          if ! [[ "${base_version}" =~ ${semver_re} ]]; then
+            echo "::error::VERSION on ${BASE_BRANCH} is not X.Y.Z: '${base_version}'"
+            exit 1
+          fi
+          if ! [[ "${head_version}" =~ ${semver_re} ]]; then
+            echo "::error::VERSION on this branch is not X.Y.Z: '${head_version}'"
+            exit 1
+          fi
+
+          echo "base (${BASE_BRANCH}): ${base_version}"
+          echo "head (PR):            ${head_version}"
+
+          # Already ahead of the base branch: the author bumped it themselves.
+          if [ "${head_version}" != "${base_version}" ] && \
+             [ "$(printf '%s\n%s\n' "${base_version}" "${head_version}" | sort -V | tail -n1)" = "${head_version}" ]; then
+            echo "VERSION is already bumped, nothing to do."
+            echo "bump=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Not bumped (or bumped backwards) -> patch-bump the base version.
+          IFS='.' read -r major minor patch <<< "${base_version}"
+          new_version="${major}.${minor}.$((patch + 1))"
+
+          echo "bump=true" >> "$GITHUB_OUTPUT"
+          echo "new_version=${new_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit bumped VERSION
+        if: steps.check.outputs.bump == 'true'
+        env:
+          NEW_VERSION: ${{ steps.check.outputs.new_version }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_ID: ${{ github.event.pull_request.user.id }}
+        run: |
+          set -euo pipefail
+
+          printf '%s\n' "${NEW_VERSION}" > VERSION
+
+          # Attribute the bump to the PR author so no bot shows up in the
+          # repository contributor list.
+          git config user.name  "${PR_AUTHOR}"
+          git config user.email "${PR_AUTHOR_ID}+${PR_AUTHOR}@users.noreply.github.com"
+          git add VERSION
+          git commit -m "chore(version): bump VERSION to ${NEW_VERSION}"
+          git push origin "HEAD:refs/heads/${HEAD_BRANCH}"
+
+          echo "::notice::VERSION bumped to ${NEW_VERSION}"
