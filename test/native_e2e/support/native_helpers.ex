@@ -806,11 +806,17 @@ defmodule HydraSrt.E2E.Native.Helpers do
   end
 
   @doc """
-  Starts a real `gst-launch-1.0` SRT listener fixture: a live encoded video test
-  pattern served over `srtsink` in listener mode on `port`, optionally protected by
+  Starts a real `gst-launch-1.0` SRT listener fixture: a live encoded audio test
+  tone served over `srtsink` in listener mode on `port`, optionally protected by
   a passphrase. Used to be the "far side" peer for tests that exercise a native
   route's SRT *caller*-mode source against a real SRT connection, without depending
   on a second copy of the pipeline under test.
+
+  Audio-only (not video): this fixture only has to prove out a valid MPEG-TS
+  byte stream reaching `srtsrc` - the source/destination adapters and the health
+  monitors below key off buffer/byte arrival, never codec or media kind, and
+  `avenc_aac` is far cheaper than an H.264 encode on a CI runner (it also drops
+  the `gstreamer1.0-plugins-ugly` dependency that `x264enc` needed).
 
   Pass `no_data: true` to keep the listener accepting SRT connections while never
   emitting any media: a `valve` sits right after the test source with
@@ -824,16 +830,48 @@ defmodule HydraSrt.E2E.Native.Helpers do
   for a port nothing is listening on at all and so cannot be used to make that case
   deterministic.
 
+  Pass `data_after_ms: n` instead to keep the *same connection* alive the whole
+  time but start sending real media only after `n` milliseconds of wall-clock
+  silence: a `concat` feeds `srtsink` from two `audiotestsrc` branches requested
+  in order - the first is gated by the same drop-all `valve` as `no_data: true`
+  and capped at the number of `is-live` buffers that take `n` milliseconds to
+  produce, the second is a plain, ungated `audiotestsrc`. `concat` only moves on
+  to its next requested pad once the current one reports EOS, so the first branch
+  running out of buffers is what flips the switch - no bus watch, timer, or
+  external property toggle touches the pipeline after launch. This is the peer
+  for tests that need one still-connected caller to observe silence and then
+  real throughput in sequence (e.g. recovering from `SRT_NO_DATA_SINCE_START`
+  once its already-connected peer starts sending), as opposed to `no_data: true`
+  or a dropped/replaced connection.
+
+  `no_data: true` and `data_after_ms` are mutually exclusive.
+
   Returns `%{port, os_pid, log_path}`; verified alive after a short settle window,
   the same way `start_gst_ndi_sender!/1` is - a listener that fails to bind (e.g. the
   port is already taken) must not be indistinguishable from "the caller just hasn't
   connected yet".
   """
+  @srt_listener_rate 48_000
+  # 480 samples @ 48kHz = exactly 10ms/buffer, so ms-to-buffer-count math below is exact.
+  @srt_listener_samples_per_buffer 480
+  @srt_listener_ms_per_buffer div(@srt_listener_samples_per_buffer * 1000, @srt_listener_rate)
+  @srt_listener_caps "audio/x-raw,rate=#{@srt_listener_rate},channels=2"
+  @srt_listener_source [
+    "audiotestsrc",
+    "is-live=true",
+    "samplesperbuffer=#{@srt_listener_samples_per_buffer}"
+  ]
+
   def start_gst_srt_listener!(srt_port, opts \\ []) do
     passphrase = Keyword.get(opts, :passphrase)
     pbkeylen = Keyword.get(opts, :pbkeylen, 16)
     no_data? = Keyword.get(opts, :no_data, false)
+    data_after_ms = Keyword.get(opts, :data_after_ms)
     tag = "gst_srt_listener_#{System.unique_integer([:positive])}"
+
+    if no_data? and data_after_ms do
+      raise ArgumentError, "no_data: true and data_after_ms are mutually exclusive"
+    end
 
     uri_query =
       if is_binary(passphrase) do
@@ -842,34 +880,72 @@ defmodule HydraSrt.E2E.Native.Helpers do
         "mode=listener"
       end
 
-    gate =
-      if no_data? do
-        ["!", "valve", "drop=true", "drop-mode=forward-sticky-events"]
-      else
-        []
-      end
+    encode_and_send = [
+      "!",
+      "avenc_aac",
+      "!",
+      "aacparse",
+      "!",
+      "mpegtsmux",
+      "!",
+      "srtsink",
+      "uri=srt://0.0.0.0:#{srt_port}?#{uri_query}",
+      "wait-for-connection=false"
+    ]
 
     pipeline =
-      [
-        "videotestsrc",
-        "is-live=true"
-      ] ++
-        gate ++
-        [
-          "!",
-          "video/x-raw,width=320,height=240,framerate=15/1",
-          "!",
-          "x264enc",
-          "tune=zerolatency",
-          "speed-preset=ultrafast",
-          "key-int-max=15",
-          "!",
-          "mpegtsmux",
-          "!",
-          "srtsink",
-          "uri=srt://0.0.0.0:#{srt_port}?#{uri_query}",
-          "wait-for-connection=false"
-        ]
+      cond do
+        data_after_ms ->
+          # `n` milliseconds of `is-live` buffers, rounded up so the gated branch
+          # never runs *short* of the requested silence window.
+          gated_buffers =
+            div(data_after_ms + @srt_listener_ms_per_buffer - 1, @srt_listener_ms_per_buffer)
+
+          [
+            "concat",
+            "name=c",
+            "!",
+            @srt_listener_caps
+          ] ++
+            encode_and_send ++
+            @srt_listener_source ++
+            [
+              "num-buffers=#{gated_buffers}",
+              "!",
+              "valve",
+              "drop=true",
+              "drop-mode=forward-sticky-events",
+              "!",
+              @srt_listener_caps,
+              "!",
+              "c."
+            ] ++
+            @srt_listener_source ++
+            [
+              "!",
+              @srt_listener_caps,
+              "!",
+              "c."
+            ]
+
+        no_data? ->
+          @srt_listener_source ++
+            [
+              "!",
+              "valve",
+              "drop=true",
+              "drop-mode=forward-sticky-events",
+              "!",
+              @srt_listener_caps
+            ] ++ encode_and_send
+
+        true ->
+          @srt_listener_source ++
+            [
+              "!",
+              @srt_listener_caps
+            ] ++ encode_and_send
+      end
 
     case System.find_executable("gst-launch-1.0") do
       nil ->
