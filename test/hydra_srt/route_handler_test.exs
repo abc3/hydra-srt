@@ -47,6 +47,7 @@ defmodule HydraSrt.RouteHandlerTest do
         route_terminal: nil,
         source_loss_since_ms: nil,
         source_loss_signal: nil,
+        source_data_seen?: false,
         healthy_since_ms: nil,
         cooldown_until: nil,
         primary_stable_since_ms: nil,
@@ -825,6 +826,82 @@ defmodule HydraSrt.RouteHandlerTest do
 
       on_exit(fn -> :meck.unload() end)
       :ok
+    end
+
+    test "idle listener source does not turn zero bitrate into reconnecting" do
+      data =
+        base_route_data(%{
+          id: "route-idle-listener",
+          active_source_id: "listener-1",
+          route: %{
+            "backup_mode" => "disabled",
+            "backup_switch_after_ms" => 0,
+            "sources" => [
+              %{
+                "id" => "listener-1",
+                "enabled" => true,
+                "schema" => "SRT",
+                "mode" => "listener"
+              }
+            ]
+          }
+        })
+
+      assert RouteHandler.listener_source_waiting?(data)
+      assert RouteHandler.normalize_runtime_status("reconnecting", nil, data) == :ignore
+
+      assert RouteHandler.maybe_handle_zero_bitrate(data, %{
+               "source" => %{"bytes_in_per_sec" => 0}
+             }) == data
+
+      refute_receive {:log_pipeline_reconnecting, _, _, _}, 50
+    end
+
+    test "listener source that delivered data still becomes reconnecting when it stops" do
+      route_id = "route-listener-loss"
+      test_pid = self()
+
+      :meck.expect(HydraSrt, :set_route_runtime_status, fn id, status ->
+        send(test_pid, {:set_route_runtime_status, id, status})
+        {:ok, %{}}
+      end)
+
+      :meck.expect(HydraSrt.Stats.EventLogger, :log_pipeline_reconnecting, fn id,
+                                                                              source_id,
+                                                                              reason ->
+        send(test_pid, {:log_pipeline_reconnecting, id, source_id, reason})
+        :ok
+      end)
+
+      data =
+        base_route_data(%{
+          id: route_id,
+          active_source_id: "listener-1",
+          source_data_seen?: true,
+          route: %{
+            "backup_mode" => "disabled",
+            "backup_switch_after_ms" => 0,
+            "sources" => [
+              %{
+                "id" => "listener-1",
+                "enabled" => true,
+                "schema" => "SRT",
+                "mode" => "listener"
+              }
+            ]
+          }
+        })
+
+      refute RouteHandler.listener_source_waiting?(data)
+
+      next =
+        RouteHandler.maybe_handle_zero_bitrate(data, %{
+          "source" => %{"bytes_in_per_sec" => 0}
+        })
+
+      assert next.recovering? == true
+      assert_receive {:set_route_runtime_status, ^route_id, "reconnecting"}
+      assert_receive {:log_pipeline_reconnecting, ^route_id, "listener-1", "source_loss"}
     end
 
     test "single-source route in zero-bitrate marks the route reconnecting instead of doing nothing" do
@@ -2167,6 +2244,8 @@ defmodule HydraSrt.RouteHandlerTest do
       data = %{
         id: "route-health-1",
         process_instance_id: "piid-live",
+        active_source_id: "ep-src",
+        source_data_seen?: false,
         endpoint_health: %{},
         route_terminal: nil,
         port_buffer: ""
@@ -2177,6 +2256,7 @@ defmodule HydraSrt.RouteHandlerTest do
         "route_id" => "route-health-1",
         "process_instance_id" => "piid-live",
         "endpoint_id" => "ep-src",
+        "direction" => "source",
         "state" => "streaming",
         "sequence" => 3
       }
@@ -2184,6 +2264,7 @@ defmodule HydraSrt.RouteHandlerTest do
       next = RouteHandler.consume_port_output(Jason.encode!(payload) <> "\n", data)
 
       assert next.endpoint_health["ep-src"]["state"] == "streaming"
+      assert next.source_data_seen?
       assert_receive {:endpoint_health, ^payload}
     end
 

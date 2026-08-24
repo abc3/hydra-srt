@@ -40,11 +40,12 @@ pub const SRT_NO_DATA_REPEAT_CADENCE_MS: u64 = 60_000;
 /// the no-data threshold above.
 const SRT_HEALTH_LOG_CATEGORY: &str = "srt_health";
 
-/// Watches a caller/rendezvous SRT source for its first buffer. If no buffer has
+/// Watches a caller/rendezvous SRT source for received-byte progress. If no bytes have
 /// arrived by `SRT_NO_DATA_SINCE_START_THRESHOLD_MS`, it reports the source unhealthy
-/// (non-terminal `endpoint_health`, plus one `pipeline_log` line) and keeps repeating
-/// that report every `SRT_NO_DATA_REPEAT_CADENCE_MS` for as long as the situation
-/// persists. Once a buffer does arrive, it reports the source healthy again. It never
+/// with `SRT_NO_DATA_SINCE_START`. Once bytes have been received, an unchanged
+/// `bytes-received-total` value reports `SRT_DATA_STALLED_AFTER_START` on the same
+/// cadence used by destinations. A pad probe still reports recovery immediately when
+/// a buffer returns; the counter is used for the periodic stalled check. It never
 /// touches pipeline or route lifecycle - `srtsrc` is left to retry on its own.
 #[derive(Clone)]
 pub struct SrtSourceHealthMonitor {
@@ -86,6 +87,8 @@ impl SrtSourceHealthMonitor {
 
         let ever_data = self.ever_data.clone();
         let reported_unhealthy = self.reported_unhealthy.clone();
+        let last_received_total = Arc::new(Mutex::new(None));
+        let source = self.source.clone();
         let element_name = self.source.name().to_string();
 
         // The probe gives an immediate signal the moment data actually starts
@@ -106,57 +109,216 @@ impl SrtSourceHealthMonitor {
                         "SRT source began receiving data",
                     );
                 }
-                gst::PadProbeReturn::Remove
+                gst::PadProbeReturn::Ok
             },
         );
 
         let pipeline = pipeline.clone();
         let threshold_secs = threshold.as_secs();
         glib::timeout_add_once(threshold, move || {
-            if pipeline.current_state() == gst::State::Null || ever_data.load(Ordering::Acquire) {
+            if pipeline.current_state() == gst::State::Null {
                 return;
             }
-            let detail = format!(
-                "no data received from element \"{element_name}\" within {threshold_secs}s of \
-                 starting; the SRT source keeps retrying the connection on its own"
-            );
-            emit_no_data_report(
-                &event_sink,
-                &endpoint_id,
-                EndpointDirection::Source,
-                ErrorCode::SrtNoDataSinceStart,
-                &detail,
-            );
-            emit_no_data_log(&event_sink, Some(&element_name), &detail);
-            reported_unhealthy.store(true, Ordering::Release);
-
-            // Close the race against the pad probe above: if a buffer arrived between
-            // the `ever_data.load` check at the top of this callback and the
-            // `reported_unhealthy.store` just above, the probe ran while
-            // `reported_unhealthy` was still false - it had nothing to recover from
-            // yet, so it emitted nothing. Recheck now and, if data has in fact
-            // arrived in that window, report the recovery immediately instead of
-            // leaving the "no data" report just emitted above standing until the next
-            // `cadence` tick (up to `SRT_NO_DATA_REPEAT_CADENCE_MS` later).
-            if recover_immediately_if_data_arrived(
+            process_source_tick(
+                &source,
+                &last_received_total,
                 &ever_data,
                 &reported_unhealthy,
                 &event_sink,
                 &endpoint_id,
-            ) {
-                return;
-            }
-
-            schedule_repeat(
+                &element_name,
+                threshold_secs,
+            );
+            let _ = recover_immediately_if_data_arrived(
+                &ever_data,
+                &reported_unhealthy,
+                &event_sink,
+                &endpoint_id,
+            );
+            schedule_source_repeat(
                 pipeline,
+                source,
+                last_received_total,
                 ever_data,
                 reported_unhealthy,
                 event_sink,
                 endpoint_id,
-                EndpointDirection::Source,
+                element_name,
+                threshold_secs,
                 cadence,
             );
         });
+    }
+}
+
+/// What reading an SRT source's `bytes-received-total` stats field found. The field
+/// is published by `srtsrc` as `guint64`; the exact type is checked rather than
+/// turning a type mismatch into an indistinguishable no-data reading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BytesReceivedReading {
+    Absent,
+    Present(u64),
+    WrongType(String),
+}
+
+fn read_bytes_received(stats: Option<&gst::StructureRef>) -> BytesReceivedReading {
+    let Some(stats) = stats else {
+        return BytesReceivedReading::Absent;
+    };
+    if !stats.has_field("bytes-received-total") {
+        return BytesReceivedReading::Absent;
+    }
+    match stats.get::<u64>("bytes-received-total") {
+        Ok(total) => BytesReceivedReading::Present(total),
+        Err(error) => BytesReceivedReading::WrongType(format!(
+            "\"bytes-received-total\" is present but not readable as u64: {error}"
+        )),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceProgress {
+    NeverReceived,
+    Advancing,
+    Stalled,
+}
+
+fn evaluate_source_progress(
+    previous: Option<u64>,
+    reading: &BytesReceivedReading,
+) -> (SourceProgress, Option<u64>) {
+    match *reading {
+        BytesReceivedReading::Absent | BytesReceivedReading::WrongType(_) => match previous {
+            Some(previous_total) => (SourceProgress::Stalled, Some(previous_total)),
+            None => (SourceProgress::NeverReceived, None),
+        },
+        BytesReceivedReading::Present(total) if total == 0 && previous.is_none() => {
+            (SourceProgress::NeverReceived, None)
+        }
+        BytesReceivedReading::Present(total) => match previous {
+            Some(previous_total) if total <= previous_total => {
+                (SourceProgress::Stalled, Some(total))
+            }
+            _ => (SourceProgress::Advancing, Some(total)),
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn process_source_tick(
+    source: &gst::Element,
+    last_received_total: &Mutex<Option<u64>>,
+    ever_data: &AtomicBool,
+    reported_unhealthy: &AtomicBool,
+    event_sink: &EventSink,
+    endpoint_id: &str,
+    element_name: &str,
+    threshold_secs: u64,
+) {
+    let stats = if source.has_property("stats", None) {
+        source.property::<Option<gst::Structure>>("stats")
+    } else {
+        None
+    };
+    apply_source_reading(
+        read_bytes_received(stats.as_deref()),
+        last_received_total,
+        ever_data,
+        reported_unhealthy,
+        event_sink,
+        endpoint_id,
+        element_name,
+        threshold_secs,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_source_reading(
+    reading: BytesReceivedReading,
+    last_received_total: &Mutex<Option<u64>>,
+    ever_data: &AtomicBool,
+    reported_unhealthy: &AtomicBool,
+    event_sink: &EventSink,
+    endpoint_id: &str,
+    element_name: &str,
+    threshold_secs: u64,
+) {
+    if let BytesReceivedReading::WrongType(detail) = &reading {
+        emit_stats_type_error_log(event_sink, element_name, detail);
+    }
+
+    let mut baseline = last_received_total
+        .lock()
+        .expect("source progress lock poisoned");
+    let (progress, updated) = evaluate_source_progress(*baseline, &reading);
+    *baseline = updated;
+    drop(baseline);
+
+    // A pad buffer can arrive before the plugin exposes its first stats structure.
+    // The pad probe already emits the immediate recovery in that case; do not turn
+    // the missing initial snapshot into a second false failure.
+    if progress == SourceProgress::NeverReceived
+        && ever_data.load(Ordering::Acquire)
+        && matches!(reading, BytesReceivedReading::Absent)
+    {
+        return;
+    }
+
+    match progress {
+        SourceProgress::Advancing => {
+            if reported_unhealthy.swap(false, Ordering::AcqRel) {
+                emit_recovered(
+                    event_sink,
+                    endpoint_id,
+                    EndpointDirection::Source,
+                    "data resumed",
+                );
+            }
+        }
+        SourceProgress::NeverReceived => {
+            let was_unhealthy = reported_unhealthy.swap(true, Ordering::AcqRel);
+            let detail = if was_unhealthy {
+                "still no data received since starting; retrying automatically".to_owned()
+            } else {
+                format!(
+                    "no data received from element \"{element_name}\" within {threshold_secs}s of \
+                     starting; the SRT source keeps retrying the connection on its own"
+                )
+            };
+            if !was_unhealthy {
+                emit_no_data_log(event_sink, Some(element_name), &detail);
+            }
+            emit_no_data_report(
+                event_sink,
+                endpoint_id,
+                EndpointDirection::Source,
+                ErrorCode::SrtNoDataSinceStart,
+                &detail,
+            );
+        }
+        SourceProgress::Stalled => {
+            let was_unhealthy = reported_unhealthy.swap(true, Ordering::AcqRel);
+            let detail = if was_unhealthy {
+                "still no received-byte progress since it stalled; retrying automatically"
+                    .to_owned()
+            } else {
+                format!(
+                    "element \"{element_name}\" received data earlier but the received-byte \
+                     counter has not advanced since the last check; the SRT source appears to \
+                     have gone dark after a working connection"
+                )
+            };
+            if !was_unhealthy {
+                emit_no_data_log(event_sink, Some(element_name), &detail);
+            }
+            emit_no_data_report(
+                event_sink,
+                endpoint_id,
+                EndpointDirection::Source,
+                ErrorCode::SrtDataStalledAfterStart,
+                &detail,
+            );
+        }
     }
 }
 
@@ -487,33 +649,36 @@ fn apply_destination_reading(
     }
 }
 
+/// Runs source progress checks on every cadence tick for as long as the pipeline is
+/// alive. Unlike the old first-buffer watcher, this deliberately does not stop once
+/// the first buffer has arrived: a later unchanged receive counter is the source's
+/// stalled-after-start condition.
 #[allow(clippy::too_many_arguments)]
-fn schedule_repeat(
+fn schedule_source_repeat(
     pipeline: gst::Pipeline,
+    source: gst::Element,
+    last_received_total: Arc<Mutex<Option<u64>>>,
     ever_data: Arc<AtomicBool>,
     reported_unhealthy: Arc<AtomicBool>,
     event_sink: EventSink,
     endpoint_id: String,
-    direction: EndpointDirection,
+    element_name: String,
+    threshold_secs: u64,
     cadence: Duration,
 ) {
     glib::timeout_add(cadence, move || {
         if pipeline.current_state() == gst::State::Null {
             return glib::ControlFlow::Break;
         }
-        if ever_data.load(Ordering::Acquire) {
-            if reported_unhealthy.swap(false, Ordering::AcqRel) {
-                emit_recovered(&event_sink, &endpoint_id, direction, "data resumed");
-            }
-            return glib::ControlFlow::Break;
-        }
-        let detail = "still no data since starting; retrying automatically";
-        emit_no_data_report(
+        process_source_tick(
+            &source,
+            &last_received_total,
+            &ever_data,
+            &reported_unhealthy,
             &event_sink,
             &endpoint_id,
-            direction,
-            ErrorCode::SrtNoDataSinceStart,
-            detail,
+            &element_name,
+            threshold_secs,
         );
         glib::ControlFlow::Continue
     });
@@ -1253,6 +1418,86 @@ mod tests {
             }
             other => panic!("expected WrongType, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn read_bytes_received_reads_the_real_type_srtsrc_publishes_it_as() {
+        let zero = gst::Structure::builder("stats")
+            .field("bytes-received-total", 0u64)
+            .build();
+        assert_eq!(
+            read_bytes_received(Some(zero.as_ref())),
+            BytesReceivedReading::Present(0)
+        );
+
+        let received = gst::Structure::builder("stats")
+            .field("bytes-received-total", 42u64)
+            .build();
+        assert_eq!(
+            read_bytes_received(Some(received.as_ref())),
+            BytesReceivedReading::Present(42)
+        );
+    }
+
+    #[test]
+    fn source_stall_detection_uses_a_real_srtsrc_stats_structure_and_recovers() {
+        // Capture the actual stats structure from a connected srtsrc first. The
+        // received-byte field is a guint64 in the running GStreamer plugin; the
+        // state machine below is then driven with structures using that captured
+        // field and type, rather than an invented Rust fixture type.
+        let (listener, sender, _sink) = real_loopback_srt_pair(14803, 5);
+        let source = listener.by_name("src").expect("source element present");
+        let captured = source.property::<Option<gst::Structure>>("stats");
+        let captured_total = match read_bytes_received(captured.as_deref()) {
+            BytesReceivedReading::Present(total) if total > 0 => total,
+            other => panic!(
+                "expected positive bytes-received-total from a real connected srtsrc, got {other:?}"
+            ),
+        };
+
+        let baseline = Mutex::new(None);
+        let ever_data = AtomicBool::new(true);
+        let reported_unhealthy = AtomicBool::new(false);
+        let (event_sink, messages) = test_event_sink();
+        let captured_stats = gst::Structure::builder("application/x-srt-statistics")
+            .field("bytes-received-total", captured_total)
+            .build();
+        let stalled_stats = gst::Structure::builder("application/x-srt-statistics")
+            .field("bytes-received-total", captured_total)
+            .build();
+        let recovered_stats = gst::Structure::builder("application/x-srt-statistics")
+            .field("bytes-received-total", captured_total + 1)
+            .build();
+
+        let apply = |stats: &gst::Structure| {
+            apply_source_reading(
+                read_bytes_received(Some(stats.as_ref())),
+                &baseline,
+                &ever_data,
+                &reported_unhealthy,
+                &event_sink,
+                "source-1",
+                "srtsrc0",
+                30,
+            );
+        };
+
+        apply(&captured_stats);
+        apply(&stalled_stats);
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["state"], "failed");
+        assert_eq!(events[0]["reason_code"], "SRT_DATA_STALLED_AFTER_START");
+
+        apply(&recovered_stats);
+        let events = events_named(&messages, "endpoint_health");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1]["state"], "streaming");
+
+        listener
+            .set_state(gst::State::Null)
+            .expect("listener stops");
+        sender.set_state(gst::State::Null).expect("sender stops");
     }
 
     #[test]

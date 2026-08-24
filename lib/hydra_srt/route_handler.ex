@@ -83,6 +83,7 @@ defmodule HydraSrt.RouteHandler do
           required(:route_terminal) => route_terminal_t() | nil,
           required(:source_loss_since_ms) => integer() | nil,
           required(:source_loss_signal) => source_loss_signal() | nil,
+          required(:source_data_seen?) => boolean(),
           required(:healthy_since_ms) => integer() | nil,
           required(:cooldown_until) => integer() | nil,
           required(:primary_stable_since_ms) => integer() | nil,
@@ -212,6 +213,7 @@ defmodule HydraSrt.RouteHandler do
       # Soft source-loss window (merged triggers B+C): one debounce clock.
       source_loss_since_ms: nil,
       source_loss_signal: nil,
+      source_data_seen?: false,
       healthy_since_ms: nil,
       cooldown_until: nil,
       primary_stable_since_ms: nil,
@@ -249,6 +251,7 @@ defmodule HydraSrt.RouteHandler do
              route_terminal: nil,
              source_loss_since_ms: nil,
              source_loss_signal: nil,
+             source_data_seen?: false,
              retry_attempt: 0,
              retry_prev_backoff_ms: nil,
              retry_circuit_open?: false,
@@ -657,8 +660,12 @@ defmodule HydraSrt.RouteHandler do
         data =
           case status do
             "reconnecting" ->
-              EventLogger.log_pipeline_reconnecting(data.id, data.active_source_id)
-              observe_source_loss(data, :reconnecting)
+              if listener_source_waiting?(data) do
+                data
+              else
+                EventLogger.log_pipeline_reconnecting(data.id, data.active_source_id)
+                observe_source_loss(data, :reconnecting)
+              end
 
             "processing" ->
               %{data | recovering?: false}
@@ -763,10 +770,36 @@ defmodule HydraSrt.RouteHandler do
   def maybe_handle_zero_bitrate(data, stats) when is_map(data) and is_map(stats) do
     bytes_in = get_in(stats, ["source", "bytes_in_per_sec"])
 
-    if is_number(bytes_in) and bytes_in == 0 do
-      observe_source_loss(data, :zero_bitrate)
+    cond do
+      is_number(bytes_in) and bytes_in > 0 ->
+        data
+        |> Map.put(:source_data_seen?, true)
+        |> clear_source_loss_on_bitrate_recovery()
+
+      is_number(bytes_in) and bytes_in == 0 and listener_source_waiting?(data) ->
+        data
+
+      is_number(bytes_in) and bytes_in == 0 ->
+        observe_source_loss(data, :zero_bitrate)
+
+      true ->
+        clear_source_loss_on_bitrate_recovery(data)
+    end
+  end
+
+  @doc false
+  @spec listener_source_waiting?(data_t()) :: boolean()
+  def listener_source_waiting?(data) when is_map(data) do
+    sources = data.route["sources"]
+    active_source_id = data.active_source_id
+
+    if is_list(sources) and is_binary(active_source_id) and data.source_data_seen? == false do
+      case Enum.find(sources, &(&1["id"] == active_source_id)) do
+        %{"schema" => "SRT", "mode" => "listener"} -> true
+        _ -> false
+      end
     else
-      clear_source_loss_on_bitrate_recovery(data)
+      false
     end
   end
 
@@ -976,6 +1009,7 @@ defmodule HydraSrt.RouteHandler do
                      last_manual_source_id: last_manual_source_id,
                      source_loss_since_ms: nil,
                      source_loss_signal: nil,
+                     source_data_seen?: false,
                      healthy_since_ms: nil,
                      cooldown_until: now_ms() + cooldown_ms,
                      primary_stable_since_ms: nil,
@@ -1270,6 +1304,7 @@ defmodule HydraSrt.RouteHandler do
           active_source_id: source_id,
           source_loss_since_ms: nil,
           source_loss_signal: nil,
+          source_data_seen?: false,
           healthy_since_ms: nil,
           cooldown_until: nil,
           primary_stable_since_ms: nil,
@@ -1412,7 +1447,15 @@ defmodule HydraSrt.RouteHandler do
         |> Map.put(endpoint_id, payload)
 
       publish_endpoint_health(data.id, payload)
-      %{data | endpoint_health: next_health}
+
+      data = %{data | endpoint_health: next_health}
+
+      if endpoint_id == data.active_source_id and payload["direction"] == "source" and
+           payload["state"] == "streaming" do
+        Map.put(data, :source_data_seen?, true)
+      else
+        data
+      end
     else
       Logger.debug(
         "RouteHandler: dropping stale/unknown endpoint_health route_id=#{inspect(payload["route_id"])} process_instance_id=#{inspect(payload["process_instance_id"])}"
@@ -1527,6 +1570,14 @@ defmodule HydraSrt.RouteHandler do
   def normalize_runtime_status(status, reason), do: normalize_runtime_status(status, reason, %{})
   def normalize_runtime_status("stopped", "failure", _data), do: :ignore
   def normalize_runtime_status("starting", _reason, _data), do: :ignore
+
+  def normalize_runtime_status("reconnecting", _reason, data) when is_map(data) do
+    if listener_source_waiting?(data) do
+      :ignore
+    else
+      {:update, "reconnecting"}
+    end
+  end
 
   # A hard retry already in flight has already written the truthful
   # "restarting"/"reconnecting" status for this cycle (`mark_restarting_runtime/1`
