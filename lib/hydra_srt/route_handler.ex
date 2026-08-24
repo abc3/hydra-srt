@@ -1094,6 +1094,8 @@ defmodule HydraSrt.RouteHandler do
   def close_existing_port(_), do: :ok
 
   @spec maybe_schedule_hard_retry_after_process_loss(data_t()) :: data_t()
+  def maybe_schedule_hard_retry_after_process_loss(%{retry_scheduled?: true} = data), do: data
+
   def maybe_schedule_hard_retry_after_process_loss(data) when is_map(data) do
     if Map.get(data, :recovery_blocked?, false) or Map.get(data, :retry_circuit_open?, false) or
          non_retryable_terminal?(data[:route_terminal]) do
