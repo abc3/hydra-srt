@@ -3,11 +3,14 @@ ERL_AFLAGS = +zdbbl 2097150
 user ?= admin
 pass ?= password123
 
-help:
-	@make -qpRr | egrep -e '^[a-z].*:$$' | sed -e 's~:~~g' | sort
+.PHONY: help ci precommit quality fmt fmt.check credo dialyzer audit reach ex_dna
+
+help: ## Show the list of targets and short descriptions
+	@echo "HydraSRT — available make targets:"
+	@grep -E '^[a-zA-Z0-9_.-]+:.*##' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*##"}; {printf "  %-16s %s\n", $$1, $$2}'
 
 .PHONY: dev
-dev:
+dev: ## Start the application in development mode
 	@echo "Cleaning stale dev processes on :4000 and :5173 (if any)..."
 	@for port in 4000 5173; do \
 		pids=$$(lsof -tiTCP:$$port -sTCP:LISTEN 2>/dev/null); \
@@ -25,6 +28,36 @@ dev:
 	NDI_FEATURE=true \
 	ERL_AFLAGS="-kernel shell_history enabled +zdbbl 2097151" \
 	iex --name hydra@127.0.0.1 --cookie cookie -S mix phx.server --no-halt
+
+ci: ## Run the complete CI quality gate (mix ci)
+	mix ci
+
+precommit: ## Run the fast pre-commit checks (mix precommit)
+	mix precommit
+
+quality: ## Run the full local quality gate, including Dialyzer (mix quality)
+	mix quality
+
+fmt: ## Format the source code (mix format)
+	mix format
+
+fmt.check: ## Check source formatting without changing files (mix format --check-formatted)
+	mix format --check-formatted
+
+credo: ## Run strict Credo checks (mix credo --strict)
+	mix credo --strict
+
+dialyzer: ## Check types with Dialyzer (mix dialyzer)
+	mix dialyzer
+
+audit: ## Audit dependencies for known security problems (mix deps.audit)
+	mix deps.audit
+
+reach: ## Check architecture and code smells (mix reach.check)
+	mix reach.check
+
+ex_dna: ## Check code duplication (mix ex_dna)
+	mix ex_dna
 
 .PHONY: dev_stop
 dev_stop:
@@ -102,13 +135,13 @@ docker_env:
 docker_ssh:
 	docker compose exec hydra_srt bash
 
-docker_logs:
+docker_logs: ## Follow Docker service logs
 	docker compose logs -f
 
 docker_stop:
 	docker compose down
 
-docker_start:
+docker_start: ## Start the Docker services
 	docker compose up -d
 
 docker_host_up:
@@ -197,7 +230,7 @@ test_web_e2e:
 	cd web_app && npm run test:e2e
 
 .PHONY: test_all
-test_all:
+test_all: ## Run the full local test matrix
 	@echo "Running: backend unit tests"
 	@$(MAKE) test_backend
 	@echo "Running: backend e2e tests"
@@ -210,7 +243,7 @@ test_all:
 	@$(MAKE) test_web_e2e
 
 .PHONY: test_ci_local
-test_ci_local:
+test_ci_local: ## Run the CI-equivalent local test matrix
 	@echo "Running CI-equivalent local suite"
 	@echo "1/7 Native unit tests"
 	cd native && cargo test -- --nocapture

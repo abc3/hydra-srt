@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# A new push on the same ref replaces the run in progress instead of queuing behind it.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rs_native_unit_test:
     name: Rust Native Unit Tests
@@ -24,12 +29,26 @@ jobs:
           libsrt-openssl-dev
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@stable
+      with:
+        components: llvm-tools-preview
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@cargo-llvm-cov
     - name: Cache Rust artifacts
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: native
     - name: Run native unit tests
-      run: cd native && cargo test -- --nocapture
+      run: cd native && cargo llvm-cov --workspace --lcov --output-path lcov.info -- --nocapture
+    - name: Upload coverage to Codecov
+      if: always()
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        slug: streamband/hydra-srt
+        files: native/lcov.info
+        flags: rust
+        disable_search: true
+        fail_ci_if_error: false
 
   rs_native_e2e_test:
     name: Rust Native E2E Tests
@@ -337,6 +356,22 @@ jobs:
     - run: npm run lint
     - run: npm run build
     - run: timeout 20m npm run test:unit:ci
+    # The per-file loop above exists because some specs can hang; this single
+    # coverage pass has no such protection, so bound it rather than let a hung
+    # spec hold the runner for the job's full six-hour ceiling.
+    - name: Generate JavaScript unit-test coverage
+      if: always()
+      run: timeout 10m npm run test:unit:coverage
+    - name: Upload coverage to Codecov
+      if: always()
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        slug: streamband/hydra-srt
+        files: web_app/coverage/lcov.info
+        flags: typescript
+        disable_search: true
+        fail_ci_if_error: false
 
   js_e2e_test:
     name: JS E2E Tests
@@ -382,6 +417,10 @@ jobs:
       working-directory: web_app
 
   elixir_test:
+    # This name is a required status check in main's branch protection, so it
+    # must stay exactly "Elixir Unit Tests" even though the job now runs the
+    # whole `mix ci` gate. Renaming it here silently blocks every pull request:
+    # the required context is never reported and the PR waits forever.
     name: Elixir Unit Tests
     runs-on: ubuntu-latest
     env:
@@ -406,6 +445,12 @@ jobs:
       with:
         elixir-version: '1.18.4'
         otp-version: '27.3'
+    # `mix ci` gates on `mix hex.audit`, and advisory checking plus the
+    # `ignore_advisories` config in mix.exs need Hex 2.5.1 or newer. setup-beam
+    # does not pin a Hex version, so install it explicitly rather than inherit
+    # whatever the runner image ships.
+    - name: Install the latest Hex
+      run: mix local.hex --force
     - name: Restore dependencies cache
       uses: actions/cache@v3
       with:
@@ -416,14 +461,23 @@ jobs:
       run: mix deps.get
     - name: Compile dependencies
       run: mix deps.compile
-    - name: Compile project
-      run: mix compile --warnings-as-errors
-    - name: Check Formatting
-      run: mix format --check-formatted
-    - name: Run Sobelow
-      run: mix sobelow
-    - name: Run Tests
-      run: mix test
+    # The ci alias covers hex.audit (retirements and security advisories),
+    # compilation with warnings as errors, unused-dependency and format checks,
+    # strict Credo, Sobelow, duplication, Reach architecture and smell checks,
+    # and the test suite run through ExCoveralls.
+    # It runs under MIX_ENV=test through preferred_envs in mix.exs.
+    - name: Run the build and quality gate
+      run: mix ci
+    - name: Upload coverage to Codecov
+      if: always()
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        slug: streamband/hydra-srt
+        files: cover/excoveralls.json
+        flags: elixir
+        disable_search: true
+        fail_ci_if_error: false
 
   elixir_e2e_test:
     name: Elixir E2E Tests
