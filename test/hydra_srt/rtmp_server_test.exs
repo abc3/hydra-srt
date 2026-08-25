@@ -11,6 +11,24 @@ defmodule HydraSrt.RtmpServerTest do
     def setopts(_pid, _opts), do: :ok
   end
 
+  defmodule SendingTransport do
+    @moduledoc false
+    def send(pid, data) do
+      Kernel.send(pid, {:transport_sent, IO.iodata_to_binary(data)})
+      :ok
+    end
+
+    def close(pid) when is_pid(pid), do: Kernel.send(pid, {:transport_closed})
+    def setopts(_pid, _opts), do: :ok
+  end
+
+  defmodule FailingTransport do
+    @moduledoc false
+    def send(_pid, _data), do: {:error, :closed}
+    def close(pid) when is_pid(pid), do: Kernel.send(pid, {:transport_closed})
+    def setopts(_pid, _opts), do: :ok
+  end
+
   defp unique_path, do: "/live/rtmp-server-#{System.unique_integer([:positive])}"
 
   defp start_server(attrs) do
@@ -126,6 +144,61 @@ defmodule HydraSrt.RtmpServerTest do
 
       send(pid, {:publish_eos, "/live/other"})
 
+      assert_alive(pid)
+
+      GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
+  describe "play-side metadata relay" do
+    test "forwards broadcast metadata to the play socket", %{path: path} do
+      {pid, _session} =
+        start_server(%{
+          phase: :playing,
+          path: path,
+          stream_id: 1,
+          transport: SendingTransport
+        })
+
+      send(pid, {:metadata, %{"width" => 1280}, 0})
+
+      assert_receive {:transport_sent, data}, 1_000
+      assert data =~ "onMetaData"
+      assert data =~ "width"
+
+      # Players skip a script tag that starts with @setDataFrame instead of onMetaData.
+      refute data =~ "@setDataFrame"
+
+      assert_alive(pid)
+      GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "stops the connection when the play socket rejects the metadata", %{path: path} do
+      {pid, _session} =
+        start_server(%{
+          phase: :playing,
+          path: path,
+          stream_id: 1,
+          transport: FailingTransport
+        })
+
+      send(pid, {:metadata, %{"width" => 1280}, 0})
+
+      refute_alive(pid)
+    end
+
+    test "ignores metadata outside the :playing phase", %{path: path} do
+      {pid, _session} =
+        start_server(%{
+          phase: :publishing,
+          path: path,
+          stream_id: 1,
+          transport: SendingTransport
+        })
+
+      send(pid, {:metadata, %{"width" => 1280}, 0})
+
+      refute_receive {:transport_sent, _}, 200
       assert_alive(pid)
 
       GenServer.stop(pid, :normal, 1_000)

@@ -5,6 +5,7 @@ defmodule HydraSrt.Rtmp.Session do
 
   require Logger
 
+  alias ExRTMP.AMF0
   alias ExRTMP.ChunkParser
   alias ExRTMP.Message
   alias ExRTMP.Message.Command.NetConnection
@@ -184,10 +185,8 @@ defmodule HydraSrt.Rtmp.Session do
       when is_binary(path) and path != "" do
     :ok = StreamCache.record_metadata(path, data, timestamp)
 
-    # Players that subscribed before this publisher connected never ran
-    # send_cached_bootstrap/1 against a populated cache, so onMetaData has to reach
-    # them the same way media tags do; without it flvdemux sees a stream it cannot
-    # build a handler for.
+    # Players that subscribed before this publisher connected got no cached
+    # bootstrap, so relay the metadata live.
     :ok = Phoenix.PubSub.broadcast(HydraSrt.PubSub, path, {:metadata, data, timestamp})
 
     Logger.debug(
@@ -541,11 +540,20 @@ defmodule HydraSrt.Rtmp.Session do
 
   def send_cached_bootstrap(_session), do: :ok
 
+  # Built by hand instead of via ExRTMP.Message.Metadata: that serializer prefixes
+  # @setDataFrame, and players skip any script tag whose first AMF string is not
+  # onMetaData.
   @spec send_metadata_chunk(t(), map(), non_neg_integer()) :: :ok | {:error, term()}
   def send_metadata_chunk(%__MODULE__{stream_id: stream_id} = session, metadata, timestamp)
       when is_integer(stream_id) do
+    payload =
+      IO.iodata_to_binary([
+        AMF0.serialize("onMetaData"),
+        AMF0.serialize({:ecma_array, metadata})
+      ])
+
     message =
-      Message.new(%Metadata{data: metadata},
+      Message.new(payload,
         type: 18,
         stream_id: stream_id,
         timestamp: timestamp
