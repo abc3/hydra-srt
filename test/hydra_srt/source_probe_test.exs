@@ -168,6 +168,53 @@ defmodule HydraSrt.SourceProbeTest do
     end
   end
 
+  test "collect_ffprobe_output returns the child output on a clean exit" do
+    port = spawn_probe_port(["-c", ~s(printf '{"streams":[]}')])
+
+    assert {:ok, output} = SourceProbe.collect_ffprobe_output(port, "", far_deadline(), context())
+    assert output =~ ~s("streams")
+  end
+
+  test "collect_ffprobe_output surfaces the child diagnostic on a failing exit" do
+    port = spawn_probe_port(["-c", "printf 'Connection refused\n{\n\n}\n'; exit 3"])
+
+    assert {:error, message} =
+             SourceProbe.collect_ffprobe_output(port, "", far_deadline(), context())
+
+    assert message =~ "Connection refused"
+    # The json skeleton must never become the message the operator sees.
+    refute message =~ "{"
+  end
+
+  test "a failing child with no diagnostic falls back to its exit status" do
+    port = spawn_probe_port(["-c", "printf '{\n\n}\n'; exit 4"])
+
+    assert {:error, message} =
+             SourceProbe.collect_ffprobe_output(port, "", far_deadline(), context())
+
+    assert message == "ffprobe failed with exit status 4"
+  end
+
+  test "a timed out probe kills the child process it spawned" do
+    port = spawn_probe_port(["-c", "sleep 30"])
+    {:os_pid, os_pid} = Port.info(port, :os_pid)
+    deadline = System.monotonic_time(:millisecond) + 50
+
+    assert {:error, message} =
+             SourceProbe.collect_ffprobe_output(port, "", deadline, context(listener?: true))
+
+    assert message =~ "timed out after 300ms"
+    assert message =~ "sender is connected"
+    assert wait_until_process_is_gone(os_pid, 60), "the spawned child outlived its probe"
+  end
+
+  test "close_port tolerates a port that is already closed" do
+    port = spawn_probe_port(["-c", "exit 0"])
+
+    assert :ok = SourceProbe.close_port(port)
+    assert :ok = SourceProbe.close_port(port)
+  end
+
   test "client_error trims and truncates probe failures" do
     assert SourceProbe.client_error("  timeout  ") == "timeout"
     assert SourceProbe.client_error("") == "Failed to test source connection"
@@ -186,6 +233,51 @@ defmodule HydraSrt.SourceProbeTest do
       {:error, _reason} ->
         Process.sleep(50)
         wait_until_port_is_free(port, attempts - 1)
+    end
+  end
+
+  @spec context(keyword()) :: map()
+  def context(opts \\ []) do
+    %{
+      timeout_ms: 300,
+      sanitized_uri: "srt://127.0.0.1:1234",
+      listener_source?: Keyword.get(opts, :listener?, false)
+    }
+  end
+
+  @spec far_deadline() :: integer()
+  def far_deadline, do: System.monotonic_time(:millisecond) + 5_000
+
+  # /bin/sh stands in for ffprobe so these paths are covered on CI runners that
+  # have no ffmpeg installed.
+  @spec spawn_probe_port([String.t()]) :: port()
+  def spawn_probe_port(args) do
+    Port.open({:spawn_executable, "/bin/sh"}, [
+      :binary,
+      :exit_status,
+      :stderr_to_stdout,
+      {:args, args}
+    ])
+  end
+
+  @spec wait_until_process_is_gone(pos_integer(), non_neg_integer()) :: boolean()
+  def wait_until_process_is_gone(_os_pid, 0), do: false
+
+  def wait_until_process_is_gone(os_pid, attempts) do
+    # A reaped child disappears; a not yet reaped one reports the zombie state.
+    {output, _status} =
+      System.cmd("ps", ["-o", "state=", "-p", Integer.to_string(os_pid)], stderr_to_stdout: true)
+
+    case String.trim(output) do
+      "" ->
+        true
+
+      "Z" <> _rest ->
+        true
+
+      _running ->
+        Process.sleep(50)
+        wait_until_process_is_gone(os_pid, attempts - 1)
     end
   end
 end
