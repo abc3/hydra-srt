@@ -4,16 +4,9 @@ defmodule HydraSrt.RouteHandler do
   require Logger
   @behaviour :gen_statem
 
-  # `:normal` is the only port-exit reason that legitimately parks the route as
-  # "stopped" with no retry: it is what a clean, non-`route_terminal` process
-  # exit (an operator-requested stop, or a finite source genuinely reaching
-  # EOS) looks like. `:epipe` (our own write to the port's stdin failing
-  # because its far end already closed) used to be listed here too, but a
-  # broken pipe is not "the stream ended by design" - it is this process
-  # losing its native pipeline out from under a route that may still have a
-  # live source on the other end, so it must retry like any other process
-  # loss, never latch. See the `{:EXIT, port, reason}` handler below.
-  @normal_port_exit_reasons [:normal]
+  # Operator stops shut down the handler through its supervisor. A live port
+  # exit therefore always means process loss and must use the retry path.
+  @normal_port_exit_reasons []
 
   # Hard-retry backoff: exponential with decorrelated jitter, a ceiling, and a
   # circuit breaker after the maximum attempts. The retry budget is re-derived on
@@ -301,20 +294,8 @@ defmodule HydraSrt.RouteHandler do
     log_fun = if status == 0, do: &Logger.info/1, else: &Logger.error/1
     log_fun.("RouteHandler: native pipeline exited with status #{status}")
 
-    # The native process exits 0 whenever it has already emitted a route_terminal
-    # event, including a RETRYABLE one - exit code 0 means "I shut myself down
-    # cleanly", not "nothing is wrong". A clean stop with no route_terminal on
-    # record (operator-initiated stop, or the process simply ending) is the only
-    # case that should end the GenServer here; whenever a route_terminal was
-    # recorded, its own `retryable` flag (already applied when the event was
-    # consumed) is what decides whether we keep retrying or stay parked, exactly
-    # like the non-zero-exit / process-loss path below.
-    if status == 0 and is_nil(data.route_terminal) do
-      {:stop, :normal, %{data | shutdown_reason: {:port_exit, 0}}}
-    else
-      next_data = maybe_schedule_hard_retry_after_process_loss(%{data | port: nil})
-      {:keep_state, next_data}
-    end
+    next_data = maybe_schedule_hard_retry_after_process_loss(%{data | port: nil})
+    {:keep_state, next_data}
   end
 
   def handle_event(:info, {_stale_port, {:exit_status, _status}}, _state, data) do
@@ -328,7 +309,7 @@ defmodule HydraSrt.RouteHandler do
       kill_stale_pipeline_processes(data.id, "epipe")
     end
 
-    if reason in @normal_port_exit_reasons do
+    if Enum.member?(@normal_port_exit_reasons, reason) do
       {:stop, :normal, %{data | shutdown_reason: {:port_exit, reason}}}
     else
       next_data = maybe_schedule_hard_retry_after_process_loss(%{data | port: nil})

@@ -22,7 +22,7 @@ vi.mock('../../../utils/api', () => {
   return {
     routesApi: {
       stop: async () => ({ data: { status: 'stopped' } }),
-      start: async () => ({ data: { status: 'starting' } }),
+      start: vi.fn(async () => ({ data: { status: 'starting' } })),
       getAnalytics: vi.fn(async () => ({
         data: {
           points: [],
@@ -194,6 +194,18 @@ vi.mock('../../../utils/realtime', () => {
       subscribeToStats.mockClear();
     },
   };
+});
+
+const routeItemFixture = (status: string, schemaStatus = status) => ({
+  id: 'r1',
+  name: 'Route 1',
+  status,
+  schema_status: schemaStatus,
+  updated_at: new Date().toISOString(),
+  enabled: true,
+  schema: 'SRT',
+  sources: [],
+  destinations: [],
 });
 
 describe('RouteItem', () => {
@@ -492,6 +504,68 @@ describe('RouteItem', () => {
     expect(screen.getByText('backup').closest('tr')).toHaveTextContent('No');
     expect(screen.getByText('Dest 1').closest('tr')).toHaveTextContent('Yes');
     expect(screen.getByText('Dest 2').closest('tr')).toHaveTextContent('No');
+  });
+
+  it('refreshes the server status when start reports an already started route', async () => {
+    vi.mocked(routesApi.getById)
+      .mockResolvedValueOnce({ data: routeItemFixture('stopped') })
+      .mockResolvedValueOnce({ data: routeItemFixture('processing') });
+    vi.mocked(routesApi.start).mockRejectedValueOnce(new Error('already_started'));
+
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /Start/ }));
+
+    await waitFor(() => expect(routesApi.getById).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('running')).toBeInTheDocument();
+    expect(screen.queryByText('starting')).not.toBeInTheDocument();
+  });
+
+  it('shows a stopped route and enables Start after an already started error', async () => {
+    vi.mocked(routesApi.getById)
+      .mockResolvedValueOnce({ data: routeItemFixture('stopped') })
+      .mockResolvedValueOnce({ data: routeItemFixture('stopped') });
+    vi.mocked(routesApi.start).mockRejectedValueOnce(new Error('already_started'));
+
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /Start/ }));
+
+    await waitFor(() => expect(routesApi.getById).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('stopped')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Start/ })).not.toBeDisabled();
+  });
+
+  it('clears the pending action when the status refresh fails', async () => {
+    vi.mocked(routesApi.getById)
+      .mockResolvedValueOnce({ data: routeItemFixture('stopped') })
+      .mockRejectedValueOnce(new Error('status unavailable'));
+    vi.mocked(routesApi.start).mockRejectedValueOnce(new Error('already_started'));
+
+    render(
+      <MemoryRouter initialEntries={['/routes/r1']}>
+        <Routes>
+          <Route path="/routes/:id" element={<RouteItem />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /Start/ }));
+
+    await waitFor(() => expect(routesApi.getById).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('button', { name: /Start/ })).not.toBeDisabled();
   });
 
 });

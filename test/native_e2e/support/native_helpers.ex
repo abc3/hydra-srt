@@ -164,7 +164,7 @@ defmodule HydraSrt.E2E.Native.Helpers do
             "localaddress" => "127.0.0.1",
             "localport" => source_port,
             "auto_reconnect" => true,
-            "keep_listening" => false
+            "keep_listening" => Keyword.get(opts, :keep_listening, true)
           }
           |> maybe_put_passphrase(opts)
       },

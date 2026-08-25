@@ -25,12 +25,84 @@ defmodule HydraSrt do
 
   def live_route_status?(_status), do: false
 
+  # syn releases a route name from a monitor, so the name can still be taken for
+  # a moment after the old supervisor is down. Poll instead of racing it.
+  @heal_unregister_attempts 50
+  @heal_unregister_interval_ms 20
+  @probe_timeout_ms :timer.seconds(5)
+
+  @spec stop_route_supervisor(pid()) :: :ok
+  def stop_route_supervisor(pid) when is_pid(pid) do
+    Supervisor.stop(pid, :normal)
+    :ok
+  catch
+    # An already dead supervisor is the expected race. Anything else means the
+    # stop itself failed, so say so rather than reporting a clean stop.
+    :exit, :noproc ->
+      :ok
+
+    :exit, reason ->
+      Logger.error("Route supervisor stop failed pid=#{inspect(pid)} reason=#{inspect(reason)}")
+      :ok
+  end
+
+  @spec await_route_unregistered(String.t(), non_neg_integer()) ::
+          :ok | {:error, :still_registered}
+  def await_route_unregistered(id, 0) do
+    Logger.error("Route name was not released route_id=#{id}")
+    {:error, :still_registered}
+  end
+
+  def await_route_unregistered(id, attempts) do
+    case :syn.lookup(:routes, id) do
+      :undefined ->
+        :ok
+
+      _registered ->
+        Process.sleep(@heal_unregister_interval_ms)
+        await_route_unregistered(id, attempts - 1)
+    end
+  end
+
   @spec start_route(String.t()) :: {:ok, pid()} | {:error, term()}
   def start_route(id) do
-    DynamicSupervisor.start_child(
-      {:via, PartitionSupervisor, {HydraSrt.DynamicSupervisor, id}},
-      {HydraSrt.RoutesSupervisor, %{id: id}}
-    )
+    result =
+      DynamicSupervisor.start_child(
+        {:via, PartitionSupervisor, {HydraSrt.DynamicSupervisor, id}},
+        {HydraSrt.RoutesSupervisor, %{id: id}}
+      )
+
+    case result do
+      {:error, {:already_started, supervisor_pid}} = error ->
+        case get_route_handler(id) do
+          {:ok, _handler_pid} ->
+            error
+
+          # Only a supervisor we could actually inspect, and that genuinely holds
+          # no handler, is a zombie. A probe that failed says nothing about the
+          # supervisor's health, so never kill a route on the strength of it.
+          {:error, :route_handler_probe_failed} ->
+            error
+
+          {:error, _reason} ->
+            Logger.warning("Healing childless route supervisor route_id=#{id}")
+            stop_route_supervisor(supervisor_pid)
+
+            case await_route_unregistered(id, @heal_unregister_attempts) do
+              :ok ->
+                DynamicSupervisor.start_child(
+                  {:via, PartitionSupervisor, {HydraSrt.DynamicSupervisor, id}},
+                  {HydraSrt.RoutesSupervisor, %{id: id}}
+                )
+
+              {:error, reason} ->
+                {:error, reason}
+            end
+        end
+
+      other ->
+        other
+    end
   end
 
   @spec get_route(String.t()) :: {:ok, pid()} | {:error, term()}
@@ -43,23 +115,47 @@ defmodule HydraSrt do
 
   @spec get_route_handler(String.t()) :: {:ok, pid()} | {:error, term()}
   def get_route_handler(id) do
-    with {:ok, supervisor_pid} <- get_route(id) do
-      case Supervisor.which_children(supervisor_pid) do
-        children when is_list(children) ->
-          case Enum.find(children, fn
-                 {_child_id, pid, :worker, [HydraSrt.RouteHandler]} when is_pid(pid) -> true
-                 _ -> false
-               end) do
-            {_child_id, pid, :worker, [HydraSrt.RouteHandler]} ->
-              {:ok, pid}
+    try do
+      with {:ok, supervisor_pid} <- get_route(id) do
+        # Supervisor.which_children/1 calls with :infinity, so a wedged
+        # supervisor would hang every caller of this function, the Start
+        # endpoint included. Bound the probe instead.
+        case GenServer.call(supervisor_pid, :which_children, @probe_timeout_ms) do
+          children when is_list(children) ->
+            case Enum.find(children, fn
+                   {_child_id, pid, :worker, [HydraSrt.RouteHandler]} when is_pid(pid) ->
+                     # Process.alive? raises on a remote pid, and the routes syn
+                     # scope is cluster wide, so only probe local handlers.
+                     node(pid) != node() or Process.alive?(pid)
 
-            _ ->
-              {:error, :route_handler_not_found}
-          end
+                   _ ->
+                     false
+                 end) do
+              {_child_id, pid, :worker, [HydraSrt.RouteHandler]} ->
+                {:ok, pid}
 
-        _ ->
-          {:error, :route_handler_not_found}
+              _ ->
+                {:error, :route_handler_not_found}
+            end
+
+          _ ->
+            {:error, :route_handler_not_found}
+        end
       end
+    catch
+      # A supervisor that died between the lookup and the probe really is gone.
+      :exit, {:noproc, _call} ->
+        {:error, :route_handler_not_found}
+
+      :exit, :noproc ->
+        {:error, :route_handler_not_found}
+
+      # Anything else - a timeout, an unreachable node - says nothing about
+      # whether a handler exists. Report the probe failure so callers cannot
+      # treat a live route as a zombie and restart it.
+      :exit, reason ->
+        Logger.warning("Route handler probe failed route_id=#{id} reason=#{inspect(reason)}")
+        {:error, :route_handler_probe_failed}
     end
   end
 
