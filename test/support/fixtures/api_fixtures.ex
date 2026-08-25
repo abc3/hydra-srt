@@ -56,7 +56,11 @@ defmodule HydraSrt.ApiFixtures do
         true -> nil
       end
 
-    unique_port = 10_000 + rem(System.unique_integer([:positive]), 50_000)
+    # Ask the OS for a free port rather than wrapping a counter into a fixed
+    # window. Endpoints carry a unique index on their bind target, so two
+    # fixtures landing on the same port fail the insert, and hand-picked
+    # ranges across the suites overlapped often enough to do exactly that.
+    unique_port = HydraSrt.TestSupport.E2EHelpers.udp_free_port!()
 
     {:ok, destination} =
       attrs

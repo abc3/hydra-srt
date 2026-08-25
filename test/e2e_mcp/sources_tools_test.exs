@@ -34,7 +34,7 @@ defmodule HydraSrt.E2E.Mcp.SourcesToolsTest do
             "name" => "mcp-e2e-created-source-#{ctx.suffix}",
             "schema" => "UDP",
             "host" => "127.0.0.1",
-            "port" => 12_000 + rem(System.unique_integer([:positive]), 20_000),
+            "port" => E2EHelpers.udp_free_port!(),
             "enabled" => true,
             "position" => 2
           }
@@ -77,7 +77,7 @@ defmodule HydraSrt.E2E.Mcp.SourcesToolsTest do
           "name" => "mcp-e2e-delete-source-#{ctx.suffix}",
           "schema" => "UDP",
           "host" => "127.0.0.1",
-          "port" => 22_000 + rem(System.unique_integer([:positive]), 20_000),
+          "port" => E2EHelpers.udp_free_port!(),
           "enabled" => true,
           "position" => 3
         }

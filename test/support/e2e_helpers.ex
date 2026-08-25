@@ -917,6 +917,40 @@ defmodule HydraSrt.TestSupport.E2EHelpers do
     :ok
   end
 
+  @doc """
+  Feeds the source with repeated UDP bursts until stopped.
+
+  `send_udp_burst!/3` writes its whole burst in one unthrottled loop, so the
+  receiver's socket buffer absorbs it or drops it: UDP applies no flow control
+  and nothing is retransmitted. A single burst therefore delivers however much
+  the pipeline happened to be ready for, which on a loaded runner can sit below
+  an assertion's byte threshold with no way to recover -- the burst is over in
+  milliseconds, so waiting longer never helps. Repeating the burst on an
+  interval keeps the source producing for as long as the assertion waits.
+  """
+  def start_udp_burst_feeder!(host_ip, port, opts \\ [])
+      when is_binary(host_ip) and is_integer(port) and is_list(opts) do
+    interval_ms = Keyword.get(opts, :interval_ms, 200)
+    burst_opts = Keyword.delete(opts, :interval_ms)
+    pid = spawn_link(fn -> udp_burst_feeder_loop(host_ip, port, burst_opts, interval_ms) end)
+    %{pid: pid}
+  end
+
+  def udp_burst_feeder_loop(host_ip, port, burst_opts, interval_ms) do
+    :ok = send_udp_burst!(host_ip, port, burst_opts)
+
+    receive do
+      :stop -> :ok
+    after
+      interval_ms -> udp_burst_feeder_loop(host_ip, port, burst_opts, interval_ms)
+    end
+  end
+
+  def stop_udp_burst_feeder!(%{pid: pid}) when is_pid(pid) do
+    if Process.alive?(pid), do: send(pid, :stop)
+    :ok
+  end
+
   def send_multicast_udp_burst!(group_ip, port, iface_ip, opts \\ [])
       when is_binary(group_ip) and is_integer(port) and is_binary(iface_ip) and is_list(opts) do
     packet_count = Keyword.get(opts, :packet_count, 250)

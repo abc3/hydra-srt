@@ -382,14 +382,23 @@ defmodule HydraSrt.E2E.InterfaceSelectionE2ETest do
 
       :ok = E2EHelpers.api_start_route!(base_url, token, route_id)
       Process.sleep(E2EHelpers.e2e_startup_sleep_ms())
-      :ok = E2EHelpers.send_udp_burst!(interface["bind_ip"], source_port)
 
-      wait_for_route_schema_processing!(base_url, token, route_id)
+      # Keep feeding the source for as long as the assertion below waits. A
+      # one-shot burst is delivered in milliseconds, so whatever the multicast
+      # path drops while it is still warming up can never be made up, and the
+      # byte count stalls under the threshold no matter how long we wait.
+      feeder = E2EHelpers.start_udp_burst_feeder!(interface["bind_ip"], source_port)
 
-      assert {:ok, %{bytes: multicast_bytes}} =
-               E2EHelpers.await_udp_bytes(multicast_counter, 20_000, 8_000)
+      try do
+        wait_for_route_schema_processing!(base_url, token, route_id)
 
-      assert multicast_bytes >= 20_000
+        assert {:ok, %{bytes: multicast_bytes}} =
+                 E2EHelpers.await_udp_bytes(multicast_counter, 20_000, 8_000)
+
+        assert multicast_bytes >= 20_000
+      after
+        E2EHelpers.stop_udp_burst_feeder!(feeder)
+      end
     else
       assert true
     end

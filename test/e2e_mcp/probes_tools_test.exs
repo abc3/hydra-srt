@@ -9,7 +9,7 @@ defmodule HydraSrt.E2E.Mcp.ProbesToolsTest do
     client: client,
     ctx: ctx
   } do
-    port = 52_000 + rem(System.unique_integer([:positive]), 10_000)
+    port = E2EHelpers.udp_free_port!()
 
     McpAssertions.assert_tool_responds(
       McpE2EClient.call_tool(
@@ -41,7 +41,7 @@ defmodule HydraSrt.E2E.Mcp.ProbesToolsTest do
           "name" => "mcp-e2e-probe-source-#{ctx.suffix}",
           "schema" => "UDP",
           "host" => "127.0.0.1",
-          "port" => 62_000 + rem(System.unique_integer([:positive]), 10_000),
+          "port" => E2EHelpers.udp_free_port!(),
           "enabled" => true,
           "position" => 4
         }
