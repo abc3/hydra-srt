@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Vitest writes the Codecov LCOV report and coverage intermediates here.
+coverage/

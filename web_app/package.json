@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "test:unit": "vitest run",
     "test:unit:ci": "bash ./scripts/run-vitest-ci.sh",
+    "test:unit:coverage": "vitest run --coverage",
     "test:unit:watch": "vitest",
     "e2e:server": "tsx ./scripts/e2e-server.ts",
     "test:e2e": "playwright test"
@@ -33,6 +34,7 @@
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
     "@vitejs/plugin-react": "^6.0.2",
+    "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^9.19.0",
     "eslint-plugin-react": "^7.37.4",
     "eslint-plugin-react-hooks": "^5.0.0",

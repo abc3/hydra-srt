@@ -1,0 +1,5 @@
+# Keep the fixed Codecov artifact out of version control because CI regenerates it.
+lcov.info
+
+# Keep cargo-llvm-cov's intermediate report directory out of version control.
+target/llvm-cov*

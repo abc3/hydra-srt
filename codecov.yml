@@ -1,0 +1,72 @@
+codecov:
+  require_ci_to_pass: true
+
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        informational: true
+      - type: patch
+        informational: true
+  individual_components:
+    - component_id: elixir
+      name: Elixir
+      paths:
+        - lib/**
+    - component_id: typescript
+      name: TypeScript
+      paths:
+        - web_app/src/**
+    - component_id: rust
+      name: Rust
+      paths:
+        - native/crates/**
+
+flags:
+  elixir:
+    paths:
+      - lib/**
+    carryforward: true
+  typescript:
+    paths:
+      - web_app/src/**
+    carryforward: true
+  rust:
+    paths:
+      - native/crates/**
+    carryforward: true
+
+coverage:
+  status:
+    # These checks are informational initially. Remove informational: true later
+    # when the project is ready for coverage to gate pull requests.
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+comment:
+  # `hide_project_coverage: false` is what puts whole-project coverage in the PR
+  # comment: Codecov otherwise reports only coverage of the diff. `components`
+  # in the layout is what breaks that out per language (Elixir/TypeScript/Rust).
+  layout: "header, diff, components, flags, files"
+  behavior: default
+  require_changes: false
+  require_base: false
+  require_head: true
+  hide_project_coverage: false
+  show_carryforward_flags: true
+
+ignore:
+  - test/**
+  - web_app/playwright/**
+  - web_app/dist/**
+  - deps/**
+  - _build/**
+  - native/target/**
+  - priv/**
+  - rel/**
+  - deployment/**
+  - docs/**
