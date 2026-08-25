@@ -34,7 +34,7 @@ defmodule HydraSrt.E2E.Mcp.DestinationsToolsTest do
             "name" => "mcp-e2e-created-destination-#{ctx.suffix}",
             "schema" => "UDP",
             "host" => "127.0.0.1",
-            "port" => 32_000 + rem(System.unique_integer([:positive]), 20_000),
+            "port" => E2EHelpers.udp_free_port!(),
             "enabled" => true
           }
         })
@@ -64,7 +64,7 @@ defmodule HydraSrt.E2E.Mcp.DestinationsToolsTest do
           "name" => "mcp-e2e-delete-destination-#{ctx.suffix}",
           "schema" => "UDP",
           "host" => "127.0.0.1",
-          "port" => 42_000 + rem(System.unique_integer([:positive]), 20_000),
+          "port" => E2EHelpers.udp_free_port!(),
           "enabled" => true
         }
       })
