@@ -84,7 +84,7 @@ defmodule HydraSrt.Stats.PipelineLogger do
   @impl true
   def terminate(_reason, state) do
     {logs, rate_counters} = build_synthetic_dropped_records(state.logs, state.rate_counters)
-    state.insert_logs_fun.(Enum.reverse(logs))
+    _ = state.insert_logs_fun.(Enum.reverse(logs))
     _ = rate_counters
     :ok
   end

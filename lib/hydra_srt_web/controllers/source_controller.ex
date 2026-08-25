@@ -3,6 +3,7 @@ defmodule HydraSrtWeb.SourceController do
 
   alias HydraSrt.SourceNdiSelection
   alias HydraSrt.Sources
+  alias HydraSrtWeb.NdiError
 
   action_fallback HydraSrtWeb.FallbackController
 
@@ -106,9 +107,7 @@ defmodule HydraSrtWeb.SourceController do
         _ -> 422
       end
 
-    conn
-    |> put_status(status)
-    |> json(%{error: message, code: code, errors: errors})
+    NdiError.render(conn, status, code, message, errors)
   end
 
   @spec data(Plug.Conn.t(), term()) :: Plug.Conn.t()

@@ -6,6 +6,35 @@ defmodule HydraSrt.ProcessMonitor do
 
   @type pipeline_kind :: :route | :ndi_helper | :other
 
+  @standard_process_layout %{
+    pid: 0,
+    cpu: 1,
+    memory_percent: 2,
+    vsz: 3,
+    rss: 4,
+    user: 5,
+    lstart: 6,
+    cpu_time: nil,
+    state: nil,
+    ppid: nil
+  }
+  @detailed_process_layout %{
+    pid: 0,
+    cpu: 1,
+    memory_percent: 2,
+    vsz: 3,
+    rss: 4,
+    cpu_time: 5,
+    state: 6,
+    ppid: 7,
+    user: 8,
+    lstart: 9
+  }
+  @platform_process_layouts %{
+    darwin: %{standard: @standard_process_layout, detailed: @detailed_process_layout},
+    linux: %{standard: @standard_process_layout, detailed: @detailed_process_layout}
+  }
+
   def list_pipeline_processes do
     case :os.type() do
       {:unix, :darwin} -> list_pipeline_processes_darwin()
@@ -130,80 +159,96 @@ defmodule HydraSrt.ProcessMonitor do
     |> Enum.map(&parse_process_detailed_darwin/1)
   end
 
-  defp parse_process_darwin(line) do
-    parts = line |> String.split(" ", trim: true)
+  @spec process_layout(:darwin | :linux, :standard | :detailed) :: map()
+  def process_layout(platform, detail) when platform in [:darwin, :linux] do
+    @platform_process_layouts[platform][detail]
+  end
 
-    pid = Enum.at(parts, 0) |> String.to_integer()
-    cpu = Enum.at(parts, 1) <> "%"
-    memory_percent = Enum.at(parts, 2) <> "%"
-    vsz = Enum.at(parts, 3) |> String.to_integer()
-    rss = Enum.at(parts, 4) |> String.to_integer()
-    user = Enum.at(parts, 5)
+  @spec parse_process(binary(), map()) :: map()
+  def parse_process(line, layout) when is_binary(line) and is_map(layout) do
+    fields = parse_process_fields(line, layout)
 
+    %{
+      pid: fields[:pid],
+      cpu: fields[:cpu],
+      memory: format_memory(fields[:memory_bytes]),
+      memory_percent: fields[:memory_percent],
+      memory_bytes: fields[:memory_bytes],
+      swap_percent: fields[:swap_percent],
+      swap_bytes: fields[:swap_bytes],
+      user: fields[:user],
+      start_time: fields[:start_time],
+      command: fields[:command]
+    }
+  end
+
+  @spec parse_process_detailed(binary(), map()) :: map()
+  def parse_process_detailed(line, layout) when is_binary(line) and is_map(layout) do
+    fields = parse_process_fields(line, layout)
+
+    %{
+      pid: fields[:pid],
+      cpu: fields[:cpu],
+      memory_percent: fields[:memory_percent],
+      memory_bytes: fields[:memory_bytes],
+      virtual_memory: fields[:virtual_memory],
+      resident_memory: fields[:resident_memory],
+      swap_percent: fields[:swap_percent],
+      swap_bytes: fields[:swap_bytes],
+      cpu_time: fields[:cpu_time],
+      state: fields[:state],
+      ppid: fields[:ppid],
+      user: fields[:user],
+      start_time: fields[:start_time],
+      command: fields[:command]
+    }
+  end
+
+  @spec parse_process_fields(binary(), map()) :: map()
+  def parse_process_fields(line, layout) when is_binary(line) and is_map(layout) do
+    parts = String.split(line, " ", trim: true)
+    vsz = field_at(parts, layout[:vsz]) |> String.to_integer()
+    rss = field_at(parts, layout[:rss]) |> String.to_integer()
     memory_bytes = rss * 1024
     swap_bytes = max(0, (vsz - rss) * 1024)
 
     swap_percent =
       if vsz > 0, do: "#{Float.round(swap_bytes / (1024 * 1024 * 1024) * 100, 1)}%", else: "0.0%"
 
-    {start_time, command} = split_lstart_and_command(parts, 6)
+    {start_time, command} = split_lstart_and_command(parts, layout[:lstart])
 
     %{
-      pid: pid,
-      cpu: cpu,
-      memory: format_memory(memory_bytes),
-      memory_percent: memory_percent,
+      pid: field_at(parts, layout[:pid]) |> String.to_integer(),
+      cpu: field_at(parts, layout[:cpu]) <> "%",
+      memory_percent: field_at(parts, layout[:memory_percent]) <> "%",
       memory_bytes: memory_bytes,
+      virtual_memory: format_memory(vsz * 1024),
+      resident_memory: format_memory(memory_bytes),
       swap_percent: swap_percent,
       swap_bytes: swap_bytes,
-      user: user,
+      cpu_time: field_at(parts, layout[:cpu_time]),
+      state: field_at(parts, layout[:state]),
+      ppid: parse_optional_integer(field_at(parts, layout[:ppid])),
+      user: field_at(parts, layout[:user]),
       start_time: start_time,
       command: command
     }
   end
 
-  defp parse_process_detailed_darwin(line) do
-    parts = line |> String.split(" ", trim: true)
+  @spec field_at([String.t()], non_neg_integer() | nil) :: String.t() | nil
+  def field_at(parts, index) when is_list(parts) and is_integer(index), do: Enum.at(parts, index)
+  def field_at(_parts, nil), do: nil
 
-    pid = Enum.at(parts, 0) |> String.to_integer()
-    cpu = Enum.at(parts, 1) <> "%"
-    memory_percent = Enum.at(parts, 2) <> "%"
-    vsz = Enum.at(parts, 3) |> String.to_integer()
-    rss = Enum.at(parts, 4) |> String.to_integer()
+  @spec parse_optional_integer(String.t() | nil) :: non_neg_integer() | nil
+  def parse_optional_integer(value) when is_binary(value), do: String.to_integer(value)
+  def parse_optional_integer(nil), do: nil
 
-    memory_bytes = rss * 1024
-    swap_bytes = max(0, (vsz - rss) * 1024)
+  @spec parse_process_darwin(String.t()) :: map()
+  defp parse_process_darwin(line), do: parse_process(line, process_layout(:darwin, :standard))
 
-    swap_percent =
-      if vsz > 0, do: "#{Float.round(swap_bytes / (1024 * 1024 * 1024) * 100, 1)}%", else: "0.0%"
-
-    virtual_memory = format_memory(vsz * 1024)
-    resident_memory = format_memory(memory_bytes)
-
-    cpu_time = Enum.at(parts, 5)
-    state = Enum.at(parts, 6)
-    ppid = Enum.at(parts, 7) |> String.to_integer()
-    user = Enum.at(parts, 8)
-
-    {start_time, command} = split_lstart_and_command(parts, 9)
-
-    %{
-      pid: pid,
-      cpu: cpu,
-      memory_percent: memory_percent,
-      memory_bytes: memory_bytes,
-      virtual_memory: virtual_memory,
-      resident_memory: resident_memory,
-      swap_percent: swap_percent,
-      swap_bytes: swap_bytes,
-      cpu_time: cpu_time,
-      state: state,
-      ppid: ppid,
-      user: user,
-      start_time: start_time,
-      command: command
-    }
-  end
+  @spec parse_process_detailed_darwin(String.t()) :: map()
+  defp parse_process_detailed_darwin(line),
+    do: parse_process_detailed(line, process_layout(:darwin, :detailed))
 
   defp list_pipeline_processes_linux do
     {output, 0} =
@@ -231,80 +276,12 @@ defmodule HydraSrt.ProcessMonitor do
     |> Enum.map(&parse_process_detailed_linux/1)
   end
 
-  defp parse_process_linux(line) do
-    parts = line |> String.split(" ", trim: true)
+  @spec parse_process_linux(String.t()) :: map()
+  defp parse_process_linux(line), do: parse_process(line, process_layout(:linux, :standard))
 
-    pid = Enum.at(parts, 0) |> String.to_integer()
-    cpu = Enum.at(parts, 1) <> "%"
-    memory_percent = Enum.at(parts, 2) <> "%"
-    vsz = Enum.at(parts, 3) |> String.to_integer()
-    rss = Enum.at(parts, 4) |> String.to_integer()
-    user = Enum.at(parts, 5)
-
-    memory_bytes = rss * 1024
-    swap_bytes = max(0, (vsz - rss) * 1024)
-
-    swap_percent =
-      if vsz > 0, do: "#{Float.round(swap_bytes / (1024 * 1024 * 1024) * 100, 1)}%", else: "0.0%"
-
-    {start_time, command} = split_lstart_and_command(parts, 6)
-
-    %{
-      pid: pid,
-      cpu: cpu,
-      memory: format_memory(memory_bytes),
-      memory_percent: memory_percent,
-      memory_bytes: memory_bytes,
-      swap_percent: swap_percent,
-      swap_bytes: swap_bytes,
-      user: user,
-      start_time: start_time,
-      command: command
-    }
-  end
-
-  defp parse_process_detailed_linux(line) do
-    parts = line |> String.split(" ", trim: true)
-
-    pid = Enum.at(parts, 0) |> String.to_integer()
-    cpu = Enum.at(parts, 1) <> "%"
-    memory_percent = Enum.at(parts, 2) <> "%"
-    vsz = Enum.at(parts, 3) |> String.to_integer()
-    rss = Enum.at(parts, 4) |> String.to_integer()
-
-    memory_bytes = rss * 1024
-    swap_bytes = max(0, (vsz - rss) * 1024)
-
-    swap_percent =
-      if vsz > 0, do: "#{Float.round(swap_bytes / (1024 * 1024 * 1024) * 100, 1)}%", else: "0.0%"
-
-    virtual_memory = format_memory(vsz * 1024)
-    resident_memory = format_memory(memory_bytes)
-
-    cpu_time = Enum.at(parts, 5)
-    state = Enum.at(parts, 6)
-    ppid = Enum.at(parts, 7) |> String.to_integer()
-    user = Enum.at(parts, 8)
-
-    {start_time, command} = split_lstart_and_command(parts, 9)
-
-    %{
-      pid: pid,
-      cpu: cpu,
-      memory_percent: memory_percent,
-      memory_bytes: memory_bytes,
-      virtual_memory: virtual_memory,
-      resident_memory: resident_memory,
-      swap_percent: swap_percent,
-      swap_bytes: swap_bytes,
-      cpu_time: cpu_time,
-      state: state,
-      ppid: ppid,
-      user: user,
-      start_time: start_time,
-      command: command
-    }
-  end
+  @spec parse_process_detailed_linux(String.t()) :: map()
+  defp parse_process_detailed_linux(line),
+    do: parse_process_detailed(line, process_layout(:linux, :detailed))
 
   defp format_memory(bytes) when is_integer(bytes) do
     cond do

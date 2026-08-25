@@ -8,9 +8,8 @@ defmodule HydraSrt.RouteControl do
   def switch_route_source(route_id, source_id)
       when is_binary(route_id) and is_binary(source_id) do
     with {:ok, source} <- Db.get_source(route_id, source_id),
-         true <- source["enabled"] == true or {:error, :source_disabled},
-         {:ok, route} <- switch_route_source_when_ready(route_id, source_id) do
-      {:ok, route}
+         true <- source["enabled"] == true or {:error, :source_disabled} do
+      switch_route_source_when_ready(route_id, source_id)
     end
   end
 

@@ -52,7 +52,7 @@ defmodule HydraSrtWeb.Endpoint do
     methods: ["*"],
     headers: ["*"],
     credentials: true,
-    max_age: 86400
+    max_age: 86_400
 
   plug HydraSrtWeb.Router
 end

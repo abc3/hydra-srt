@@ -323,7 +323,7 @@ defmodule HydraSrt.RouteHandlerTest do
       "schema" => "UDP",
       "address" => "127.0.0.1",
       "port" => 4201,
-      "buffer-size" => 65536,
+      "buffer-size" => 65_536,
       "mtu" => 1500
     }
 

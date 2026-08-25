@@ -13,10 +13,10 @@ defmodule HydraSrt.Ndi.Probe do
   require Logger
 
   alias HydraSrt.Ndi.FeaturePolicy
+  alias HydraSrt.Ndi.PortFraming
   alias HydraSrt.RouteHandler
 
   @default_timeout_ms :timer.seconds(15)
-  @max_line_bytes 65_536
 
   @type port_handle :: port() | reference()
   @type port_launcher :: (String.t(), [String.t()] -> port_handle())
@@ -275,30 +275,13 @@ defmodule HydraSrt.Ndi.Probe do
   end
 
   @spec append_port_data(binary(), binary()) :: {:ok, [binary()], binary(), boolean()}
-  def append_port_data(buffer, chunk) when is_binary(buffer) and is_binary(chunk) do
-    combined = buffer <> chunk
-    split_complete_lines(combined, [], false)
-  end
+  defdelegate append_port_data(buffer, chunk), to: PortFraming, as: :append_probe_port_data
 
   @spec split_complete_lines(binary(), [binary()], boolean()) ::
           {:ok, [binary()], binary(), boolean()}
-  def split_complete_lines(buffer, acc, oversized) do
-    case :binary.split(buffer, "\n") do
-      [line, rest] ->
-        if byte_size(line) > @max_line_bytes do
-          split_complete_lines(rest, acc, true)
-        else
-          split_complete_lines(rest, [line | acc], oversized)
-        end
-
-      [rest] ->
-        if byte_size(rest) > @max_line_bytes do
-          {:ok, Enum.reverse(acc), "", true}
-        else
-          {:ok, Enum.reverse(acc), rest, oversized}
-        end
-    end
-  end
+  defdelegate split_complete_lines(buffer, acc, oversized),
+    to: PortFraming,
+    as: :split_probe_complete_lines
 
   @spec find_probe_result([binary()], String.t()) :: {:ok, probe_result()} | :continue
   def find_probe_result(lines, probe_instance_id) when is_list(lines) do

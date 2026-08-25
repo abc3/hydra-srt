@@ -18,8 +18,8 @@ defmodule HydraSrt.Api.Route do
     field :gst_debug, :string, default: "2"
     field :backup_mode, :string, default: "passive"
     field :backup_switch_after_ms, :integer, default: 3000
-    field :backup_cooldown_ms, :integer, default: 10000
-    field :backup_primary_stable_ms, :integer, default: 15000
+    field :backup_cooldown_ms, :integer, default: 10_000
+    field :backup_primary_stable_ms, :integer, default: 15_000
     field :backup_probe_interval_ms, :integer, default: 5000
     field :last_switch_reason, :string
     field :last_switch_at, :utc_datetime_usec

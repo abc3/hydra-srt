@@ -3,6 +3,7 @@ defmodule HydraSrt.Stats.VictoriaMetrics do
 
   require Logger
 
+  alias HydraSrt.Stats.JsonLines
   alias HydraSrt.Stats.VictoriaHttp
 
   @stats_metric "hydra_srt_stats_sample"
@@ -112,7 +113,7 @@ defmodule HydraSrt.Stats.VictoriaMetrics do
         @event_metric
 
       ids ->
-        pattern = ids |> Enum.map(&Regex.escape/1) |> Enum.join("|")
+        pattern = Enum.map_join(ids, "|", &Regex.escape/1)
         "#{@event_metric}{route_id=~#{inspect_label_value("^(#{pattern})$")}}"
     end
   end
@@ -269,14 +270,7 @@ defmodule HydraSrt.Stats.VictoriaMetrics do
 
   @spec parse_json_lines(binary()) :: [map()]
   def parse_json_lines(body) when is_binary(body) do
-    body
-    |> String.split("\n", trim: true)
-    |> Enum.flat_map(fn line ->
-      case Jason.decode(line) do
-        {:ok, decoded} when is_map(decoded) -> [decoded]
-        _ -> []
-      end
-    end)
+    JsonLines.parse_json_lines(body)
   end
 
   @spec endpoint(binary()) :: binary()

@@ -2,7 +2,7 @@ defmodule HydraSrtWeb.AuthController do
   use HydraSrtWeb, :controller
 
   def login(conn, %{"login" => %{"user" => user, "password" => password}}) do
-    # TODO: Implement a proper authentication mechanism
+    # Authentication requires a proper mechanism before this endpoint is production-ready.
     if user == Application.get_env(:hydra_srt, :api_auth_username) &&
          password == Application.get_env(:hydra_srt, :api_auth_password) do
       token = generate_token()

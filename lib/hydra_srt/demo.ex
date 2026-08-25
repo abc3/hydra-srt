@@ -2,8 +2,8 @@ defmodule HydraSrt.Demo do
   @moduledoc false
 
   alias HydraSrt.Api
-  alias HydraSrt.Repo
   alias HydraSrt.Api.Route
+  alias HydraSrt.Repo
 
   @demo_route_name "demo_route"
   @demo_udp_route_name "demo_udp_route"
@@ -45,26 +45,26 @@ defmodule HydraSrt.Demo do
   def bootstrap(false), do: :ok
 
   def bootstrap(true) do
-    route = ensure_demo_route!()
+    route = ensure_demo_route!(@demo_route_name)
     _source = ensure_demo_source!(route.id)
     _srt_dest = ensure_demo_srt_destination!(route.id)
     _udp_dest = ensure_demo_udp_destination!(route.id)
 
-    udp_route = ensure_demo_udp_route!()
+    udp_route = ensure_demo_route!(@demo_udp_route_name)
     _udp_source = ensure_demo_udp_source!(udp_route.id)
     _udp_srt_dest = ensure_demo_udp_srt_destination!(udp_route.id)
     _udp_udp_dest = ensure_demo_udp_udp_destination!(udp_route.id)
 
-    rtp_route = ensure_demo_rtp_route!()
+    rtp_route = ensure_demo_route!(@demo_rtp_route_name)
     _rtp_source = ensure_demo_rtp_source!(rtp_route.id)
     _rtp_srt_dest = ensure_demo_rtp_srt_destination!(rtp_route.id)
     _rtp_udp_dest = ensure_demo_rtp_udp_destination!(rtp_route.id)
 
-    rtmp_route = ensure_demo_rtmp_route!()
+    rtmp_route = ensure_demo_route!(@demo_rtmp_route_name)
     _rtmp_source = ensure_demo_rtmp_source!(rtmp_route.id)
     _rtmp_srt_dest = ensure_demo_rtmp_srt_destination!(rtmp_route.id)
 
-    rtmp_client_route = ensure_demo_rtmp_client_route!()
+    rtmp_client_route = ensure_demo_route!(@demo_rtmp_client_route_name)
     _rtmp_client_source = ensure_demo_source!(rtmp_client_route.id)
     _rtmp_client_udp_dest = ensure_demo_rtmp_client_udp_destination!(rtmp_client_route.id)
     _rtmp_client_rtmp_dest = ensure_demo_rtmp_destination!(rtmp_client_route.id)
@@ -72,79 +72,16 @@ defmodule HydraSrt.Demo do
     :ok
   end
 
-  defp ensure_demo_route! do
-    case find_route_by_name(@demo_route_name) do
+  @spec ensure_demo_route!(String.t()) :: map()
+  def ensure_demo_route!(name) when is_binary(name) do
+    case find_route_by_name(name) do
       %{} = route ->
         route
 
       nil ->
         {:ok, route} =
           Api.create_route(%{
-            name: @demo_route_name,
-            enabled: false
-          })
-
-        route
-    end
-  end
-
-  defp ensure_demo_udp_route! do
-    case find_route_by_name(@demo_udp_route_name) do
-      %{} = route ->
-        route
-
-      nil ->
-        {:ok, route} =
-          Api.create_route(%{
-            name: @demo_udp_route_name,
-            enabled: false
-          })
-
-        route
-    end
-  end
-
-  defp ensure_demo_rtp_route! do
-    case find_route_by_name(@demo_rtp_route_name) do
-      %{} = route ->
-        route
-
-      nil ->
-        {:ok, route} =
-          Api.create_route(%{
-            name: @demo_rtp_route_name,
-            enabled: false
-          })
-
-        route
-    end
-  end
-
-  defp ensure_demo_rtmp_route! do
-    case find_route_by_name(@demo_rtmp_route_name) do
-      %{} = route ->
-        route
-
-      nil ->
-        {:ok, route} =
-          Api.create_route(%{
-            name: @demo_rtmp_route_name,
-            enabled: false
-          })
-
-        route
-    end
-  end
-
-  defp ensure_demo_rtmp_client_route! do
-    case find_route_by_name(@demo_rtmp_client_route_name) do
-      %{} = route ->
-        route
-
-      nil ->
-        {:ok, route} =
-          Api.create_route(%{
-            name: @demo_rtmp_client_route_name,
+            name: name,
             enabled: false
           })
 

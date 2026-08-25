@@ -6,6 +6,7 @@ defmodule HydraSrtWeb.NdiSourcesController do
   use HydraSrtWeb, :controller
 
   alias HydraSrt.Ndi.Capabilities
+  alias HydraSrtWeb.NdiError
 
   @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def index(conn, params) do
@@ -61,8 +62,6 @@ defmodule HydraSrtWeb.NdiSourcesController do
   @spec ndi_error(Plug.Conn.t(), pos_integer(), String.t(), String.t()) :: Plug.Conn.t()
   def ndi_error(conn, status, code, message)
       when is_integer(status) and is_binary(code) and is_binary(message) do
-    conn
-    |> put_status(status)
-    |> json(%{error: message, code: code, errors: %{}})
+    NdiError.render(conn, status, code, message)
   end
 end

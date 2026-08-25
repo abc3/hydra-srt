@@ -115,7 +115,7 @@ defmodule HydraSrt.Api.EndpointDestinationTest do
         schema: "UDP",
         interface_sys_name: "eth0",
         host: "127.0.0.1",
-        port: 12323
+        port: 12_323
       })
 
     assert {:error, changeset} =
@@ -126,7 +126,7 @@ defmodule HydraSrt.Api.EndpointDestinationTest do
                schema: "UDP",
                interface_sys_name: "eth0",
                host: "127.0.0.1",
-               port: 12323
+               port: 12_323
              })
              |> Repo.insert()
 

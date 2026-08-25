@@ -15,6 +15,7 @@ defmodule HydraSrt.Ndi.Discovery do
   require Logger
 
   alias HydraSrt.Ndi.FeaturePolicy
+  alias HydraSrt.Ndi.PortFraming
 
   @stale_after_ms :timer.seconds(15)
   # Native snapshot max (ndi_discovery.rs): 256 devices × 4 fields × 256-byte
@@ -224,30 +225,13 @@ defmodule HydraSrt.Ndi.Discovery do
   """
   @spec append_port_data(binary(), binary()) ::
           {:ok, [binary()], binary(), boolean()}
-  def append_port_data(buffer, chunk) when is_binary(buffer) and is_binary(chunk) do
-    combined = buffer <> chunk
-    split_complete_lines(combined, [], false)
-  end
+  defdelegate append_port_data(buffer, chunk), to: PortFraming, as: :append_discovery_port_data
 
   @spec split_complete_lines(binary(), [binary()], boolean()) ::
           {:ok, [binary()], binary(), boolean()}
-  def split_complete_lines(buffer, acc, oversized) do
-    case :binary.split(buffer, "\n") do
-      [line, rest] ->
-        if byte_size(line) > @max_line_bytes do
-          split_complete_lines(rest, acc, true)
-        else
-          split_complete_lines(rest, [line | acc], oversized)
-        end
-
-      [rest] ->
-        if byte_size(rest) > @max_line_bytes do
-          {:ok, Enum.reverse(acc), "", true}
-        else
-          {:ok, Enum.reverse(acc), rest, oversized}
-        end
-    end
-  end
+  defdelegate split_complete_lines(buffer, acc, oversized),
+    to: PortFraming,
+    as: :split_discovery_complete_lines
 
   @spec apply_devices_cap([device()], boolean()) :: {[device()], boolean()}
   def apply_devices_cap(devices, truncated) when is_list(devices) do

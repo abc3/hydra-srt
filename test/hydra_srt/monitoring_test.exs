@@ -1,11 +1,11 @@
 defmodule HydraSrt.MonitoringTest do
   use ExUnit.Case
-  alias HydraSrt.Monitoring.OsMon
-  alias HydraSrt.Monitoring.NodeStats
-  alias HydraSrt.PromEx.Plugins.OsMon, as: PromExOsMon
-  alias HydraSrt.ProcessMonitor
-  alias HydraSrt.SignalHandler
   alias HydraSrt.ErlSysMon
+  alias HydraSrt.Monitoring.NodeStats
+  alias HydraSrt.Monitoring.OsMon
+  alias HydraSrt.ProcessMonitor
+  alias HydraSrt.PromEx.Plugins.OsMon, as: PromExOsMon
+  alias HydraSrt.SignalHandler
 
   test "OsMon returns valid system stats" do
     stats = OsMon.get_all_stats()
