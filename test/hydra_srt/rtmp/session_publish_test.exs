@@ -269,6 +269,32 @@ defmodule HydraSrt.Rtmp.SessionPublishTest do
       cleanup_registry(path)
     end
 
+    test "broadcasts metadata to players that subscribed before the publisher connected" do
+      stream = unique_stream()
+      path = "/live/#{stream}"
+      {_route, route_id} = live_route_with_rtmp_source(path)
+
+      # A route started before anyone published subscribes to the path while the cache
+      # is still empty, so it never receives bootstrap data at play time. onMetaData
+      # must therefore be relayed live, exactly like media tags are.
+      :ok = Phoenix.PubSub.subscribe(HydraSrt.PubSub, path)
+
+      session =
+        Fix.connected_session(%{
+          app: "live",
+          phase: :publishing,
+          path: path,
+          publish_route_id: route_id
+        })
+
+      message = Fix.metadata_message(%{"width" => 1280}, session.stream_id)
+      {_session, []} = Session.dispatch_message(session, message)
+
+      assert_receive {:metadata, %{"width" => 1280}, 0}
+
+      cleanup_registry(path)
+    end
+
     test "does not cache metadata while still :connected (rejected publish leaves no stale cache)" do
       stream = unique_stream()
       path = "/live/#{stream}"
