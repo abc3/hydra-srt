@@ -115,9 +115,77 @@ defmodule HydraSrt.SourceProbeTest do
     assert {:error, "ffprobe returned invalid JSON"} = SourceProbe.decode_output("no json here")
   end
 
+  test "listener sources are told a sender must be connected" do
+    assert SourceProbe.listener_timeout_hint(true) =~ "sender is connected"
+    assert SourceProbe.listener_timeout_hint(false) == ""
+  end
+
+  test "listener_source?/1 recognizes the stored mode" do
+    assert SourceProbe.listener_source?(%{"mode" => "listener"})
+    assert SourceProbe.listener_source?(%{"mode" => "Listener"})
+    refute SourceProbe.listener_source?(%{"mode" => "caller"})
+    refute SourceProbe.listener_source?(%{})
+  end
+
+  test "an idle listener source times out with an actionable message" do
+    source = %{
+      "schema" => "SRT",
+      "mode" => "listener",
+      "localaddress" => "127.0.0.1",
+      "localport" => 24_000 + :erlang.unique_integer([:positive, :monotonic]),
+      "enabled" => true
+    }
+
+    assert {:error, message} = SourceProbe.probe(source, timeout_ms: 300)
+
+    # The unit CI job has no ffmpeg, so assert the hint only where ffprobe can
+    # actually run, and assert the missing-binary path otherwise.
+    if System.find_executable("ffprobe") do
+      assert message =~ "timed out"
+      assert message =~ "sender is connected"
+    else
+      assert message == "ffprobe is not available on the server"
+    end
+  end
+
+  test "a timed out probe leaves no ffprobe process behind" do
+    if System.find_executable("ffprobe") do
+      port = 24_500 + :erlang.unique_integer([:positive, :monotonic])
+
+      source = %{
+        "schema" => "SRT",
+        "mode" => "listener",
+        "localaddress" => "127.0.0.1",
+        "localport" => port,
+        "enabled" => true
+      }
+
+      assert {:error, _message} = SourceProbe.probe(source, timeout_ms: 300)
+
+      # The killed child must release the port, otherwise the next test of the
+      # same source fails with an address already in use error.
+      assert wait_until_port_is_free(port, 40)
+    end
+  end
+
   test "client_error trims and truncates probe failures" do
     assert SourceProbe.client_error("  timeout  ") == "timeout"
     assert SourceProbe.client_error("") == "Failed to test source connection"
     assert String.length(SourceProbe.client_error(String.duplicate("x", 600))) == 500
+  end
+
+  @spec wait_until_port_is_free(pos_integer(), non_neg_integer()) :: boolean()
+  def wait_until_port_is_free(_port, 0), do: false
+
+  def wait_until_port_is_free(port, attempts) do
+    case :gen_udp.open(port, [{:ip, {127, 0, 0, 1}}]) do
+      {:ok, socket} ->
+        :gen_udp.close(socket)
+        true
+
+      {:error, _reason} ->
+        Process.sleep(50)
+        wait_until_port_is_free(port, attempts - 1)
+    end
   end
 end
