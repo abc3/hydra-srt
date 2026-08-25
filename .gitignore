@@ -1,6 +1,9 @@
 # The directory Mix will write compiled artifacts to.
 /_build/
 
+# ExDNA's incremental fingerprints are local build artifacts.
+.ex_dna_cache
+
 # If you run "mix test --cover", coverage assets end up here.
 /cover/
 
@@ -9,6 +12,9 @@
 
 # Where 3rd-party dependencies like ExDoc output generated docs.
 /doc/
+
+# Reach writes its interactive HTML report here.
+/reach_report/
 
 # Ignore .fetch files in case you like to edit your project deps locally.
 /.fetch
