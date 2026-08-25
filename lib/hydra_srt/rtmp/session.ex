@@ -184,6 +184,12 @@ defmodule HydraSrt.Rtmp.Session do
       when is_binary(path) and path != "" do
     :ok = StreamCache.record_metadata(path, data, timestamp)
 
+    # Players that subscribed before this publisher connected never ran
+    # send_cached_bootstrap/1 against a populated cache, so onMetaData has to reach
+    # them the same way media tags do; without it flvdemux sees a stream it cannot
+    # build a handler for.
+    :ok = Phoenix.PubSub.broadcast(HydraSrt.PubSub, path, {:metadata, data, timestamp})
+
     Logger.debug(
       "RtmpServer metadata path=#{path} peer=#{inspect(session.peer)} data=#{inspect(data)}"
     )

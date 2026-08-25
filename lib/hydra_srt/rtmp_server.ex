@@ -108,6 +108,21 @@ defmodule HydraSrt.RtmpServer do
     end
   end
 
+  def handle_info({:metadata, data, timestamp}, %Session{phase: :playing} = session)
+      when is_map(data) and is_integer(timestamp) do
+    case Session.send_metadata_chunk(session, data, timestamp) do
+      :ok ->
+        {:noreply, session}
+
+      {:error, reason} ->
+        Logger.warning(
+          "RtmpServer failed to forward metadata peer=#{inspect(session.peer)} reason=#{inspect(reason)}"
+        )
+
+        {:stop, reason, session}
+    end
+  end
+
   def handle_info({:tcp_closed, socket}, %Session{socket: socket, peer: peer} = session) do
     Logger.info("RtmpServer connection closed peer=#{inspect(peer)}")
 
