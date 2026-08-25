@@ -893,12 +893,22 @@ pub fn caller_ip(values: &[glib::Value]) -> Option<IpAddr> {
 
 /// Apply typed SRT source properties. Never sets `mode` or `streamid` on the element.
 pub fn apply_source(element: &gst::Element, config: &SrtSource) -> Result<(), (ErrorCode, String)> {
+    // A listener source always keeps listening, even when the stored config says
+    // otherwise. With it off, an abruptly lost caller leaves srtsrc holding a dead
+    // socket: it stops accepting, never posts EOS, and the route wedges as
+    // reconnecting with nothing bound. Only a graceful sender stop posts EOS, so
+    // honoring a stored false would leave existing routes broken. See issue 102.
+    let keep_listening = if matches!(config.mode(), SrtMode::Listener) {
+        Some(true)
+    } else {
+        config.keep_listening()
+    };
     apply_common(
         element,
         config.uri().as_str(),
         config.latency().map(|v| v.get()),
         config.auto_reconnect(),
-        config.keep_listening(),
+        keep_listening,
         config.poll_timeout().map(|v| v.get()),
         config.passphrase(),
         config.pbkeylen().map(|v| v.as_i32()),
@@ -1146,6 +1156,85 @@ mod tests {
                 // mode must not have been set via our applier; URI carries it.
                 true
             }
+        );
+    }
+
+    fn source_config(mode: SrtMode, keep_listening: Option<bool>) -> SrtSource {
+        SrtSource::new(
+            SrtUri::new("srt://127.0.0.1:4201").expect("valid SRT URI"),
+            mode,
+            None, // latency
+            None, // auto_reconnect
+            keep_listening,
+            None, // poll_timeout
+            None, // passphrase
+            None, // pbkeylen
+            None, // streamid
+            None, // localaddress
+            None, // localport
+            None, // authentication
+            None, // access
+        )
+    }
+
+    #[test]
+    fn listener_sources_always_keep_listening() {
+        let _ = gst::init();
+
+        let listener = gst::ElementFactory::make("srtsrc")
+            .build()
+            .expect("srtsrc element should be available for tests");
+        apply_source(&listener, &source_config(SrtMode::Listener, None))
+            .expect("listener source config applies");
+        assert!(listener.property::<bool>("keep-listening"));
+
+        // A route stored by the old UI carries an explicit false. Honoring it
+        // would leave that route unable to accept a caller again, so it is
+        // overridden rather than passed through.
+        let stored_false = gst::ElementFactory::make("srtsrc")
+            .build()
+            .expect("srtsrc element should be available for tests");
+        apply_source(
+            &stored_false,
+            &source_config(SrtMode::Listener, Some(false)),
+        )
+        .expect("stored listener setting applies");
+        assert!(stored_false.property::<bool>("keep-listening"));
+
+        let caller = gst::ElementFactory::make("srtsrc")
+            .build()
+            .expect("srtsrc element should be available for tests");
+        let caller_default = caller.property::<bool>("keep-listening");
+        apply_source(&caller, &source_config(SrtMode::Caller, None))
+            .expect("caller source config applies");
+        assert_eq!(caller.property::<bool>("keep-listening"), caller_default);
+
+        let destination = gst::ElementFactory::make("srtsink")
+            .build()
+            .expect("srtsink element should be available for tests");
+        let destination_default = destination
+            .has_property("keep-listening", None)
+            .then(|| destination.property::<bool>("keep-listening"));
+        let destination_config = SrtDestination::new(
+            SrtUri::new("srt://127.0.0.1:4201").expect("valid SRT URI"),
+            SrtMode::Listener,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        apply_destination(&destination, &destination_config).expect("destination config applies");
+        assert_eq!(
+            destination
+                .has_property("keep-listening", None)
+                .then(|| destination.property::<bool>("keep-listening")),
+            destination_default
         );
     }
 
@@ -1445,7 +1534,7 @@ mod tests {
         // received-byte field is a guint64 in the running GStreamer plugin; the
         // state machine below is then driven with structures using that captured
         // field and type, rather than an invented Rust fixture type.
-        let (listener, sender, _sink) = real_loopback_srt_pair(14803, 5);
+        let (listener, sender, _sink) = real_loopback_srt_pair(14803, 5, false);
         let source = listener.by_name("src").expect("source element present");
         let captured = source.property::<Option<gst::Structure>>("stats");
         let captured_total = match read_bytes_received(captured.as_deref()) {
@@ -1616,6 +1705,7 @@ mod tests {
     fn real_loopback_srt_pair(
         port: u16,
         min_buffers: u32,
+        keep_listening: bool,
     ) -> (gst::Pipeline, gst::Pipeline, gst::Element) {
         use std::sync::atomic::AtomicU32;
 
@@ -1634,6 +1724,10 @@ mod tests {
         .expect("parsed element is a pipeline");
 
         let sink = sender.by_name("sink").expect("sink element present");
+        listener
+            .by_name("src")
+            .expect("source element present")
+            .set_property("keep-listening", keep_listening);
         let fsink = listener.by_name("fsink").expect("fakesink element present");
 
         let seen = Arc::new(AtomicU32::new(0));
@@ -1670,13 +1764,111 @@ mod tests {
     }
 
     #[test]
+    fn listener_keep_listening_accepts_a_second_caller_without_eos() {
+        let port = 14804;
+        let (listener, sender, _sink) = real_loopback_srt_pair(port, 5, true);
+        let bus = listener.bus().expect("listener pipeline bus");
+
+        sender
+            .set_state(gst::State::Null)
+            .expect("first sender stops");
+
+        let eos_deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut saw_eos = false;
+        while std::time::Instant::now() < eos_deadline {
+            if let Some(message) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) {
+                if matches!(message.view(), gst::MessageView::Eos(_)) {
+                    saw_eos = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            !saw_eos,
+            "keep-listening source must not post EOS after disconnect"
+        );
+
+        let second_sender = gst::parse::launch(&format!(
+            "videotestsrc is-live=true ! srtsink name=sink uri=srt://127.0.0.1:{port}?mode=caller wait-for-connection=true"
+        ))
+        .expect("second sender pipeline should parse")
+        .downcast::<gst::Pipeline>()
+        .expect("parsed element is a pipeline");
+        let second_sink = second_sender
+            .by_name("sink")
+            .expect("second sink element present");
+        second_sender
+            .set_state(gst::State::Playing)
+            .expect("second sender reaches playing");
+
+        let reconnect_deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut packets_sent = PacketsSentReading::Absent;
+        while std::time::Instant::now() < reconnect_deadline {
+            packets_sent = read_packets_sent(
+                second_sink
+                    .property::<Option<gst::Structure>>("stats")
+                    .as_ref()
+                    .map(|stats| stats.as_ref()),
+            );
+            if matches!(packets_sent, PacketsSentReading::Present(count) if count > 0) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            matches!(packets_sent, PacketsSentReading::Present(count) if count > 0),
+            "second caller must send data after listener reconnects, got {packets_sent:?}"
+        );
+
+        listener
+            .set_state(gst::State::Null)
+            .expect("listener stops");
+        second_sender
+            .set_state(gst::State::Null)
+            .expect("second sender stops");
+    }
+
+    #[test]
+    fn listener_without_keep_listening_ends_the_stream_after_a_disconnect() {
+        // The negative control for the test above, and the reproduction of the
+        // defect in issue 102: with keep-listening off, losing the caller ends
+        // the source, which is what tore the route down.
+        let (listener, sender, _sink) = real_loopback_srt_pair(14805, 5, false);
+        let bus = listener.bus().expect("listener pipeline bus");
+
+        sender
+            .set_state(gst::State::Null)
+            .expect("first sender stops");
+
+        let eos_deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut saw_eos = false;
+        while std::time::Instant::now() < eos_deadline {
+            if let Some(message) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) {
+                if matches!(message.view(), gst::MessageView::Eos(_)) {
+                    saw_eos = true;
+                    break;
+                }
+            }
+        }
+
+        listener
+            .set_state(gst::State::Null)
+            .expect("listener stops");
+
+        assert!(
+            saw_eos,
+            "without keep-listening a lost caller must end the source"
+        );
+    }
+
+    #[test]
     fn packets_sent_is_read_from_a_real_connected_srtsink_stats_structure() {
         // The mandatory real-payload check: instead of asserting
         // against a hand-built `gst::Structure`, this connects an actual `srtsink` to
         // an actual `srtsrc` over loopback SRT, lets real data flow, and reads
         // `read_packets_sent` against the `stats` property GStreamer's own SRT plugin
         // produced - the same call path production code uses.
-        let (listener, sender, sink) = real_loopback_srt_pair(14801, 5);
+        let (listener, sender, sink) = real_loopback_srt_pair(14801, 5, false);
 
         let stats = sink.property::<Option<gst::Structure>>("stats");
         match read_packets_sent(stats.as_deref()) {
@@ -1706,7 +1898,7 @@ mod tests {
         // sent". With a real, continuously sending loopback destination armed at a
         // short threshold/cadence, no `endpoint_health` event may ever report
         // "failed".
-        let (listener, sender, sink) = real_loopback_srt_pair(14802, 5);
+        let (listener, sender, sink) = real_loopback_srt_pair(14802, 5, false);
 
         let monitor = build_destination_health_monitor(&sink, SrtMode::Caller)
             .expect("caller mode is armed-eligible");

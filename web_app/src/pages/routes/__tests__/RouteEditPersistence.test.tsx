@@ -80,7 +80,7 @@ const primarySource = {
   address: '10.0.0.1',
   port: 9500,
   auto_reconnect: true,
-  keep_listening: false,
+  keep_listening: true,
 };
 
 const secondSource = {

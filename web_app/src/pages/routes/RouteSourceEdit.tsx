@@ -65,7 +65,7 @@ const DEFAULT_SOURCE = {
   schema: 'SRT',
   mode: 'listener',
   auto_reconnect: true,
-  keep_listening: false,
+  keep_listening: true,
 };
 
 const DEFAULT_DESTINATION = {

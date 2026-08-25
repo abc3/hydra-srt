@@ -872,7 +872,12 @@ const RouteItem = () => {
     return result.data;
   };
 
-  const refreshRouteUntilStable = async (action: 'start' | 'stop') => {
+  const refreshRouteUntilStable = async (
+    action: 'start' | 'stop',
+    options: { authoritative?: boolean } = {},
+  ) => {
+    const { authoritative = false } = options;
+
     for (let attempt = 0; attempt < ROUTE_ACTION_POLL_ATTEMPTS; attempt += 1) {
       const nextRoute = await fetchRouteDataSnapshot();
       setRouteData((prev): RouteRecord | null => {
@@ -882,15 +887,20 @@ const RouteItem = () => {
 
         return {
           ...nextRoute,
-          schema_status: resolvePendingRouteStatus(
-            prev.schema_status,
-            nextRoute.schema_status,
-            pendingAction === 'restart' ? action : (pendingAction || action),
-          ) ?? undefined,
+          schema_status: authoritative
+            ? nextRoute.schema_status ?? undefined
+            : resolvePendingRouteStatus(
+                prev.schema_status,
+                nextRoute.schema_status,
+                pendingAction === 'restart' ? action : (pendingAction || action),
+              ) ?? undefined,
         };
       });
 
-      if (hasRouteReachedActionResult(nextRoute, action)) {
+      if (
+        hasRouteReachedActionResult(nextRoute, action) ||
+        (authoritative && isTerminalRuntimeStatus(getRouteRuntimeStatus(nextRoute)))
+      ) {
         return true;
       }
 
@@ -1405,6 +1415,8 @@ const RouteItem = () => {
       return;
     }
 
+    const routeSnapshot = routeData;
+
     try {
       if (routeBusy) {
         setPendingAction('stop');
@@ -1429,14 +1441,14 @@ const RouteItem = () => {
       // Handle specific error cases
       const errorMessage = getErrorMessage(error, 'Unknown error');
       if (errorMessage.includes('already_started')) {
-        messageApi.info('Route is already started');
-
-        // Update the UI to reflect that the route is starting.
-        setRouteData((prev) => (prev ? {
-          ...prev,
-          status: 'starting',
-          schema_status: 'starting',
-        } : prev));
+        messageApi.info('Could not confirm the route started. Refreshing its status.');
+        try {
+          await refreshRouteUntilStable('start', { authoritative: true });
+        } catch (refreshError) {
+          setRouteData(routeSnapshot);
+          messageApi.error(`Failed to refresh route status: ${getErrorMessage(refreshError, 'Unknown error')}`);
+          console.error('Error refreshing route status:', refreshError);
+        }
       } else if (errorMessage.includes('not_found')) {
         messageApi.info('Route process not found. It may have already been stopped.');
         await fetchRouteData();

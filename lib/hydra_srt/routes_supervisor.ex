@@ -17,6 +17,7 @@ defmodule HydraSrt.RoutesSupervisor do
         id: {:route_handler, args.id},
         start: {RouteHandler, :start_link, [args]},
         restart: :transient,
+        significant: true,
         type: :worker
       }
     ]
@@ -24,7 +25,8 @@ defmodule HydraSrt.RoutesSupervisor do
     Supervisor.init(children,
       strategy: :one_for_all,
       max_restarts: 10,
-      max_seconds: 60
+      max_seconds: 60,
+      auto_shutdown: :any_significant
     )
   end
 

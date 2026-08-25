@@ -1254,14 +1254,60 @@ defmodule HydraSrt.RouteHandlerTest do
       :ok
     end
 
-    test "exit status 0 with no route_terminal on record is a normal stop" do
+    test "exit status 0 with no route_terminal on record schedules a retry" do
       port = make_ref()
-      data = base_route_data(%{id: "route-exit-normal", port: port, route_terminal: nil})
+      data = base_route_data(%{id: "route-exit-zero-retry", port: port, route_terminal: nil})
 
-      assert {:stop, :normal, next} =
+      assert {:keep_state, next} =
                RouteHandler.handle_event(:info, {port, {:exit_status, 0}}, :started, data)
 
-      assert next.shutdown_reason == {:port_exit, 0}
+      assert next.port == nil
+      assert next.retry_scheduled? == true
+      assert next.retry_attempt == 1
+      assert_receive :retry_start, next.retry_prev_backoff_ms + 100
+    end
+
+    test "live statem remains alive after exit status 0 without a route_terminal" do
+      route_id = "route-exit-zero-process-#{System.unique_integer([:positive])}"
+
+      route = %{
+        "id" => route_id,
+        "active_source_id" => nil,
+        "sources" => [],
+        "destinations" => []
+      }
+
+      :meck.expect(HydraSrt.Db, :get_route, fn ^route_id, true -> {:ok, route} end)
+      {:ok, pid} = RouteHandler.start_link(%{id: route_id})
+      port = make_ref()
+      :sys.get_state(pid)
+
+      on_exit(fn ->
+        if Process.alive?(pid) do
+          Process.unlink(pid)
+          Process.exit(pid, :kill)
+        end
+      end)
+
+      :sys.replace_state(pid, fn {_state, data} ->
+        {:started,
+         %{
+           data
+           | port: port,
+             route: route,
+             retry_scheduled?: false,
+             retry_attempt: 0,
+             retry_prev_backoff_ms: nil
+         }}
+      end)
+
+      send(pid, {port, {:exit_status, 0}})
+      {state, next} = :sys.get_state(pid)
+
+      assert state == :started
+      assert Process.alive?(pid)
+      assert next.port == nil
+      assert next.retry_scheduled? == true
     end
 
     test "exit status 0 with a retryable route_terminal on record keeps retrying instead of stopping" do
@@ -1351,14 +1397,17 @@ defmodule HydraSrt.RouteHandlerTest do
       assert_receive :retry_start, next.retry_prev_backoff_ms + 100
     end
 
-    test "port EXIT with :normal still parks the route stopped (a legitimate end)" do
+    test "port EXIT with :normal schedules a retry" do
       port = make_ref()
-      data = base_route_data(%{id: "route-normal-exit", active_source_id: "s1", port: port})
+      data = base_route_data(%{id: "route-normal-exit-retry", active_source_id: "s1", port: port})
 
-      assert {:stop, :normal, next} =
+      assert {:keep_state, next} =
                RouteHandler.handle_event(:info, {:EXIT, port, :normal}, :started, data)
 
-      assert next.shutdown_reason == {:port_exit, :normal}
+      assert next.port == nil
+      assert next.retry_scheduled? == true
+      assert next.retry_attempt == 1
+      assert_receive :retry_start, next.retry_prev_backoff_ms + 100
     end
   end
 

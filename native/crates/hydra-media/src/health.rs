@@ -166,12 +166,7 @@ pub fn attach_bus_watch(
                 );
             }
             MessageView::Eos(..) => {
-                if let Some(endpoint) = endpoint_by_bin.values().find(|endpoint| {
-                    endpoint.direction == EndpointDirection::Source
-                        && endpoint.transport == Transport::Ndi
-                }) {
-                    let code = ErrorCode::NdiSourceEos;
-                    let detail = "NDI source reached end of stream";
+                if let Some((endpoint, code, detail)) = classify_source_eos(&endpoint_by_bin) {
                     let _ = event_sink.emit_endpoint_health(
                         &endpoint.endpoint_id,
                         endpoint.direction,
@@ -368,6 +363,34 @@ fn retry_domain(retryable: bool, endpoint: Option<&EndpointDescriptor>) -> Retry
     }
 }
 
+fn classify_source_eos(
+    endpoint_by_bin: &HashMap<String, EndpointDescriptor>,
+) -> Option<(EndpointDescriptor, ErrorCode, &'static str)> {
+    // A route process builds exactly one source bin, so find is unambiguous.
+    // Fail loudly in debug builds if a future multi source graph breaks that,
+    // because map iteration order would then pick an arbitrary endpoint.
+    debug_assert!(
+        endpoint_by_bin
+            .values()
+            .filter(|endpoint| endpoint.direction == EndpointDirection::Source)
+            .count()
+            <= 1,
+        "EOS attribution needs exactly one source endpoint"
+    );
+
+    endpoint_by_bin
+        .values()
+        .find(|endpoint| endpoint.direction == EndpointDirection::Source)
+        .map(|endpoint| {
+            let (code, detail) = if endpoint.transport == Transport::Ndi {
+                (ErrorCode::NdiSourceEos, "NDI source reached end of stream")
+            } else {
+                (ErrorCode::SourceEos, "Live source reached end of stream")
+            };
+            (endpoint.clone(), code, detail)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -554,6 +577,42 @@ mod tests {
             RetryDomain::Destination
         );
         assert_eq!(retry_domain(false, Some(&destination)), RetryDomain::None);
+    }
+
+    #[test]
+    fn source_eos_classification_makes_srt_retryable_on_the_route_domain() {
+        let endpoint = srt_endpoint();
+        let endpoints = HashMap::from([(endpoint.bin_name.clone(), endpoint.clone())]);
+
+        let (_, code, detail) = classify_source_eos(&endpoints).expect("source endpoint");
+
+        assert_eq!(code, ErrorCode::SourceEos);
+        assert_eq!(detail, "Live source reached end of stream");
+        assert_eq!(retry_domain(true, Some(&endpoint)), RetryDomain::Route);
+    }
+
+    #[test]
+    fn source_eos_without_a_source_endpoint_stays_unattributed() {
+        let destination = non_srt_endpoint();
+        let endpoints = HashMap::from([(destination.bin_name.clone(), destination)]);
+
+        assert_eq!(classify_source_eos(&endpoints), None);
+    }
+
+    #[test]
+    fn ndi_source_eos_keeps_its_existing_code_and_detail() {
+        let endpoint = EndpointDescriptor {
+            bin_name: "source_ndi".to_string(),
+            endpoint_id: "ndi-source".to_string(),
+            direction: EndpointDirection::Source,
+            transport: Transport::Ndi,
+        };
+        let endpoints = HashMap::from([(endpoint.bin_name.clone(), endpoint)]);
+
+        let (_, code, detail) = classify_source_eos(&endpoints).expect("source endpoint");
+
+        assert_eq!(code, ErrorCode::NdiSourceEos);
+        assert_eq!(detail, "NDI source reached end of stream");
     }
 
     #[test]
