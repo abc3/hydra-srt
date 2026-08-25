@@ -18,6 +18,7 @@
 > **Project Status**: Beta.
 
 [![GitHub License](https://img.shields.io/github/license/streamband/hydra-srt)](https://github.com/streamband/hydra-srt/blob/main/LICENSE)
+[![codecov](https://codecov.io/gh/streamband/hydra-srt/branch/main/graph/badge.svg)](https://codecov.io/gh/streamband/hydra-srt)
 
 ### Supported transports
 
@@ -96,6 +97,11 @@ flowchart LR
 - Historical metrics and logs
 
 See [docs/architecture.md](docs/architecture.md) for details.
+
+## Coverage
+
+Codecov reports unit-test coverage as separate Elixir, TypeScript, and Rust components in the
+dashboard and pull request comments. End-to-end suites are not instrumented.
 
 ## Quick Start
 

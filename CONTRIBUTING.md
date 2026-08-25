@@ -13,7 +13,7 @@ Read:
 2. Set up the project with [docs/development.md](docs/development.md).
 3. Create a branch.
 4. Make the change.
-5. Run `mix q`.
+5. Run `mix ci` (or `mix precommit` for the faster local loop).
 6. Run the relevant tests.
 7. Open a pull request.
 
@@ -55,17 +55,26 @@ refactor(native): simplify pipeline error handling
 
 Keep the subject line short. Put context in the body when needed.
 
-## Quality Gate
+## Quality Checks
 
 ```bash
-mix q
+mix ci
 ```
 
-Runs:
-1. Format check (`mix format --check-formatted`)
-2. Compile with warnings as errors
-3. Credo (static analysis)
-4. Dialyzer (type checking)
+The CI gate runs Hex and dependency audits, compilation with warnings as errors, unused-dependency
+and format checks, strict Credo, Sobelow, ex_dna, Reach architecture and smell checks, and tests.
+
+For the faster developer loop, run:
+
+```bash
+mix precommit
+```
+
+For the full local gate, including Dialyzer, run:
+
+```bash
+mix quality
+```
 
 ### One-Time Dialyzer Setup
 
@@ -101,7 +110,7 @@ make test_ci_local
 
 ## Pull Request Guidelines
 
-- Run `mix q`
+- Run `mix ci` (or `mix quality` when a local Dialyzer check is needed)
 - Run relevant tests
 - Include tests for behavior changes
 - Update documentation if you change behavior or add features

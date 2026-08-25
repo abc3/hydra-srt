@@ -16,15 +16,29 @@ HydraSRT is an open-source SRT routing platform. The Elixir layer manages routes
 |------|---------|
 | First-time setup | `mix setup` |
 | Local dev server | `make dev` (env vars: `docs/envs.md`) |
-| Code quality gate | `mix q` or `mix quality` |
+| CI quality gate | `mix ci` |
+| Fast developer loop | `mix precommit` |
+| Full local quality gate | `mix q` or `mix quality` |
 | Backend unit tests | `mix test` |
+| Elixir unit coverage | `mix coveralls.json` |
+| TypeScript unit coverage | `cd web_app && npm run test:unit:coverage` |
+| Rust unit coverage | `cd native && cargo llvm-cov --workspace --lcov --output-path lcov.info` |
 | Full test matrix | See `test/AGENTS.md` |
 | CI-equivalent local run | `make test_ci_local` |
 | Makefile targets | `make help` |
 
-### Quality (`mix q`)
+### Quality (`mix ci`, `mix precommit`, or `mix q`)
 
-Runs, in order: format check, compile with warnings as errors, Credo, Sobelow, Dialyzer.
+`mix ci` runs, in order: Hex audit, compile with warnings as errors, unused-dependency check,
+format check, strict Credo, dependency audit, Sobelow, ex_dna, Reach architecture and smell
+checks, and tests.
+
+`mix precommit` runs the faster developer loop: compile with warnings as errors, unused-dependency
+check, writable formatting, strict Credo, ex_dna, and tests.
+
+`mix q` and `mix quality` run the full local gate: format check, compile with warnings as errors,
+strict Credo, Sobelow, dependency audits, ex_dna, Reach architecture and smell checks, and
+Dialyzer.
 
 One-time Dialyzer setup (if PLT is missing):
 
