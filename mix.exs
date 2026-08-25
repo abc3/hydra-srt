@@ -9,6 +9,8 @@ defmodule HydraSrt.MixProject do
       elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      test_coverage: [tool: ExCoveralls],
+      hex: [ignore_advisories: ignored_advisories()],
       aliases: aliases(),
       deps: deps(),
       releases: releases()
@@ -23,6 +25,19 @@ defmodule HydraSrt.MixProject do
       mod: {HydraSrt.Application, []},
       extra_applications:
         [:logger, :os_mon, :ssl, :runtime_tools] ++ extra_applications(Mix.env())
+    ]
+  end
+
+  def cli do
+    [
+      preferred_envs: [
+        ci: :test,
+        precommit: :test,
+        coveralls: :test,
+        "coveralls.json": :test,
+        "coveralls.html": :test,
+        "coveralls.detail": :test
+      ]
     ]
   end
 
@@ -62,20 +77,31 @@ defmodule HydraSrt.MixProject do
       {:syn, "~> 3.3"},
       {:cachex, "~> 3.6"},
       {:hermes_mcp, "~> 0.14.1"},
+      # Pinned below 0.23: that release removed `:transport_opts` from Finch's
+      # request options, and hermes_mcp 0.14.1 (the latest) always passes it
+      # through `Finch.build/5`, so every MCP request raises ArgumentError.
+      # Finch is only here to hold that line — it arrives via hermes_mcp, and
+      # carries no advisory of its own. Drop the pin once hermes_mcp stops
+      # sending `:transport_opts`.
+      {:finch, "~> 0.21.0"},
 
       # Notifications
       {:telegram, github: "visciang/telegram", ref: "6dca11fff18c41fafffb92bb82082350ff1df217"},
-      {:hackney, "~> 1.18"},
+      {:hackney, "~> 4.0"},
 
       # Utilities
       {:jason, "~> 1.2"},
       {:uuid, "~> 1.1"},
 
       # Linting
+      {:excoveralls, "~> 0.18", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:credence, "~> 0.5.0", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:sobelow, "~> 0.14", only: [:dev, :test], runtime: false, warn_if_outdated: true},
+      {:ex_slop, "~> 0.4", only: [:dev, :test], runtime: false},
+      {:ex_dna, "~> 1.5", only: [:dev, :test], runtime: false},
+      {:reach, "~> 2.7", only: [:dev, :test], runtime: false},
 
       # Benchmarking
       {:benchee, "~> 1.3", only: :dev},
@@ -103,6 +129,35 @@ defmodule HydraSrt.MixProject do
     "sobelow --no-config --exit Low --verbose --skip -i Config.HTTPS,Config.Headers --ignore-files #{ignore_files}"
   end
 
+  # `ci` is the strict CI gate, `quality` is the full local gate including types,
+  # and `precommit` is the faster developer loop with writable formatting.
+  # `mix hex.audit` fails the build on any advisory in Hex's EEF feed. These are
+  # acknowledged rather than fixed because no upgrade exists that resolves them.
+  # Hex warns about entries that stop matching the lock file, so a stale
+  # acknowledgement here surfaces itself instead of hiding a fixed advisory.
+  defp ignored_advisories do
+    [
+      # Unbounded exponent in decimal enables unauthenticated DoS. Fixed in
+      # decimal 3.0.0, which the resolver cannot select: ecto ~> 3.12 requires
+      # decimal ~> 2.0. HydraSRT has no Decimal call sites and no :decimal
+      # schema fields, so untrusted input never reaches Decimal.new here.
+      # Remove once Ecto accepts decimal ~> 3.0.
+      "EEF-CVE-2026-32686",
+
+      # The three cowlib advisories below have no fixed release: 2.19.0 is the
+      # latest cowlib, and it is the version flagged. cowlib arrives through
+      # plug_cowboy -> cowboy, so it cannot be dropped either. Revisit when
+      # cowlib publishes a fix.
+      #
+      # Cookie request header injection in cow_cookie:cookie/1.
+      "EEF-CVE-2026-43969",
+      # Link header directive smuggling in cow_link:link/1.
+      "EEF-CVE-2026-43971",
+      # HTTP response splitting in cow_http_struct_hd:escape_string/2.
+      "EEF-CVE-2026-43966"
+    ]
+  end
+
   defp aliases do
     [
       setup: ["deps.get", "ecto.setup"],
@@ -113,11 +168,34 @@ defmodule HydraSrt.MixProject do
       credence: ["credence"],
       sobelow: [sobelow_cmd()],
       q: ["quality"],
+      precommit: [
+        "compile --warnings-as-errors",
+        "deps.unlock --unused",
+        "format",
+        "credo --strict",
+        "ex_dna",
+        "test"
+      ],
+      # The final CI step runs the suite through ExCoveralls so coverage is emitted without a second run.
+      ci: [
+        "hex.audit",
+        "compile --warnings-as-errors",
+        "deps.unlock --check-unused",
+        "format --check-formatted",
+        "credo --strict",
+        "sobelow",
+        "ex_dna",
+        "reach.check --arch --smells --strict --baseline .reach.baseline.json",
+        "coveralls.json"
+      ],
       quality: [
         "format --check-formatted",
         "compile --warnings-as-errors",
-        "credo --min-priority higher",
+        "credo --strict",
         "sobelow",
+        "hex.audit",
+        "ex_dna",
+        "reach.check --arch --smells --strict --baseline .reach.baseline.json",
         "dialyzer"
       ]
     ]
