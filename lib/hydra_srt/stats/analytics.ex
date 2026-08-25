@@ -501,7 +501,7 @@ defmodule HydraSrt.Stats.Analytics do
   def metric_key_matcher([key]), do: "metric_key=#{VictoriaMetrics.inspect_label_value(key)}"
 
   def metric_key_matcher(keys) when is_list(keys) do
-    escaped = keys |> Enum.map(&Regex.escape/1) |> Enum.join("|")
+    escaped = Enum.map_join(keys, "|", &Regex.escape/1)
     "metric_key=~#{VictoriaMetrics.inspect_label_value(escaped)}"
   end
 

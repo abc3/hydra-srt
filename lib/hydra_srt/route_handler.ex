@@ -42,8 +42,8 @@ defmodule HydraSrt.RouteHandler do
   alias HydraSrt.Helpers
   alias HydraSrt.LogSanitizer
   alias HydraSrt.Ndi.FeaturePolicy
-  alias HydraSrt.SystemInterfaces
   alias HydraSrt.Stats.EventLogger
+  alias HydraSrt.SystemInterfaces
   import Bitwise
 
   @ndi_default_media_policy "video_and_audio_required"
@@ -2046,11 +2046,9 @@ defmodule HydraSrt.RouteHandler do
   # `passphrase` or `streamid` that contains a space.
   @spec encode_srt_query(json_map()) :: String.t()
   defp encode_srt_query(params) when is_map(params) do
-    params
-    |> Enum.map(fn {key, value} ->
+    Enum.map_join(params, "&", fn {key, value} ->
       "#{percent_encode(key)}=#{percent_encode(value)}"
     end)
-    |> Enum.join("&")
   end
 
   defp percent_encode(value) do
@@ -2669,8 +2667,6 @@ defmodule HydraSrt.RouteHandler do
     with {:error, _reason} <- resolve_interface_bind_ip_from_system(sys_name),
          {:error, _reason} <- resolve_interface_bind_ip_from_db(sys_name) do
       {:error, :not_found}
-    else
-      {:ok, bind_ip} -> {:ok, bind_ip}
     end
   end
 

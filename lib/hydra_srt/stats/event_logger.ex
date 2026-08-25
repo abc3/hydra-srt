@@ -229,18 +229,7 @@ defmodule HydraSrt.Stats.EventLogger do
   end
 
   @impl true
-  def handle_info({:ingest_event, event}, state) do
-    events = enforce_max_buffer([event | state.events], state)
-
-    if length(events) >= state.max_batch_size do
-      {events_after_flush, result} = flush_events(events, state.insert_events_fun)
-      events_after_flush = enforce_max_buffer(events_after_flush, state)
-      log_flush_error(result)
-      {:noreply, %{state | events: events_after_flush}}
-    else
-      {:noreply, %{state | events: events}}
-    end
-  end
+  def handle_info({:ingest_event, event}, state), do: ingest_event(event, state)
 
   def handle_info(:flush, state) do
     {events_after_flush, result} = flush_events(state.events, state.insert_events_fun)
@@ -251,7 +240,10 @@ defmodule HydraSrt.Stats.EventLogger do
   end
 
   @impl true
-  def handle_cast({:ingest_event, event}, state) do
+  def handle_cast({:ingest_event, event}, state), do: ingest_event(event, state)
+
+  @spec ingest_event(map(), map()) :: {:noreply, map()}
+  def ingest_event(event, state) when is_map(event) and is_map(state) do
     events = enforce_max_buffer([event | state.events], state)
 
     if length(events) >= state.max_batch_size do
@@ -289,13 +281,20 @@ defmodule HydraSrt.Stats.EventLogger do
   end
 
   def enforce_max_buffer(events, %{max_buffer_size: max_buffer_size})
-      when is_list(events) and is_integer(max_buffer_size) and max_buffer_size > 0 and
-             length(events) > max_buffer_size do
-    dropped = length(events) - max_buffer_size
+      when is_list(events) and is_integer(max_buffer_size) and max_buffer_size > 0 do
+    # Count once and branch on it. Testing the size in the guard and again in
+    # the body walked the whole buffer twice on every flush.
+    count = length(events)
 
-    Logger.warning("Event logger dropped #{dropped} buffered events due to max_buffer_size")
+    if count > max_buffer_size do
+      dropped = count - max_buffer_size
 
-    Enum.take(events, max_buffer_size)
+      Logger.warning("Event logger dropped #{dropped} buffered events due to max_buffer_size")
+
+      Enum.take(events, max_buffer_size)
+    else
+      events
+    end
   end
 
   def enforce_max_buffer(events, _state) when is_list(events), do: events

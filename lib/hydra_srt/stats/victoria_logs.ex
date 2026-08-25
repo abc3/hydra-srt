@@ -3,6 +3,7 @@ defmodule HydraSrt.Stats.VictoriaLogs do
 
   require Logger
 
+  alias HydraSrt.Stats.JsonLines
   alias HydraSrt.Stats.VictoriaHttp
 
   @default_timeout 5_000
@@ -311,14 +312,7 @@ defmodule HydraSrt.Stats.VictoriaLogs do
 
   @spec parse_json_lines(binary()) :: [map()]
   def parse_json_lines(body) when is_binary(body) do
-    body
-    |> String.split("\n", trim: true)
-    |> Enum.flat_map(fn line ->
-      case Jason.decode(line) do
-        {:ok, decoded} when is_map(decoded) -> [decoded]
-        _ -> []
-      end
-    end)
+    JsonLines.parse_json_lines(body)
   end
 
   @spec parse_field_values(binary()) :: [binary()]

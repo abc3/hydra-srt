@@ -116,31 +116,20 @@ defmodule HydraSrt do
   end
 
   @spec mark_route_started(String.t()) :: {:ok, map()} | {:error, term()}
-  def mark_route_started(id) do
-    with {:ok, %{route: route, previous_status: previous_status}} <-
-           Db.transition_route_runtime_status_with_previous(
-             id,
-             route_runtime_status_attrs(@status_starting)
-             |> Map.put("schema_status", @status_starting),
-             @status_starting,
-             @status_starting
-           ) do
-      :ok = emit_route_status_transition(id, previous_status, route_runtime_status(route))
-      :ok = broadcast_route_items_status_for_id(id)
-      :ok = publish_terminal_zero_stats(route)
-      {:ok, route}
-    end
-  end
+  def mark_route_started(id), do: mark_route_with_terminal_stats(id, @status_starting)
 
   @spec mark_route_stopped(String.t()) :: {:ok, map()} | {:error, term()}
-  def mark_route_stopped(id) do
+  def mark_route_stopped(id), do: mark_route_with_terminal_stats(id, @status_stopped)
+
+  @spec mark_route_with_terminal_stats(String.t(), String.t()) ::
+          {:ok, map()} | {:error, term()}
+  def mark_route_with_terminal_stats(id, status) do
     with {:ok, %{route: route, previous_status: previous_status}} <-
            Db.transition_route_runtime_status_with_previous(
              id,
-             route_runtime_status_attrs(@status_stopped)
-             |> Map.put("schema_status", @status_stopped),
-             @status_stopped,
-             @status_stopped
+             route_runtime_status_attrs(status) |> Map.put("schema_status", status),
+             status,
+             status
            ) do
       :ok = emit_route_status_transition(id, previous_status, route_runtime_status(route))
       :ok = broadcast_route_items_status_for_id(id)

@@ -4,10 +4,9 @@ defmodule HydraSrt.Api do
   """
 
   import Ecto.Query, warn: false
-  alias HydraSrt.Repo
-
-  alias HydraSrt.Api.Route
   alias HydraSrt.Api.Endpoint
+  alias HydraSrt.Api.Route
+  alias HydraSrt.Repo
 
   @doc false
   def list_routes(with_destinations) when with_destinations in [true, false] do

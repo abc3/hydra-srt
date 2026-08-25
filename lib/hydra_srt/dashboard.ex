@@ -357,14 +357,15 @@ defmodule HydraSrt.Dashboard do
     columns
     |> Map.get("route_id", [])
     |> Enum.with_index()
-    |> Enum.reduce(%{}, fn {route_id, index}, acc ->
-      Map.put(acc, route_id, %{
-        ts: columns |> value_at("ts", index) |> timestamp_to_iso8601(),
-        event_type: value_at(columns, "event_type", index),
-        severity: value_at(columns, "severity", index),
-        reason: value_at(columns, "reason", index),
-        message: value_at(columns, "message", index)
-      })
+    |> Map.new(fn {route_id, index} ->
+      {route_id,
+       %{
+         ts: columns |> value_at("ts", index) |> timestamp_to_iso8601(),
+         event_type: value_at(columns, "event_type", index),
+         severity: value_at(columns, "severity", index),
+         reason: value_at(columns, "reason", index),
+         message: value_at(columns, "message", index)
+       }}
     end)
   end
 

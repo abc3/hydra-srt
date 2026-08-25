@@ -1,5 +1,6 @@
 defmodule HydraSrtWeb.RealtimeChannel do
   use HydraSrtWeb, :channel
+  @moduledoc false
 
   @system_pipelines_interval_ms 5_000
   @nodes_interval_ms 5_000

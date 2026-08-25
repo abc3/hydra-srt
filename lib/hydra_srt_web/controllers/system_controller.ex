@@ -1,8 +1,8 @@
 defmodule HydraSrtWeb.SystemController do
   use HydraSrtWeb, :controller
 
-  alias HydraSrt.ProcessMonitor
   alias HydraSrt.Helpers
+  alias HydraSrt.ProcessMonitor
   alias HydraSrt.SignalGenerator
 
   def list_pipelines(conn, _params) do

@@ -11,6 +11,7 @@ defmodule HydraSrtWeb.NdiProbesController do
   alias HydraSrt.Db
   alias HydraSrt.Ndi.FeaturePolicy
   alias HydraSrt.Ndi.Probe
+  alias HydraSrtWeb.NdiError
 
   @spec create(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def create(conn, params) do
@@ -30,9 +31,7 @@ defmodule HydraSrtWeb.NdiProbesController do
             end
 
           {:error, code, message, errors} ->
-            conn
-            |> put_status(status_for_code(code))
-            |> json(%{error: message, code: code, errors: errors})
+            NdiError.render(conn, status_for_code(code), code, message, errors)
         end
     end
   end
@@ -149,9 +148,7 @@ defmodule HydraSrtWeb.NdiProbesController do
   @spec ndi_error(Plug.Conn.t(), pos_integer(), String.t(), String.t()) :: Plug.Conn.t()
   def ndi_error(conn, status, code, message)
       when is_integer(status) and is_binary(code) and is_binary(message) do
-    conn
-    |> put_status(status)
-    |> json(%{error: message, code: code, errors: %{}})
+    NdiError.render(conn, status, code, message)
   end
 
   @spec stringify_param_keys(map()) :: map()
