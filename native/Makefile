@@ -16,6 +16,7 @@ help:
 	@echo "Available targets:"
 	@echo "  make build                  - Build the Rust pipeline binary"
 	@echo "  make check                  - cargo check"
+	@echo "  make coverage               - Generate LCOV coverage at lcov.info"
 	@echo "  make run ARGS=<route_id>    - Run cargo run with custom args"
 	@echo "  make demo_srt_to_udp        - Start native with SRT source -> UDP sink config"
 	@echo "  make demo_srt_to_srt        - Start native with SRT source -> SRT sink config"
@@ -34,6 +35,10 @@ build:
 .PHONY: check
 check:
 	cargo check
+
+.PHONY: coverage
+coverage:
+	cargo llvm-cov --workspace --lcov --output-path lcov.info
 
 .PHONY: run
 run:

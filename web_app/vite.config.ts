@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { configDefaults } from 'vitest/config';
+import type { CoverageOptions } from 'vitest/node';
 
 const toBoolean = (value: string | undefined | null, defaultValue: boolean): boolean => {
   if (value === undefined || value === null || value === '') {
@@ -29,6 +30,23 @@ const proxy = {
   },
 };
 
+// Keep the requested all-files behavior explicit even though Vitest 4's public type omits it.
+const coverage: CoverageOptions & { all: boolean } = {
+  provider: 'v8',
+  reporter: ['text', 'lcov'],
+  reportsDirectory: './coverage',
+  include: ['src/**/*.{ts,tsx}'],
+  exclude: [
+    'src/**/*.{test,spec}.{js,jsx,ts,tsx}',
+    'src/test/**',
+    'src/**/__tests__/**',
+    'playwright/**',
+    '**/*.d.ts',
+    '**/*.generated.{ts,tsx}',
+  ],
+  all: true,
+};
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -43,5 +61,6 @@ export default defineConfig({
     setupFiles: './src/test/setup.ts',
     globals: true,
     exclude: [...configDefaults.exclude, 'playwright/**'],
+    coverage,
   },
 });
