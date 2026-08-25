@@ -1,0 +1,14 @@
+{
+  "skip_files": [
+    "test/support/",
+    "deps/",
+    "(^|/)generated/",
+    "_generated\\.ex$"
+  ],
+  "terminal_options": {
+    "file_column_width": 60
+  },
+  "coverage_options": {
+    "minimum_coverage": 0
+  }
+}
