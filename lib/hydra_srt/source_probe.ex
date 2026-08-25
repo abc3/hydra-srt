@@ -16,7 +16,8 @@ defmodule HydraSrt.SourceProbe do
 
     with {:ok, probe_uri} <- build_probe_uri(route_params),
          {:ok, ffprobe_path} <- find_ffprobe(),
-         {:ok, raw_output} <- run_ffprobe(ffprobe_path, probe_uri, timeout_ms),
+         {:ok, raw_output} <-
+           run_ffprobe(ffprobe_path, probe_uri, timeout_ms, listener_source?(route_params)),
          {:ok, parsed_output} <- decode_output(raw_output) do
       Logger.info("SourceProbe: ffprobe succeeded uri=#{sanitize_uri(probe_uri)}")
 
@@ -42,6 +43,23 @@ defmodule HydraSrt.SourceProbe do
       message -> String.slice(message, 0, 500)
     end
   end
+
+  # A listener source has nothing to answer with until a sender connects to it,
+  # which is why testing an idle backup source always times out. Say so instead
+  # of reporting a bare timeout the operator cannot act on.
+  @spec listener_timeout_hint(boolean()) :: binary()
+  def listener_timeout_hint(true),
+    do: ". A listener source can only be tested while a sender is connected to it"
+
+  def listener_timeout_hint(_listener_source?), do: ""
+
+  @spec listener_source?(map()) :: boolean()
+  def listener_source?(route_params) when is_map(route_params) do
+    mode = Map.get(route_params, "mode") || Map.get(route_params, :mode)
+    is_binary(mode) and String.downcase(mode) == "listener"
+  end
+
+  def listener_source?(_route_params), do: false
 
   @spec build_probe_uri(map()) :: {:ok, binary()} | {:error, atom() | binary()}
   def build_probe_uri(route_params) when is_map(route_params) do
@@ -98,7 +116,9 @@ defmodule HydraSrt.SourceProbe do
     end
   end
 
-  def run_ffprobe(:ffprobe, probe_uri, timeout_ms)
+  def run_ffprobe(path, probe_uri, timeout_ms, listener_source? \\ false)
+
+  def run_ffprobe(:ffprobe, probe_uri, timeout_ms, listener_source?)
       when is_integer(timeout_ms) and timeout_ms > 0 do
     sanitized_uri = sanitize_uri(probe_uri)
 
@@ -106,41 +126,91 @@ defmodule HydraSrt.SourceProbe do
 
     Logger.debug("SourceProbe: command=ffprobe #{Enum.join(ffprobe_args(sanitized_uri), " ")}")
 
-    task =
-      Task.async(fn ->
-        System.cmd("ffprobe", ffprobe_args(probe_uri), stderr_to_stdout: true)
-      end)
+    case System.find_executable("ffprobe") do
+      nil ->
+        {:error, "ffprobe is not available on the server"}
 
-    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, {output, 0}} ->
-        Logger.debug("SourceProbe: ffprobe completed successfully uri=#{sanitized_uri}")
-        {:ok, output}
+      executable ->
+        # System.cmd cannot cancel the OS process it spawned, so a probe that
+        # timed out used to leave ffprobe running and holding the source port
+        # for good. Own the port here so the child can actually be killed.
+        port =
+          Port.open({:spawn_executable, executable}, [
+            :binary,
+            :exit_status,
+            :stderr_to_stdout,
+            {:args, ffprobe_args(probe_uri)}
+          ])
 
-      {:ok, {output, exit_status}} ->
-        error = normalize_ffprobe_error(output, exit_status)
-        Logger.error("SourceProbe: ffprobe failed uri=#{sanitized_uri} error=#{inspect(error)}")
-        {:error, error}
+        deadline = System.monotonic_time(:millisecond) + timeout_ms
 
-      {:exit, reason} ->
+        collect_ffprobe_output(port, "", deadline, %{
+          timeout_ms: timeout_ms,
+          sanitized_uri: sanitized_uri,
+          listener_source?: listener_source?
+        })
+    end
+  end
+
+  @doc false
+  def collect_ffprobe_output(port, acc, deadline, context) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    receive do
+      {^port, {:data, chunk}} ->
+        collect_ffprobe_output(port, acc <> chunk, deadline, context)
+
+      {^port, {:exit_status, 0}} ->
+        Logger.debug("SourceProbe: ffprobe completed successfully uri=#{context.sanitized_uri}")
+        {:ok, acc}
+
+      {^port, {:exit_status, exit_status}} ->
+        error = normalize_ffprobe_error(acc, exit_status)
+
         Logger.error(
-          "SourceProbe: ffprobe task crashed uri=#{sanitized_uri} reason=#{inspect(reason)}"
+          "SourceProbe: ffprobe failed uri=#{context.sanitized_uri} error=#{inspect(error)}"
         )
 
-        {:error, "ffprobe process crashed unexpectedly"}
+        {:error, error}
+    after
+      max(remaining, 0) ->
+        stop_ffprobe(port)
+
+        Logger.warning(
+          "SourceProbe: ffprobe timed out uri=#{context.sanitized_uri} timeout_ms=#{context.timeout_ms}"
+        )
+
+        {:error,
+         "ffprobe timed out after #{context.timeout_ms}ms#{listener_timeout_hint(context.listener_source?)}"}
+    end
+  end
+
+  @doc false
+  def stop_ffprobe(port) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} ->
+        System.cmd("kill", ["-KILL", Integer.to_string(os_pid)], stderr_to_stdout: true)
+        :ok
 
       _ ->
-        Logger.warning(
-          "SourceProbe: ffprobe timed out uri=#{sanitized_uri} timeout_ms=#{timeout_ms}"
-        )
-
-        {:error, "ffprobe timed out after #{timeout_ms}ms"}
+        :ok
     end
+
+    close_port(port)
+  end
+
+  @doc false
+  def close_port(port) do
+    Port.close(port)
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   defp ffprobe_args(probe_uri) do
     [
       "-v",
-      "quiet",
+      "error",
       "-print_format",
       "json",
       "-show_streams",
@@ -175,6 +245,7 @@ defmodule HydraSrt.SourceProbe do
   defp normalize_ffprobe_error(output, exit_status) do
     message =
       output
+      |> strip_json_payload()
       |> String.trim()
       |> case do
         "" -> "ffprobe failed with exit status #{exit_status}"
@@ -182,6 +253,16 @@ defmodule HydraSrt.SourceProbe do
       end
 
     sanitize_uri(message)
+  end
+
+  # ffprobe still prints its json skeleton when it fails, so the payload has to
+  # come off before what is left can be used as a message. Without this the
+  # operator is shown a bare "{ }".
+  defp strip_json_payload(output) when is_binary(output) do
+    case Regex.run(~r/(?:\A|\n)(\{)/s, output, return: :index, capture: :all_but_first) do
+      [{index, _length}] -> binary_part(output, 0, index)
+      nil -> output
+    end
   end
 
   defp sanitize_output(value) when is_map(value) do
