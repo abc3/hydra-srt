@@ -78,6 +78,14 @@ defmodule HydraSrt.Application do
         children
       end
 
+    # The refresh scheduler only has work when YouTube sources can run at all.
+    children =
+      if HydraSrt.Youtube.FeaturePolicy.enabled?() do
+        children ++ [HydraSrt.Youtube.RefreshScheduler]
+      else
+        children
+      end
+
     # Cachex is used by API auth and RTMP stream bootstrap cache; keep them always available.
     rtmp_cache_child = %{
       id: HydraSrt.RtmpCache,
