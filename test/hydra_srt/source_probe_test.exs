@@ -115,6 +115,73 @@ defmodule HydraSrt.SourceProbeTest do
     assert {:error, "ffprobe returned invalid JSON"} = SourceProbe.decode_output("no json here")
   end
 
+  test "normalize_programs/1 returns the fixed shape for a multi-program payload" do
+    programs = [
+      %{
+        "program_num" => 11,
+        "pmt_pid" => 4096,
+        "pcr_pid" => 256,
+        "tags" => %{"service_name" => "News"},
+        "streams" => [
+          %{"codec_type" => "video", "codec_name" => "h264", "index" => 0},
+          %{"codec_type" => "audio", "codec_name" => "aac", "index" => 1}
+        ]
+      },
+      %{
+        "program_num" => 12,
+        "pmt_pid" => 4097,
+        "pcr_pid" => 258,
+        "tags" => %{},
+        "streams" => [%{"codec_type" => "video", "codec_name" => "h264"}]
+      }
+    ]
+
+    assert SourceProbe.normalize_programs(programs) == [
+             %{
+               "program_number" => 11,
+               "pmt_pid" => 4096,
+               "pcr_pid" => 256,
+               "name" => "News",
+               "streams" => [
+                 %{"codec_type" => "video", "codec_name" => "h264"},
+                 %{"codec_type" => "audio", "codec_name" => "aac"}
+               ]
+             },
+             %{
+               "program_number" => 12,
+               "pmt_pid" => 4097,
+               "pcr_pid" => 258,
+               "name" => nil,
+               "streams" => [%{"codec_type" => "video", "codec_name" => "h264"}]
+             }
+           ]
+  end
+
+  test "normalize_programs/1 returns one entry for an SPTS payload" do
+    assert [program] =
+             SourceProbe.normalize_programs([
+               %{
+                 "program_num" => 12,
+                 "pmt_pid" => 4097,
+                 "pcr_pid" => 258,
+                 "streams" => []
+               }
+             ])
+
+    assert program == %{
+             "program_number" => 12,
+             "pmt_pid" => 4097,
+             "pcr_pid" => 258,
+             "name" => nil,
+             "streams" => []
+           }
+  end
+
+  test "normalize_programs/1 returns an empty list when ffprobe reports no programs" do
+    assert SourceProbe.normalize_programs([]) == []
+    assert SourceProbe.normalize_programs(nil) == []
+  end
+
   test "listener sources are told a sender must be connected" do
     assert SourceProbe.listener_timeout_hint(true) =~ "sender is connected"
     assert SourceProbe.listener_timeout_hint(false) == ""

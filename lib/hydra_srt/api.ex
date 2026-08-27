@@ -402,6 +402,7 @@ defmodule HydraSrt.Api do
     "bind_address_option",
     "path",
     "location",
+    "program_number",
     "node",
     "started_at",
     "stopped_at",

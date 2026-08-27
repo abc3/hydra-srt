@@ -47,6 +47,7 @@ import SrtAccessFields from './SrtAccessFields';
 import ProtocolSchemaRadio from './ProtocolSchemaRadio';
 import NdiInputFields from './NdiInputFields';
 import NdiOutputFields from './NdiOutputFields';
+import MpegTsProgramField from './MpegTsProgramField';
 import { useNdiCapabilities } from './useNdiCapabilities';
 
 const { Title } = Typography;
@@ -126,6 +127,7 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
   const [routeData, setRouteData] = useState<RouteRecord | null>(null);
   const [testResultOpen, setTestResultOpen] = useState(false);
   const [testResultData, setTestResultData] = useState<SourceTestResult | null>(null);
+  const [testedSourceIndex, setTestedSourceIndex] = useState<number | null>(null);
   const { capabilities, loading: capabilitiesLoading } = useNdiCapabilities();
   const ndiFeatureEnabled = capabilities?.feature_enabled === true;
   const dataFetchedRef = useRef(false);
@@ -637,6 +639,7 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
 
       loadingMessage();
       setTestResultData(result?.data || result || null);
+      setTestedSourceIndex(sourceIndex);
       setTestResultOpen(true);
       messageApi.success(`Connection test completed (${(result?.data?.streams || []).length} streams)`);
     } catch (error) {
@@ -972,6 +975,10 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                                     </Form.Item>
 
                                     <SrtAccessFields sourceName={field.name} />
+                                    <MpegTsProgramField
+                                      sourceName={field.name}
+                                      programs={testedSourceIndex === field.name ? testResultData?.programs : undefined}
+                                    />
                                   </>
                                 );
                               }
@@ -1013,6 +1020,10 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                                     >
                                       <InputNumber style={{ width: 180 }} />
                                     </Form.Item>
+                                    <MpegTsProgramField
+                                      sourceName={field.name}
+                                      programs={testedSourceIndex === field.name ? testResultData?.programs : undefined}
+                                    />
                                   </>
                                 );
                               }

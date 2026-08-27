@@ -13,6 +13,7 @@ export type RouteEndpoint = Record<string, unknown> & NdiEndpointFields & {
   position?: number;
   host?: string;
   port?: number;
+  program_number?: number | null;
   address?: string;
   localaddress?: string;
   multicast?: boolean;
@@ -70,7 +71,21 @@ export type RouteFormValues = Record<string, unknown> & {
   tags?: string[];
 };
 
-export type SourceTestResult = Record<string, unknown>;
+export type SourceProgram = {
+  program_number: number;
+  pmt_pid: number;
+  pcr_pid: number;
+  name: string | null;
+  streams: Array<{
+    codec_type: string;
+    codec_name: string;
+  }>;
+};
+
+export type SourceTestResult = Record<string, unknown> & {
+  programs?: SourceProgram[];
+  streams?: unknown[];
+};
 
 export type SwitchEvent = {
   ts?: string;

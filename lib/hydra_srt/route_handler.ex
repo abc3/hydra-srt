@@ -2357,6 +2357,7 @@ defmodule HydraSrt.RouteHandler do
     %{
       "address" => address,
       "port" => port,
+      "program_number" => opts["program_number"],
       "auto_multicast" => if(multicast?, do: true, else: nil),
       "multicast_iface" => if(multicast?, do: multicast_iface, else: nil)
     }
@@ -2365,17 +2366,17 @@ defmodule HydraSrt.RouteHandler do
 
   @spec srt_source_payload(json_map(), String.t()) :: json_map()
   def srt_source_payload(opts, uri) when is_map(opts) and is_binary(uri) do
-    srt_payload(opts, uri, _include_access = true)
+    srt_payload(opts, uri, _source? = true)
   end
 
   @spec srt_destination_payload(json_map(), String.t()) :: json_map()
   def srt_destination_payload(opts, uri) when is_map(opts) and is_binary(uri) do
-    srt_payload(opts, uri, _include_access = false)
+    srt_payload(opts, uri, _source? = false)
   end
 
   @spec srt_payload(json_map(), String.t(), boolean()) :: json_map()
-  def srt_payload(opts, uri, include_access)
-      when is_map(opts) and is_binary(uri) and is_boolean(include_access) do
+  def srt_payload(opts, uri, source?)
+      when is_map(opts) and is_binary(uri) and is_boolean(source?) do
     mode = Map.get(opts, "mode")
 
     streamid =
@@ -2389,7 +2390,7 @@ defmodule HydraSrt.RouteHandler do
       end
 
     access =
-      if include_access and Map.get(opts, "hydra_limit_access") == true do
+      if source? and Map.get(opts, "hydra_limit_access") == true do
         %{
           "limit" => true,
           "allowed" => Map.get(opts, "hydra_allowed_list", []),
@@ -2417,6 +2418,7 @@ defmodule HydraSrt.RouteHandler do
       "localaddress" => localaddress,
       "localport" => localport,
       "authentication" => Map.get(opts, "authentication"),
+      "program_number" => if(source?, do: opts["program_number"], else: nil),
       "access" => access
     }
     |> drop_nil_values()
@@ -2597,6 +2599,7 @@ defmodule HydraSrt.RouteHandler do
     |> put_opt(record, "bind-address", "bind_address_option")
     |> put_opt(record, "path")
     |> put_opt(record, "location")
+    |> put_opt(record, "program_number")
     |> put_opt(record, "buffer-size")
     |> put_opt(record, "buffer-size", "buffer_size")
     |> put_opt(record, "mtu")

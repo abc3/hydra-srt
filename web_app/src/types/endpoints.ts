@@ -15,6 +15,7 @@ export type EndpointFormValues = Record<string, unknown> & NdiEndpointFields & {
   host?: string;
   port?: number;
   localport?: number;
+  program_number?: number | null;
   multicast?: boolean;
   multicast_iface?: string;
   bind_address_option?: string;

@@ -1141,6 +1141,7 @@ mod tests {
             Some(Port::new(4201).unwrap()),
             None,
             None,
+            None,
         );
         apply_source(&element, &config).expect("srtsrc accepts the typed source config");
         let value = element.property_value("pbkeylen");
@@ -1174,6 +1175,7 @@ mod tests {
             None, // localport
             None, // authentication
             None, // access
+            None, // program_number
         )
     }
 

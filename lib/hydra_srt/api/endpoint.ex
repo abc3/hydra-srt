@@ -34,6 +34,7 @@ defmodule HydraSrt.Api.Endpoint do
   @ndi_max_queue_length_max 64
   @source_schemas ~w(SRT UDP RTP RTMP NDI)
   @destination_schemas ~w(SRT UDP RTMP NDI)
+  @program_source_schemas ~w(SRT UDP RTP)
 
   @ndi_fields [
     :ndi_source_name,
@@ -163,6 +164,7 @@ defmodule HydraSrt.Api.Endpoint do
     field :allowed_list, :string, default: "[]"
     field :denied_list, :string, default: "[]"
     field :limit_access, :boolean, default: false
+    field :program_number, :integer
 
     # NDI operator intent (nullable; cleared for non-NDI schemas).
     field :ndi_source_name, :string
@@ -226,6 +228,11 @@ defmodule HydraSrt.Api.Endpoint do
     |> validate_ip_access_lists()
     |> validate_required([:route_id, :position, :schema, :type])
     |> validate_inclusion(:schema, @source_schemas)
+    |> clear_unsupported_program_number()
+    |> validate_number(:program_number,
+      greater_than_or_equal_to: 1,
+      less_than_or_equal_to: 65_535
+    )
     |> validate_rtmp_required_fields()
     |> validate_ndi_fields()
     |> validate_number(:position, greater_than_or_equal_to: 0)
@@ -254,6 +261,7 @@ defmodule HydraSrt.Api.Endpoint do
     |> put_default_enabled(false)
     |> put_default_ip_access_field(:multicast, false)
     |> normalize_rtmp_location_change()
+    |> put_change(:program_number, nil)
     |> validate_required([:route_id, :schema, :type])
     |> validate_inclusion(:schema, @destination_schemas)
     |> validate_rtmp_required_fields()
@@ -315,6 +323,7 @@ defmodule HydraSrt.Api.Endpoint do
         :allowed_list,
         :denied_list,
         :limit_access,
+        :program_number,
         :bind_interface,
         :bind_address,
         :bind_multicast_group,
@@ -369,6 +378,15 @@ defmodule HydraSrt.Api.Endpoint do
       {"RTMP", "source"} -> validate_required(changeset, [:path])
       {"RTMP", "destination"} -> validate_required(changeset, [:location])
       _ -> changeset
+    end
+  end
+
+  @spec clear_unsupported_program_number(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def clear_unsupported_program_number(changeset) do
+    if get_field(changeset, :schema) in @program_source_schemas do
+      changeset
+    else
+      put_change(changeset, :program_number, nil)
     end
   end
 

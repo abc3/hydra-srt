@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use gstreamer::prelude::*;
 use hydra_plan::{
-    Cidr, DestinationEndpoint, HostAddress, InterfaceName, LegacyKind, Port, RouteConfig,
-    RtmpEndpoint, RtmpUri, SourceEndpoint, SrtAccess, SrtDestination, SrtMode, SrtSource, SrtUri,
-    UdpEndpoint,
+    Cidr, DestinationEndpoint, HostAddress, InterfaceName, LegacyKind, Port, ProgramNumber,
+    RouteConfig, RtmpEndpoint, RtmpUri, SourceEndpoint, SrtAccess, SrtDestination, SrtMode,
+    SrtSource, SrtUri, UdpEndpoint,
 };
 
 use super::*;
@@ -111,6 +111,7 @@ fn minimal_srt_source(uri: &str, mode: SrtMode) -> SrtSource {
         None,
         None,
         None,
+        None,
     )
 }
 fn minimal_srt_dest(uri: &str, mode: SrtMode) -> SrtDestination {
@@ -136,6 +137,37 @@ fn udp_ep(address: &str, port: u64) -> UdpEndpoint {
         None,
         None,
         None,
+        None,
+    )
+}
+
+fn selected_udp_ep(address: &str, port: u64) -> UdpEndpoint {
+    UdpEndpoint::new(
+        HostAddress::new(address).unwrap(),
+        Port::new(port).unwrap(),
+        None,
+        None,
+        None,
+        Some(ProgramNumber::new(12).unwrap()),
+    )
+}
+
+fn selected_srt_source() -> SrtSource {
+    SrtSource::new(
+        SrtUri::new("srt://127.0.0.1:4201?mode=listener").unwrap(),
+        SrtMode::Listener,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(HostAddress::new("127.0.0.1").unwrap()),
+        Some(Port::new(4201).unwrap()),
+        None,
+        None,
+        Some(ProgramNumber::new(12).unwrap()),
     )
 }
 fn rtmp_ep(location: &str) -> RtmpEndpoint {
@@ -185,6 +217,7 @@ fn listener_srt_source() -> SrtSource {
         None,
         Some(HostAddress::new("127.0.0.1").unwrap()),
         Some(Port::new(4201).unwrap()),
+        None,
         None,
         None,
     )
@@ -344,6 +377,23 @@ fn legacy_route_builds_multiple_rtmp_sink_remux_paths() {
 }
 
 #[test]
+fn legacy_rtp_source_without_program_keeps_depay_path() {
+    let _ = gst::init();
+    let built = build(
+        plan_route(
+            rtp_source("source-a", "Source", udp_ep("127.0.0.1", 4401)),
+            vec![udp_dest("dest", "Dest", udp_ep("127.0.0.1", 4402))],
+        ),
+        writer(),
+    )
+    .expect("current RTP source builds");
+    let counts = factory_counts(&built.core.runtime.pipeline);
+    assert_eq!(counts.get("udpsrc"), Some(&1));
+    assert_eq!(counts.get("rtpmp2tdepay"), Some(&1));
+    assert_eq!(counts.get("tsparse"), None);
+}
+
+#[test]
 fn legacy_route_applies_udp_multicast_source_properties() {
     let _ = gst::init();
     let built = build(
@@ -356,6 +406,7 @@ fn legacy_route_applies_udp_multicast_source_properties() {
                     Port::new(4500).unwrap(),
                     Some(true),
                     Some(InterfaceName::new("lo").unwrap()),
+                    None,
                     None,
                 ),
             ),
@@ -384,11 +435,65 @@ fn legacy_route_applies_udp_multicast_source_properties() {
 }
 
 #[test]
+fn selected_program_source_builds_tsparse_for_udp_rtp_and_srt() {
+    let _ = gst::init();
+    let plans = [
+        plan_route(
+            udp_source("udp-source", "UDP", selected_udp_ep("127.0.0.1", 4501)),
+            vec![udp_dest("dest", "Dest", udp_ep("127.0.0.1", 4502))],
+        ),
+        plan_route(
+            rtp_source("rtp-source", "RTP", selected_udp_ep("127.0.0.1", 4503)),
+            vec![udp_dest("dest", "Dest", udp_ep("127.0.0.1", 4504))],
+        ),
+        plan_route(
+            srt_source("srt-source", "SRT", selected_srt_source()),
+            vec![udp_dest("dest", "Dest", udp_ep("127.0.0.1", 4505))],
+        ),
+    ];
+
+    for plan in plans {
+        let built = build(plan, writer()).expect("selected-program source builds");
+        let parser = built
+            .core
+            .runtime
+            .pipeline
+            .iterate_recurse()
+            .into_iter()
+            .filter_map(Result::ok)
+            .find(|element| {
+                element
+                    .factory()
+                    .is_some_and(|factory| factory.name() == "tsparse")
+            })
+            .expect("selected-program source contains tsparse");
+        assert!(parser
+            .src_pads()
+            .iter()
+            .any(|pad| pad.name() == "program_12"));
+        assert_eq!(built.core.source_requested_pads.len(), 1);
+        built
+            .link()
+            .expect("selected-program source links")
+            .shutdown()
+            .expect("selected-program source shuts down");
+        assert!(!parser
+            .src_pads()
+            .iter()
+            .any(|pad| pad.name() == "program_12"));
+    }
+}
+
+#[test]
 fn legacy_srtsrc_keeps_authentication_false_by_default() {
     let _ = gst::init();
     let built =
         build(srtsrc_plan(listener_srt_source()), writer()).expect("current SRT route builds");
     assert!(!built.core.runtime.source.property::<bool>("authentication"));
+    assert_eq!(
+        factory_counts(&built.core.runtime.pipeline).get("tsparse"),
+        None
+    );
 }
 
 #[test]
@@ -407,6 +512,7 @@ fn legacy_srtsrc_preserves_explicit_authentication() {
         Some(HostAddress::new("127.0.0.1").unwrap()),
         Some(Port::new(4201).unwrap()),
         Some(true),
+        None,
         None,
     );
     let built = build(srtsrc_plan(source), writer()).expect("current SRT route builds");
@@ -501,6 +607,7 @@ fn legacy_srtsrc_enables_authentication_for_access_hooks() {
             vec![],
             vec![Cidr::new("127.0.0.1").unwrap()],
         )),
+        None,
     );
     let built = build(srtsrc_plan(source), writer()).expect("current SRT access route builds");
     assert!(built.core.runtime.source.property::<bool>("authentication"));

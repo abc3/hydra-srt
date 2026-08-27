@@ -26,6 +26,7 @@ defmodule HydraSrt.SourceProbe do
          "probe_uri" => sanitize_uri(probe_uri),
          "streams" => Map.get(parsed_output, "streams", []),
          "format" => Map.get(parsed_output, "format"),
+         "programs" => normalize_programs(Map.get(parsed_output, "programs", [])),
          "raw" => sanitize_output(parsed_output)
        }}
     end
@@ -90,7 +91,8 @@ defmodule HydraSrt.SourceProbe do
             port when is_integer(port) ->
               address = payload["address"] || "0.0.0.0"
               probe_scheme = if kind == "rtp", do: "rtp", else: "udp"
-              {:ok, "#{probe_scheme}://#{address}:#{port}"}
+              uri = "#{probe_scheme}://#{address}:#{port}"
+              {:ok, add_multicast_interface(uri, route_params, payload)}
 
             _ ->
               {:error, "UDP source is missing a valid port"}
@@ -215,6 +217,7 @@ defmodule HydraSrt.SourceProbe do
       "json",
       "-show_streams",
       "-show_format",
+      "-show_programs",
       probe_uri
     ]
   end
@@ -239,6 +242,56 @@ defmodule HydraSrt.SourceProbe do
     case Regex.run(~r/(?:\A|\n)(\{)/s, output, return: :index, capture: :all_but_first) do
       [{index, _length}] -> binary_part(output, index, byte_size(output) - index)
       nil -> output
+    end
+  end
+
+  @doc false
+  @spec normalize_programs(term()) :: [map()]
+  def normalize_programs(programs) when is_list(programs) do
+    Enum.map(programs, fn program ->
+      tags = if is_map(program["tags"]), do: program["tags"], else: %{}
+      name = if is_binary(tags["service_name"]), do: tags["service_name"], else: nil
+
+      %{
+        "program_number" => program["program_num"],
+        "pmt_pid" => program["pmt_pid"],
+        "pcr_pid" => program["pcr_pid"],
+        "name" => name,
+        "streams" => normalize_program_streams(program["streams"])
+      }
+    end)
+  end
+
+  def normalize_programs(_), do: []
+
+  @spec normalize_program_streams(term()) :: [map()]
+  def normalize_program_streams(streams) when is_list(streams) do
+    Enum.map(streams, fn stream ->
+      %{"codec_type" => stream["codec_type"], "codec_name" => stream["codec_name"]}
+    end)
+  end
+
+  def normalize_program_streams(_), do: []
+
+  @spec add_multicast_interface(binary(), map(), map()) :: binary()
+  def add_multicast_interface(uri, route_params, payload)
+      when is_binary(uri) and is_map(route_params) and is_map(payload) do
+    interface = route_params["interface_sys_name"] || route_params[:interface_sys_name]
+
+    if is_binary(interface) and interface != "" and is_binary(payload["multicast_iface"]) do
+      local_address =
+        case RouteHandler.resolve_interface_bind_ip(interface) do
+          {:ok, address} -> address
+          _ -> route_params["localaddress"] || route_params[:localaddress]
+        end
+
+      if is_binary(local_address) and local_address != "" do
+        uri <> "?" <> URI.encode_query(%{"localaddr" => local_address})
+      else
+        uri
+      end
+    else
+      uri
     end
   end
 

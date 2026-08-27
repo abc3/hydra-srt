@@ -164,6 +164,44 @@ impl From<Port> for u64 {
     }
 }
 
+/// MPEG-TS program number in the inclusive range 1..=65535.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct ProgramNumber(u16);
+
+impl ProgramNumber {
+    pub fn new(value: u64) -> Result<Self, ConfigError> {
+        if (1..=65535).contains(&value) {
+            Ok(Self(value as u16))
+        } else {
+            Err(ConfigError::OutOfBounds {
+                field: "program_number",
+                value,
+                min: 1,
+                max: 65_535,
+            })
+        }
+    }
+
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
+impl TryFrom<u64> for ProgramNumber {
+    type Error = ConfigError;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<ProgramNumber> for u64 {
+    fn from(value: ProgramNumber) -> Self {
+        u64::from(value.get())
+    }
+}
+
 /// IP address or validated hostname (never forwarded as an unchecked string).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -762,6 +800,8 @@ pub struct SrtSource {
     /// Inventory-consumed explicit auth flag (also forced from access/streamid).
     authentication: Option<bool>,
     access: Option<SrtAccess>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    program_number: Option<ProgramNumber>,
 }
 
 /// SRT destination payload. Unknown `access` field fails closed via deny_unknown_fields.
@@ -829,6 +869,10 @@ srt_accessors!(SrtSource);
 srt_accessors!(SrtDestination);
 
 impl SrtSource {
+    pub const fn program_number(&self) -> Option<ProgramNumber> {
+        self.program_number
+    }
+
     pub fn access(&self) -> Option<&SrtAccess> {
         self.access.as_ref()
     }
@@ -848,6 +892,7 @@ impl SrtSource {
         localport: Option<Port>,
         authentication: Option<bool>,
         access: Option<SrtAccess>,
+        program_number: Option<ProgramNumber>,
     ) -> Self {
         Self {
             uri,
@@ -863,6 +908,7 @@ impl SrtSource {
             localport,
             authentication,
             access,
+            program_number,
         }
     }
 }
@@ -909,6 +955,8 @@ pub struct UdpEndpoint {
     auto_multicast: Option<bool>,
     multicast_iface: Option<InterfaceName>,
     bind_address: Option<HostAddress>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    program_number: Option<ProgramNumber>,
 }
 
 impl UdpEndpoint {
@@ -918,6 +966,7 @@ impl UdpEndpoint {
         auto_multicast: Option<bool>,
         multicast_iface: Option<InterfaceName>,
         bind_address: Option<HostAddress>,
+        program_number: Option<ProgramNumber>,
     ) -> Self {
         Self {
             address,
@@ -925,6 +974,7 @@ impl UdpEndpoint {
             auto_multicast,
             multicast_iface,
             bind_address,
+            program_number,
         }
     }
 
@@ -946,6 +996,10 @@ impl UdpEndpoint {
 
     pub fn bind_address(&self) -> Option<&HostAddress> {
         self.bind_address.as_ref()
+    }
+
+    pub const fn program_number(&self) -> Option<ProgramNumber> {
+        self.program_number
     }
 }
 
@@ -1207,8 +1261,8 @@ fn authority_has_host_port(authority: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse, HostAddress, NdiBandwidth, NdiColorFormat, NdiTimestampMode, Pbkeylen, Port,
-        SrtMode, SrtUri,
+        parse, ConfigError, HostAddress, NdiBandwidth, NdiColorFormat, NdiTimestampMode, Pbkeylen,
+        Port, ProgramNumber, SrtMode, SrtUri,
     };
     use crate::{plan, ErrorCode};
 
@@ -1317,11 +1371,38 @@ mod tests {
     }
 
     #[test]
+    fn program_number_round_trips_through_serde() {
+        let parsed: ProgramNumber = serde_json::from_str("12").expect("valid program number");
+        assert_eq!(parsed.get(), 12);
+        assert_eq!(serde_json::to_string(&parsed).expect("serializes"), "12");
+
+        assert!(serde_json::from_str::<ProgramNumber>("0").is_err());
+        assert!(serde_json::from_str::<ProgramNumber>("65536").is_err());
+    }
+
+    #[test]
+    fn program_number_reports_its_bounds_when_rejected() {
+        let error = ProgramNumber::new(65_536).expect_err("out of range");
+        assert!(matches!(
+            error,
+            ConfigError::OutOfBounds {
+                field: "program_number",
+                value: 65_536,
+                min: 1,
+                max: 65_535,
+            }
+        ));
+        assert_eq!(u64::from(ProgramNumber::new(12).unwrap()), 12);
+    }
+
+    #[test]
     fn newtypes_reject_invalid_values() {
         assert!(SrtUri::new("http://127.0.0.1:9000").is_err());
         assert!(SrtUri::new("srt://127.0.0.1:9000").is_ok());
         assert!(Port::new(0).is_err());
         assert!(Port::new(65535).is_ok());
+        assert!(ProgramNumber::new(0).is_err());
+        assert_eq!(ProgramNumber::new(65535).unwrap().get(), 65535);
         assert!(Pbkeylen::new(8).is_err());
         assert_eq!(Pbkeylen::new(16).unwrap(), Pbkeylen::Aes128);
         assert!(HostAddress::new("").is_err());

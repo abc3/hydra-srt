@@ -25,6 +25,7 @@ export type EndpointRecord = Record<string, unknown> & {
   host?: EndpointValue;
   port?: EndpointValue;
   localport?: EndpointValue;
+  program_number?: EndpointValue;
   auto_reconnect?: EndpointValue;
   keep_listening?: EndpointValue;
   streamid?: EndpointValue;
@@ -269,6 +270,11 @@ export const normalizeEndpointForForm = (endpoint: EndpointRecord | null | undef
 
   flat.port = toNumberIfPresent(flat.port);
   flat.localport = toNumberIfPresent(flat.localport);
+  if (flat.schema === 'UDP' || flat.schema === 'RTP' || flat.schema === 'SRT') {
+    flat.program_number = toNumberIfPresent(flat.program_number);
+  } else {
+    delete flat.program_number;
+  }
   flat.multicast = flat.multicast ?? false;
   flat.allowed_list = normalizeIpAccessList(flat.allowed_list);
   flat.denied_list = normalizeIpAccessList(flat.denied_list);
@@ -296,6 +302,20 @@ export const flattenEndpointPayload = (endpoint: EndpointRecord | null | undefin
 
   if (selectionToken) {
     normalized.selection_token = selectionToken;
+  }
+
+  if (
+    normalized.schema !== 'UDP' &&
+    normalized.schema !== 'RTP' &&
+    normalized.schema !== 'SRT'
+  ) {
+    delete normalized.program_number;
+  } else if (
+    normalized.program_number === undefined ||
+    normalized.program_number === null ||
+    normalized.program_number === ''
+  ) {
+    delete normalized.program_number;
   }
 
   return stripNdiClientOwnedFields(normalized);
