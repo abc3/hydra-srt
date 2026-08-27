@@ -108,6 +108,161 @@ defmodule HydraSrt.Api.EndpointSourceTest do
     assert message == "bind target is already in use"
   end
 
+  test "allows multicast sources to share an interface and port when the groups differ" do
+    route = route_fixture()
+
+    assert {:ok, first} =
+             %Endpoint{}
+             |> Endpoint.source_changeset(%{
+               route_id: route.id,
+               position: 10,
+               schema: "UDP",
+               interface_sys_name: "enp23s0f1",
+               multicast: true,
+               address: "239.58.0.46",
+               port: 50_001
+             })
+             |> Repo.insert()
+
+    assert first.bind_multicast_group == "239.58.0.46"
+
+    assert {:ok, second} =
+             %Endpoint{}
+             |> Endpoint.source_changeset(%{
+               route_id: route.id,
+               position: 11,
+               schema: "UDP",
+               interface_sys_name: "enp23s0f1",
+               multicast: true,
+               address: "239.58.0.47",
+               port: 50_001
+             })
+             |> Repo.insert()
+
+    assert second.bind_multicast_group == "239.58.0.47"
+    assert second.bind_port == first.bind_port
+  end
+
+  test "allows RTP multicast sources to share an interface and port when the groups differ" do
+    route = route_fixture()
+
+    assert {:ok, _} =
+             %Endpoint{}
+             |> Endpoint.source_changeset(%{
+               route_id: route.id,
+               position: 12,
+               schema: "RTP",
+               interface_sys_name: "enp23s0f1",
+               multicast: true,
+               address: "239.60.0.1",
+               port: 50_002
+             })
+             |> Repo.insert()
+
+    assert {:ok, _} =
+             %Endpoint{}
+             |> Endpoint.source_changeset(%{
+               route_id: route.id,
+               position: 13,
+               schema: "RTP",
+               interface_sys_name: "enp23s0f1",
+               multicast: true,
+               address: "239.60.0.2",
+               port: 50_002
+             })
+             |> Repo.insert()
+  end
+
+  test "rejects a second multicast source on the same interface, group and port" do
+    route = route_fixture()
+
+    _ =
+      source_fixture(route, %{
+        schema: "UDP",
+        interface_sys_name: "enp23s0f1",
+        multicast: true,
+        address: "239.58.0.46",
+        port: 50_003
+      })
+
+    assert {:error, changeset} =
+             %Endpoint{}
+             |> Endpoint.source_changeset(%{
+               route_id: route.id,
+               position: 14,
+               schema: "UDP",
+               interface_sys_name: "enp23s0f1",
+               multicast: true,
+               address: "239.58.0.46",
+               port: 50_003
+             })
+             |> Repo.insert()
+
+    {message, _meta} = changeset.errors[:bind_port]
+    assert message == "bind target is already in use"
+  end
+
+  test "rejects unicast sources sharing an interface and port even with different addresses" do
+    route = route_fixture()
+
+    _ =
+      source_fixture(route, %{
+        schema: "UDP",
+        interface_sys_name: "enp23s0f1",
+        address: "192.168.23.15",
+        port: 50_004
+      })
+
+    assert {:error, changeset} =
+             %Endpoint{}
+             |> Endpoint.source_changeset(%{
+               route_id: route.id,
+               position: 15,
+               schema: "UDP",
+               interface_sys_name: "enp23s0f1",
+               address: "192.168.23.16",
+               port: 50_004
+             })
+             |> Repo.insert()
+
+    {message, _meta} = changeset.errors[:bind_port]
+    assert message == "bind target is already in use"
+  end
+
+  test "treats an IPv6 group as multicast and a hostname as an ordinary bind" do
+    route = route_fixture()
+
+    assert {:ok, ipv6} =
+             %Endpoint{}
+             |> Endpoint.source_changeset(%{
+               route_id: route.id,
+               position: 16,
+               schema: "UDP",
+               interface_sys_name: "enp23s0f1",
+               multicast: true,
+               address: "ff3e::4321:1234",
+               port: 50_005
+             })
+             |> Repo.insert()
+
+    assert ipv6.bind_multicast_group == "ff3e::4321:1234"
+
+    assert {:ok, hostname} =
+             %Endpoint{}
+             |> Endpoint.source_changeset(%{
+               route_id: route.id,
+               position: 17,
+               schema: "UDP",
+               interface_sys_name: "enp23s0f1",
+               address: "feed.example.com",
+               port: 50_006
+             })
+             |> Repo.insert()
+
+    assert hostname.bind_multicast_group == nil
+    assert hostname.bind_port == 50_006
+  end
+
   test "rejects a second listener on the same interface and port regardless of typed address" do
     route = route_fixture()
 

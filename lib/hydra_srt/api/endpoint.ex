@@ -4,10 +4,11 @@ defmodule HydraSrt.Api.Endpoint do
   import Ecto.Query, only: [from: 2]
 
   @source_unique_constraint :endpoints_route_id_position_type_index
-  # Two partial indexes, because what pins an endpoint to a socket differs: an endpoint that
+  # Three partial indexes, because what pins an endpoint to a socket differs: an endpoint that
   # names an interface is bound to that interface's address at runtime, whichever address the
-  # row happens to carry, so interface + port decides. Everything else is keyed on the
-  # address it actually binds.
+  # row happens to carry, so interface + port decides, unless it joins a multicast group.
+  # Everything else is keyed on the address it actually binds.
+  @multicast_bind_target_constraint :endpoints_bind_interface_bind_multicast_group_bind_port_index
   @interface_bind_target_constraint :endpoints_bind_interface_bind_port_index
   @address_bind_target_constraint :endpoints_bind_address_bind_port_index
   @bind_target_in_use_message "bind target is already in use"
@@ -123,6 +124,7 @@ defmodule HydraSrt.Api.Endpoint do
   @type bind_target :: %{
           interface: String.t(),
           address: String.t(),
+          multicast_group: String.t() | nil,
           port: integer()
         }
 
@@ -185,6 +187,7 @@ defmodule HydraSrt.Api.Endpoint do
     # Normalized bind tuple for DB uniqueness.
     field :bind_interface, :string
     field :bind_address, :string
+    field :bind_multicast_group, :string
     field :bind_port, :integer
     field :node, :string
     field :started_at, :utc_datetime
@@ -229,6 +232,10 @@ defmodule HydraSrt.Api.Endpoint do
     |> put_bind_target_fields()
     |> unique_constraint([:route_id, :position, :type], name: @source_unique_constraint)
     |> unique_constraint(:bind_port,
+      name: @multicast_bind_target_constraint,
+      message: @bind_target_in_use_message
+    )
+    |> unique_constraint(:bind_port,
       name: @interface_bind_target_constraint,
       message: @bind_target_in_use_message
     )
@@ -253,6 +260,10 @@ defmodule HydraSrt.Api.Endpoint do
     |> validate_ndi_fields()
     |> put_bind_target_fields()
     |> unique_constraint([:route_id, :position, :type], name: @source_unique_constraint)
+    |> unique_constraint(:bind_port,
+      name: @multicast_bind_target_constraint,
+      message: @bind_target_in_use_message
+    )
     |> unique_constraint(:bind_port,
       name: @interface_bind_target_constraint,
       message: @bind_target_in_use_message
@@ -306,6 +317,7 @@ defmodule HydraSrt.Api.Endpoint do
         :limit_access,
         :bind_interface,
         :bind_address,
+        :bind_multicast_group,
         :bind_port,
         :node,
         :started_at,
@@ -362,16 +374,18 @@ defmodule HydraSrt.Api.Endpoint do
 
   defp put_bind_target_fields(changeset) do
     case endpoint_bind_target(changeset) do
-      %{interface: interface, address: address, port: port} ->
+      %{interface: interface, address: address, multicast_group: group, port: port} ->
         changeset
         |> put_change(:bind_interface, interface)
         |> put_change(:bind_address, address)
+        |> put_change(:bind_multicast_group, group)
         |> put_change(:bind_port, port)
 
       _ ->
         changeset
         |> put_change(:bind_interface, nil)
         |> put_change(:bind_address, nil)
+        |> put_change(:bind_multicast_group, nil)
         |> put_change(:bind_port, nil)
     end
   end
@@ -398,7 +412,7 @@ defmodule HydraSrt.Api.Endpoint do
         build_target(changeset)
 
       {"UDP", "destination"} ->
-        build_target(changeset)
+        build_local_bind_target(changeset)
 
       {"NDI", _} ->
         nil
@@ -412,20 +426,60 @@ defmodule HydraSrt.Api.Endpoint do
     port = get_field(changeset, :localport) || get_field(changeset, :port)
 
     if is_integer(port) do
+      address =
+        normalize(
+          first_present([
+            get_field(changeset, :localaddress),
+            get_field(changeset, :address),
+            get_field(changeset, :host)
+          ])
+        )
+
       %{
         interface: normalize(get_field(changeset, :interface_sys_name)),
-        address:
-          normalize(
-            first_present([
-              get_field(changeset, :localaddress),
-              get_field(changeset, :address),
-              get_field(changeset, :host)
-            ])
-          ),
+        address: address,
+        multicast_group: multicast_group(changeset, address),
         port: port
       }
     else
       nil
+    end
+  end
+
+  defp build_local_bind_target(changeset) do
+    port = get_field(changeset, :localport)
+
+    if is_integer(port) do
+      %{
+        interface: normalize(get_field(changeset, :interface_sys_name)),
+        address: normalize(get_field(changeset, :localaddress)),
+        multicast_group: nil,
+        port: port
+      }
+    else
+      nil
+    end
+  end
+
+  defp multicast_group(changeset, address) do
+    receiver? =
+      get_field(changeset, :type) == "source" and get_field(changeset, :schema) in ["UDP", "RTP"]
+
+    if receiver? and multicast_address?(address) do
+      address
+    else
+      nil
+    end
+  end
+
+  defp multicast_address?(address) when is_binary(address) do
+    if String.starts_with?(address, "ff") do
+      true
+    else
+      case :inet.parse_ipv4_address(String.to_charlist(address)) do
+        {:ok, {first, _, _, _}} -> first >= 224 and first <= 239
+        _ -> false
+      end
     end
   end
 
