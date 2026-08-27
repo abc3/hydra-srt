@@ -11,6 +11,7 @@ defmodule HydraSrt.LogSanitizer do
   # `passphrase=...` inside an `srt://` URI, which ends at `&`, `"` or whitespace.
   @query_passphrase ~r/(passphrase=)[^&"\s]+/
   @ipv4 ~r/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/
+  @uri ~r{https?://[^\s"<>]+}
 
   @doc """
   Masks passphrases and public IPv4 addresses in a route command payload.
@@ -19,6 +20,7 @@ defmodule HydraSrt.LogSanitizer do
   def sanitize_payload(value) when is_binary(value) do
     value
     |> mask_passphrase()
+    |> mask_bearer_uris()
     |> mask_public_ips()
   end
 
@@ -37,6 +39,32 @@ defmodule HydraSrt.LogSanitizer do
   def mask_passphrase(value), do: value
 
   @doc """
+  Masks query strings on googlevideo and HLS playlist URLs while retaining the host.
+  """
+  @spec mask_bearer_uris(term()) :: term()
+  def mask_bearer_uris(value) when is_binary(value) do
+    Regex.replace(@uri, value, &mask_bearer_uri/1)
+  end
+
+  def mask_bearer_uris(value), do: value
+
+  @spec mask_bearer_uri(String.t()) :: String.t()
+  def mask_bearer_uri(value) when is_binary(value) do
+    case URI.parse(value) do
+      %URI{scheme: scheme, host: host, query: query} = uri
+      when scheme in ["http", "https"] and is_binary(host) and is_binary(query) ->
+        if bearer_uri?(host, uri.path) do
+          URI.to_string(%{uri | query: @secret_mask})
+        else
+          value
+        end
+
+      _ ->
+        value
+    end
+  end
+
+  @doc """
   Masks every publicly routable IPv4 address, leaving local addresses readable.
   """
   @spec mask_public_ips(term()) :: term()
@@ -47,6 +75,14 @@ defmodule HydraSrt.LogSanitizer do
   end
 
   def mask_public_ips(value), do: value
+
+  @spec bearer_uri?(String.t(), String.t() | nil) :: boolean()
+  def bearer_uri?(host, path) when is_binary(host) do
+    String.ends_with?(String.downcase(host), ".googlevideo.com") or
+      (is_binary(path) and String.ends_with?(String.downcase(path), ".m3u8"))
+  end
+
+  def bearer_uri?(_host, _path), do: false
 
   @doc false
   @spec public_ip?(String.t()) :: boolean()

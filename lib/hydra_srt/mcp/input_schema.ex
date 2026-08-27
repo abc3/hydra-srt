@@ -14,6 +14,8 @@ defmodule HydraSrt.Mcp.InputSchema do
   # Raw GStreamer / native props must not enter through MCP.
   @forbidden_raw_keys ~w(props element_type legacy processing_profiles)
 
+  @forbidden_youtube_keys ~w(youtube_live_mode youtube_media_info youtube_info_updated_at)
+
   # Shared source/destination attribute fields (types + descriptions folded into a map).
   @common_endpoint_fields [
     {"name", :string, "Endpoint display name"},
@@ -58,6 +60,13 @@ defmodule HydraSrt.Mcp.InputSchema do
     {"ndi_connect_timeout_ms", "connect"},
     {"ndi_receive_timeout_ms", "receive"},
     {"ndi_track_discovery_timeout_ms", "track discovery"}
+  ]
+
+  @youtube_source_fields [
+    {"youtube_url", :string, "Canonical YouTube watch URL"},
+    {"youtube_format_id", :string, "Pinned source format id (optional)"},
+    {"youtube_quality_policy", :string, "Fallback quality selector"},
+    {"youtube_end_action", :youtube_end_actions, "Action when a VOD ends"}
   ]
 
   @spec to_hermes(map()) :: map()
@@ -232,6 +241,17 @@ defmodule HydraSrt.Mcp.InputSchema do
     }
   end
 
+  @spec youtube_source_field_properties() :: %{String.t() => map()}
+  def youtube_source_field_properties do
+    Map.new(@youtube_source_fields, fn {name, type, description} ->
+      {name,
+       case type do
+         :youtube_end_actions -> enum_prop(["stop", "hold", "loop"], description)
+         _ -> typed_prop(type, description)
+       end}
+    end)
+  end
+
   @spec common_endpoint_field_properties() :: %{String.t() => map()}
   def common_endpoint_field_properties do
     properties_from_fields(@common_endpoint_fields)
@@ -242,6 +262,7 @@ defmodule HydraSrt.Mcp.InputSchema do
     properties =
       common_endpoint_field_properties()
       |> Map.merge(ndi_source_field_properties())
+      |> Map.merge(youtube_source_field_properties())
       |> Map.put(
         "schema",
         enum_prop(Endpoint.source_schemas(), "Source protocol schema")
@@ -301,7 +322,7 @@ defmodule HydraSrt.Mcp.InputSchema do
 
   @spec drop_forbidden_keys(map()) :: map()
   def drop_forbidden_keys(attrs) when is_map(attrs) do
-    drop_keys(attrs, @forbidden_ndi_keys ++ @forbidden_raw_keys)
+    drop_keys(attrs, @forbidden_ndi_keys ++ @forbidden_youtube_keys ++ @forbidden_raw_keys)
   end
 
   @spec drop_keys(map(), [String.t()]) :: map()

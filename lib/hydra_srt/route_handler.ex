@@ -31,12 +31,18 @@ defmodule HydraSrt.RouteHandler do
   # `note_healthy_tick/1`.
   @retry_budget_reset_after_healthy_ms @retry_ceiling_ms
 
+  alias HydraSrt.Api.Endpoint
   alias HydraSrt.Db
   alias HydraSrt.Helpers
   alias HydraSrt.LogSanitizer
   alias HydraSrt.Ndi.FeaturePolicy
   alias HydraSrt.Stats.EventLogger
   alias HydraSrt.SystemInterfaces
+  alias HydraSrt.Youtube
+  alias HydraSrt.Youtube.Cache, as: YoutubeCache
+  alias HydraSrt.Youtube.FeaturePolicy, as: YoutubeFeaturePolicy
+  alias HydraSrt.Youtube.Url, as: YoutubeUrl
+  import Ecto.Query, only: [from: 2]
   import Bitwise
 
   @ndi_default_media_policy "video_and_audio_required"
@@ -89,6 +95,8 @@ defmodule HydraSrt.RouteHandler do
           required(:retry_circuit_open?) => boolean(),
           required(:recovery_blocked?) => boolean(),
           required(:recovering?) => boolean(),
+          optional(:youtube_resolution_inflight?) => boolean(),
+          optional(:youtube_failover_inflight?) => boolean(),
           optional(:now_ms) => integer(),
           optional(:source_loss_elapsed_ms) => non_neg_integer()
         }
@@ -101,6 +109,7 @@ defmodule HydraSrt.RouteHandler do
           | {:srt_access, json_map()}
           | {:pipeline_log, json_map()}
           | {:endpoint_health, endpoint_health_payload()}
+          | {:media_info, json_map()}
           | {:route_terminal, route_terminal_payload()}
           | {:stats, json_map()}
           | :unknown
@@ -191,6 +200,7 @@ defmodule HydraSrt.RouteHandler do
     Logger.info("RouteHandler: init: #{inspect(args)}")
 
     {:ok, route} = Db.get_route(args.id, true)
+    subscribe_youtube_refresh(route)
 
     data = %{
       id: args.id,
@@ -218,7 +228,9 @@ defmodule HydraSrt.RouteHandler do
       retry_last_logged_ms: nil,
       retry_circuit_open?: false,
       recovery_blocked?: false,
-      recovering?: false
+      recovering?: false,
+      youtube_resolution_inflight?: false,
+      youtube_failover_inflight?: false
     }
 
     {:ok, :start, data, {:next_event, :internal, :start}}
@@ -228,42 +240,106 @@ defmodule HydraSrt.RouteHandler do
   def handle_event(:internal, :start, _state, data) do
     Logger.info("RouteHandler: starting route #{data.id}")
 
-    port =
-      open_and_initialize_native_pipeline(data.route, data.id, data.active_source_id)
-
-    case port do
-      {:ok, port, process_instance_id} ->
-        HydraSrt.mark_route_started(data.id)
-
-        {:next_state, :started,
-         %{
-           data
-           | port: port,
-             process_instance_id: process_instance_id,
-             endpoint_health: %{},
-             route_terminal: nil,
-             source_loss_since_ms: nil,
-             source_loss_signal: nil,
-             source_data_seen?: false,
-             retry_attempt: 0,
-             retry_prev_backoff_ms: nil,
-             retry_circuit_open?: false,
-             recovery_blocked?: false
-         }}
-
-      {:error, reason} ->
-        Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
-
-        next_data =
-          if policy_deny_reason?(reason) do
-            mark_terminal_failure(data, reason)
-          else
-            data
-            |> mark_restarting_runtime()
-            |> schedule_retry_restart()
-          end
-
+    case maybe_start_youtube_resolution(data) do
+      {:waiting, next_data} ->
         {:keep_state, next_data}
+
+      :ready ->
+        start_native_route(data)
+    end
+  end
+
+  def handle_event(:info, {:youtube_resolved, source_id, result}, _state, data)
+      when is_binary(source_id) and is_map(data) do
+    if source_id == data.active_source_id do
+      next_data = Map.put(data, :youtube_resolution_inflight?, false)
+
+      case result do
+        {:ok, media} ->
+          schedule_youtube_refresh(data, media)
+          resolved_data = persist_resolved_media(next_data, media)
+
+          next_data =
+            if is_port(resolved_data.port) do
+              close_existing_port(resolved_data.port)
+              kill_stale_pipeline_processes(resolved_data.id, "youtube_refresh")
+              %{resolved_data | port: nil}
+            else
+              resolved_data
+            end
+
+          {:keep_state, next_data, [{:next_event, :internal, :start}]}
+
+        {:error, reason} ->
+          Logger.warning(
+            "RouteHandler: YouTube resolution failed route_id=#{data.id} reason=#{inspect(reason)}"
+          )
+
+          next_data
+          |> mark_restarting_runtime()
+          |> schedule_retry_restart()
+          |> then(&{:keep_state, &1})
+      end
+    else
+      {:keep_state, Map.put(data, :youtube_resolution_inflight?, false)}
+    end
+  end
+
+  def handle_event(:info, {:youtube_failover_resolved, source_id, reason, result}, _state, data)
+      when is_binary(source_id) and is_binary(reason) and is_map(data) do
+    next_data = Map.put(data, :youtube_failover_inflight?, false)
+
+    case result do
+      {:ok, media} ->
+        case source_record_from_route(next_data.route, source_id) do
+          {:ok, %{"schema" => "YOUTUBE"} = source} ->
+            schedule_youtube_refresh_for_source(source, media)
+
+            next_data = persist_resolved_media_for_source(next_data, source_id, media)
+
+            case failover_to_source(next_data, source_id, reason) do
+              {:ok, switched} -> {:keep_state, switched}
+              {:error, _reason, failed} -> {:keep_state, failed}
+              {:error, _reason} -> {:keep_state, next_data}
+            end
+
+          _ ->
+            {:keep_state, next_data}
+        end
+
+      {:error, resolution_reason} ->
+        Logger.warning(
+          "RouteHandler: YouTube failover resolution failed route_id=#{data.id} source_id=#{source_id} reason=#{inspect(resolution_reason)}"
+        )
+
+        {:keep_state, next_data |> mark_restarting_runtime() |> schedule_retry_restart()}
+    end
+  end
+
+  def handle_event(:info, {:youtube_refresh, canonical_url}, _state, data)
+      when is_binary(canonical_url) and is_map(data) do
+    case source_record_from_route(data.route, data.active_source_id) do
+      {:ok, %{"schema" => "YOUTUBE", "youtube_url" => url} = source} ->
+        if url == canonical_url and not data[:youtube_resolution_inflight?] and
+             is_nil(YoutubeFeaturePolicy.deny_reason(:enabled)) do
+          :ok = Youtube.invalidate(url)
+          route_handler = self()
+          opts = youtube_resolution_options(source)
+          source_id = source["id"]
+
+          {:ok, _pid} =
+            Task.Supervisor.start_child(HydraSrt.TaskSupervisor, fn ->
+              result = Youtube.resolve(url, opts)
+              send(route_handler, {:youtube_resolved, source_id, result})
+            end)
+
+          {:keep_state, Map.put(data, :youtube_resolution_inflight?, true)}
+        else
+          {:keep_state, data}
+        end
+
+      _ ->
+        {:keep_state, data}
     end
   end
 
@@ -326,9 +402,12 @@ defmodule HydraSrt.RouteHandler do
       if Map.get(data, :recovery_blocked?, false) or Map.get(data, :retry_circuit_open?, false) do
         %{data | retry_scheduled?: false}
       else
-        data
-        |> Map.put(:retry_scheduled?, false)
-        |> retry_pipeline_start()
+        data = Map.put(data, :retry_scheduled?, false)
+
+        case maybe_start_youtube_resolution(data) do
+          {:waiting, next_data} -> next_data
+          :ready -> retry_pipeline_start(data)
+        end
       end
 
     {:keep_state, next_data}
@@ -415,6 +494,190 @@ defmodule HydraSrt.RouteHandler do
     :keep_state_and_data
   end
 
+  @spec start_native_route(data_t()) :: :gen_statem.event_handler_result(atom())
+  def start_native_route(data) when is_map(data) do
+    port =
+      open_and_initialize_native_pipeline(data.route, data.id, data.active_source_id)
+
+    case port do
+      {:ok, port, process_instance_id} ->
+        HydraSrt.mark_route_started(data.id)
+
+        {:next_state, :started,
+         %{
+           data
+           | port: port,
+             process_instance_id: process_instance_id,
+             endpoint_health: %{},
+             route_terminal: nil,
+             source_loss_since_ms: nil,
+             source_loss_signal: nil,
+             source_data_seen?: false,
+             retry_attempt: 0,
+             retry_prev_backoff_ms: nil,
+             retry_circuit_open?: false,
+             recovery_blocked?: false
+         }}
+
+      {:error, reason} ->
+        Logger.error("RouteHandler: Failed to start: #{inspect(reason)}")
+
+        next_data =
+          if policy_deny_reason?(reason) do
+            mark_terminal_failure(data, reason)
+          else
+            data
+            |> mark_restarting_runtime()
+            |> schedule_retry_restart()
+          end
+
+        {:keep_state, next_data}
+    end
+  end
+
+  @spec subscribe_youtube_refresh(json_map()) :: :ok
+  def subscribe_youtube_refresh(route) when is_map(route) do
+    if Enum.any?(route["sources"] || [], &(&1["schema"] == "YOUTUBE")) do
+      Phoenix.PubSub.subscribe(HydraSrt.PubSub, "youtube:refresh")
+    end
+
+    :ok
+  end
+
+  @spec maybe_start_youtube_resolution(data_t()) :: :ready | {:waiting, data_t()}
+  def maybe_start_youtube_resolution(data) when is_map(data) do
+    case source_record_from_route(data.route, data.active_source_id) do
+      {:ok, %{"schema" => "YOUTUBE"} = source} ->
+        if YoutubeFeaturePolicy.deny_reason(:enabled) do
+          :ready
+        else
+          maybe_start_enabled_youtube_resolution(data, source)
+        end
+
+      _ ->
+        :ready
+    end
+  end
+
+  @spec maybe_start_enabled_youtube_resolution(data_t(), json_map()) ::
+          :ready | {:waiting, data_t()}
+  def maybe_start_enabled_youtube_resolution(data, source)
+      when is_map(data) and is_map(source) do
+    if data[:youtube_resolution_inflight?] do
+      {:waiting, data}
+    else
+      opts = youtube_resolution_options(source)
+
+      case youtube_cached_resolve(source["youtube_url"], opts) do
+        {:ok, _media} ->
+          :ready
+
+        {:error, _reason} ->
+          :ready
+
+        :miss ->
+          route_handler = self()
+          source_id = source["id"]
+
+          {:ok, _pid} =
+            Task.Supervisor.start_child(HydraSrt.TaskSupervisor, fn ->
+              result = Youtube.resolve(source["youtube_url"], opts)
+              send(route_handler, {:youtube_resolved, source_id, result})
+            end)
+
+          {:waiting, Map.put(data, :youtube_resolution_inflight?, true)}
+      end
+    end
+  end
+
+  @spec youtube_resolution_options(json_map()) :: keyword()
+  def youtube_resolution_options(source) when is_map(source) do
+    [
+      format_id: source["youtube_format_id"],
+      quality_policy: source["youtube_quality_policy"] || "best[height<=1080]"
+    ]
+  end
+
+  @spec youtube_cached_resolve(String.t(), keyword()) :: {:ok, map()} | {:error, term()} | :miss
+  def youtube_cached_resolve(url, opts) when is_binary(url) and is_list(opts) do
+    with {:ok, canonical_url} <- YoutubeUrl.canonicalize(url),
+         {:ok, video_id} <- YoutubeUrl.video_id(canonical_url) do
+      case YoutubeCache.get(video_id, opts) do
+        {:hit, result} -> cached_resolve_result(result)
+        {:blocked, result} -> cached_resolve_result(result)
+        :miss -> :miss
+      end
+    else
+      _ -> {:error, :invalid_url}
+    end
+  end
+
+  @spec cached_resolve_result(term()) :: {:ok, map()} | {:error, term()}
+  def cached_resolve_result({:ok, media}) when is_map(media), do: {:ok, media}
+  def cached_resolve_result({:error, reason}), do: {:error, reason}
+  def cached_resolve_result(_result), do: {:error, :invalid_output}
+
+  @spec schedule_youtube_refresh(data_t(), map()) :: :ok
+  def schedule_youtube_refresh(data, media) when is_map(data) and is_map(media) do
+    with {:ok, %{"schema" => "YOUTUBE", "youtube_url" => url}} <-
+           source_record_from_route(data.route, data.active_source_id),
+         uri when is_binary(uri) <- media[:uri] || media["uri"] do
+      _ =
+        HydraSrt.Youtube.RefreshScheduler.schedule(url,
+          uri: uri,
+          expires_at: youtube_uri_expires_at(uri)
+        )
+    else
+      _ -> :ok
+    end
+
+    :ok
+  end
+
+  @spec schedule_youtube_refresh_for_source(json_map(), map()) :: :ok
+  def schedule_youtube_refresh_for_source(source, media)
+      when is_map(source) and is_map(media) do
+    with %{"schema" => "YOUTUBE", "youtube_url" => url} <- source,
+         uri when is_binary(uri) <- resolved_media_value(media, :uri) do
+      _ =
+        HydraSrt.Youtube.RefreshScheduler.schedule(url,
+          uri: uri,
+          expires_at: youtube_uri_expires_at(uri)
+        )
+    else
+      _ -> :ok
+    end
+
+    :ok
+  end
+
+  @spec persist_resolved_media(data_t(), map()) :: data_t()
+  def persist_resolved_media(data, media) when is_map(data) and is_map(media) do
+    case source_record_from_route(data.route, data.active_source_id) do
+      {:ok, %{"schema" => "YOUTUBE", "id" => endpoint_id}} when is_binary(endpoint_id) ->
+        persist_resolved_media_for_source(data, endpoint_id, media)
+
+      _ ->
+        data
+    end
+  end
+
+  @spec persist_resolved_media_for_source(data_t(), String.t(), map()) :: data_t()
+  def persist_resolved_media_for_source(data, endpoint_id, media)
+      when is_map(data) and is_binary(endpoint_id) and is_map(media) do
+    live = resolved_media_value(media, :live)
+    media_info = resolved_media_value(media, :media_info)
+
+    if is_boolean(live) and is_map(media_info) do
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      media_info = add_refresh_times(media_info, media, observed_at)
+      persist_youtube_media_info(data.id, endpoint_id, live, media_info, observed_at)
+      %{data | route: put_source_live_mode(data.route, endpoint_id, live)}
+    else
+      data
+    end
+  end
+
   @impl true
   def terminate(reason, _state, %{id: id, shutdown_reason: shutdown_reason})
       when not is_nil(shutdown_reason) do
@@ -423,16 +686,16 @@ defmodule HydraSrt.RouteHandler do
     :ok
   end
 
-  def terminate(reason, _state, %{port: port, id: id}) when is_port(port) do
+  def terminate(reason, _state, %{port: port, id: id} = data) when is_port(port) do
     Logger.info("RouteHandler: reason: #{inspect(reason)} Closing port #{inspect(port)}")
     close_port(port)
-    mark_route_terminated(id, reason)
+    mark_route_terminated(id, reason, data)
     :ok
   end
 
   def terminate(reason, _state, data) do
     Logger.info("RouteHandler: reason: #{inspect(reason)}")
-    mark_route_terminated(data.id, reason)
+    mark_route_terminated(data.id, reason, data)
     :ok
   end
 
@@ -442,6 +705,17 @@ defmodule HydraSrt.RouteHandler do
       |> start_native_pipeline(params["process_instance_id"])
       |> initialize_native_pipeline(route_id, source_id, params, true)
     end
+  end
+
+  @spec mark_route_terminated(String.t(), term(), data_t()) :: :ok
+  def mark_route_terminated(route_id, _reason, data) when is_binary(route_id) and is_map(data) do
+    if completed_terminal?(data[:route_terminal], data.route) do
+      _ = HydraSrt.mark_route_completed(route_id)
+    else
+      _ = HydraSrt.mark_route_terminated(route_id)
+    end
+
+    :ok
   end
 
   defp initialize_native_pipeline(port, route_id, source_id, params, retry_on_closed?) do
@@ -714,6 +988,9 @@ defmodule HydraSrt.RouteHandler do
       {:endpoint_health, payload} ->
         apply_endpoint_health_event(data, payload)
 
+      {:media_info, payload} ->
+        apply_media_info_event(data, payload)
+
       {:route_terminal, payload} ->
         apply_route_terminal_event(data, payload)
 
@@ -961,68 +1238,77 @@ defmodule HydraSrt.RouteHandler do
     with {:ok, route} <- Db.get_route(route_id, true),
          {:ok, source_record} <- source_record_from_route(route, source_id),
          true <- source_record["enabled"] == true or {:error, :disabled_source} do
-      persist_reason = switch_reason_for_persist(route, source_id, reason, data)
-      next_data = maybe_mark_restarting_before_switch(data, reason)
+      case maybe_prepare_youtube_failover(data, source_record, reason) do
+        {:waiting, next_data} ->
+          {:error, :youtube_resolution_pending, next_data}
 
-      with :ok <- close_existing_port(next_data.port) do
-        case open_and_initialize_native_pipeline(route, route_id, source_id) do
-          {:ok, port, process_instance_id} ->
-            case Db.set_route_active_source(route_id, source_id, persist_reason) do
-              {:ok, _route} ->
-                cooldown_ms = backup_cooldown_ms(route)
+        {:error, fail_reason, next_data} ->
+          {:error, fail_reason, next_data}
 
-                last_manual_source_id =
-                  if reason == "manual" do
-                    source_id
+        {:ready, next_data} ->
+          persist_reason = switch_reason_for_persist(route, source_id, reason, next_data)
+          next_data = maybe_mark_restarting_before_switch(next_data, reason)
+
+          with :ok <- close_existing_port(next_data.port) do
+            case open_and_initialize_native_pipeline(route, route_id, source_id) do
+              {:ok, port, process_instance_id} ->
+                case Db.set_route_active_source(route_id, source_id, persist_reason) do
+                  {:ok, _route} ->
+                    cooldown_ms = backup_cooldown_ms(route)
+
+                    last_manual_source_id =
+                      if reason == "manual" do
+                        source_id
+                      else
+                        data[:last_manual_source_id]
+                      end
+
+                    {:ok,
+                     %{
+                       next_data
+                       | route: route,
+                         port: port,
+                         process_instance_id: process_instance_id,
+                         endpoint_health: %{},
+                         route_terminal: nil,
+                         active_source_id: source_id,
+                         last_manual_source_id: last_manual_source_id,
+                         source_loss_since_ms: nil,
+                         source_loss_signal: nil,
+                         source_data_seen?: false,
+                         healthy_since_ms: nil,
+                         cooldown_until: now_ms() + cooldown_ms,
+                         primary_stable_since_ms: nil,
+                         primary_probe_inflight?: false,
+                         retry_circuit_open?: false,
+                         recovery_blocked?: false,
+                         recovering?: true
+                     }}
+
+                  {:error, db_reason} ->
+                    close_existing_port(port)
+
+                    failed_data =
+                      next_data
+                      |> Map.put(:port, nil)
+                      |> schedule_retry_restart()
+
+                    {:error, db_reason, failed_data}
+                end
+
+              {:error, start_reason} ->
+                failed_data =
+                  if policy_deny_reason?(start_reason) do
+                    mark_terminal_failure(%{next_data | port: nil}, start_reason)
                   else
-                    data[:last_manual_source_id]
+                    next_data
+                    |> Map.put(:port, nil)
+                    |> schedule_retry_restart()
                   end
 
-                {:ok,
-                 %{
-                   next_data
-                   | route: route,
-                     port: port,
-                     process_instance_id: process_instance_id,
-                     endpoint_health: %{},
-                     route_terminal: nil,
-                     active_source_id: source_id,
-                     last_manual_source_id: last_manual_source_id,
-                     source_loss_since_ms: nil,
-                     source_loss_signal: nil,
-                     source_data_seen?: false,
-                     healthy_since_ms: nil,
-                     cooldown_until: now_ms() + cooldown_ms,
-                     primary_stable_since_ms: nil,
-                     primary_probe_inflight?: false,
-                     retry_circuit_open?: false,
-                     recovery_blocked?: false,
-                     recovering?: true
-                 }}
-
-              {:error, db_reason} ->
-                close_existing_port(port)
-
-                failed_data =
-                  next_data
-                  |> Map.put(:port, nil)
-                  |> schedule_retry_restart()
-
-                {:error, db_reason, failed_data}
+                {:error, start_reason, failed_data}
             end
-
-          {:error, start_reason} ->
-            failed_data =
-              if policy_deny_reason?(start_reason) do
-                mark_terminal_failure(%{next_data | port: nil}, start_reason)
-              else
-                next_data
-                |> Map.put(:port, nil)
-                |> schedule_retry_restart()
-              end
-
-            {:error, start_reason, failed_data}
-        end
+          end
       end
     else
       {:error, fail_reason} ->
@@ -1034,6 +1320,41 @@ defmodule HydraSrt.RouteHandler do
 
       false ->
         {:error, :invalid_source}
+    end
+  end
+
+  @spec maybe_prepare_youtube_failover(data_t(), json_map(), String.t()) ::
+          {:ready, data_t()} | {:waiting, data_t()} | {:error, term(), data_t()}
+  def maybe_prepare_youtube_failover(data, source, reason)
+      when is_map(data) and is_map(source) and is_binary(reason) do
+    if source["schema"] != "YOUTUBE" or YoutubeFeaturePolicy.deny_reason(:enabled) do
+      {:ready, data}
+    else
+      opts = youtube_resolution_options(source)
+
+      case youtube_cached_resolve(source["youtube_url"], opts) do
+        {:ok, _media} ->
+          {:ready, data}
+
+        {:error, fail_reason} ->
+          {:error, fail_reason, data}
+
+        :miss ->
+          if data[:youtube_failover_inflight?] do
+            {:waiting, data}
+          else
+            route_handler = self()
+            source_id = source["id"]
+
+            {:ok, _pid} =
+              Task.Supervisor.start_child(HydraSrt.TaskSupervisor, fn ->
+                result = Youtube.resolve(source["youtube_url"], opts)
+                send(route_handler, {:youtube_failover_resolved, source_id, reason, result})
+              end)
+
+            {:waiting, Map.put(data, :youtube_failover_inflight?, true)}
+          end
+      end
     end
   end
 
@@ -1149,6 +1470,10 @@ defmodule HydraSrt.RouteHandler do
       )
 
       EventLogger.log_pipeline_reconnecting(data.id, data.active_source_id, reason_code)
+
+      if youtube_source?(data.route, data.active_source_id) do
+        EventLogger.log_youtube_unrecoverable(data.id, data.active_source_id, reason_code)
+      end
     end
 
     case HydraSrt.set_route_runtime_status(data.id, "reconnecting") do
@@ -1171,6 +1496,29 @@ defmodule HydraSrt.RouteHandler do
     do: reason_code
 
   defp terminal_reason_code(_), do: nil
+
+  # The YouTube checks run on every terminal and every retry, including for route
+  # payloads that carry no sources at all. The strict lookup raises in that case
+  # by design, so these callers need a tolerant variant instead.
+  @spec optional_source_record(json_map(), String.t() | nil) ::
+          {:ok, json_map()} | {:error, term()}
+  defp optional_source_record(route, source_id) when is_map(route) do
+    if is_list(route["sources"]) do
+      source_record_from_route(route, source_id)
+    else
+      {:error, :invalid_source}
+    end
+  end
+
+  @spec youtube_source?(json_map(), String.t() | nil) :: boolean()
+  def youtube_source?(route, source_id) when is_map(route) do
+    case optional_source_record(route, source_id) do
+      {:ok, %{"schema" => "YOUTUBE"}} -> true
+      _ -> false
+    end
+  end
+
+  def youtube_source?(_route, _source_id), do: false
 
   @doc """
   Exponential backoff (base 1s, ×2, ceiling 30s) with AWS-style decorrelated jitter:
@@ -1199,7 +1547,9 @@ defmodule HydraSrt.RouteHandler do
   end
 
   @spec policy_deny_reason?(term()) :: boolean()
-  def policy_deny_reason?(reason) when is_binary(reason), do: reason == "NDI_DISABLED"
+  def policy_deny_reason?(reason) when is_binary(reason),
+    do: reason in ["NDI_DISABLED", "YOUTUBE_DISABLED"]
+
   def policy_deny_reason?(_), do: false
 
   @spec non_retryable_terminal?(route_terminal_t() | route_terminal_payload() | nil) :: boolean()
@@ -1397,6 +1747,9 @@ defmodule HydraSrt.RouteHandler do
       {:ok, %{"event" => "endpoint_health"} = payload} ->
         {:endpoint_health, payload}
 
+      {:ok, %{"event" => "media_info"} = payload} ->
+        {:media_info, payload}
+
       {:ok, %{"event" => "route_terminal"} = payload} ->
         {:route_terminal, payload}
 
@@ -1448,6 +1801,89 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
+  @spec apply_media_info_event(data_t(), json_map()) :: data_t()
+  def apply_media_info_event(data, payload) when is_map(data) and is_map(payload) do
+    if matching_process_event?(data, payload) and youtube_media_info_event?(data, payload) do
+      endpoint_id = payload["endpoint_id"]
+      media_info = payload["media_info"]
+      observed_at = observed_datetime(payload["observed_at_ms"])
+
+      persist_youtube_media_info(data.id, endpoint_id, payload["live"], media_info, observed_at)
+
+      enriched_payload =
+        payload
+        |> Map.put("youtube_media_info", media_info)
+        |> Map.put("youtube_info_updated_at", observed_at)
+
+      publish_endpoint_health(data.id, enriched_payload)
+
+      next_health =
+        (data[:endpoint_health] || %{})
+        |> Map.put(endpoint_id, enriched_payload)
+
+      route = put_source_live_mode(data.route, endpoint_id, payload["live"])
+
+      %{data | endpoint_health: next_health, route: route}
+    else
+      Logger.debug(
+        "RouteHandler: dropping stale/unknown media_info route_id=#{inspect(payload["route_id"])} process_instance_id=#{inspect(payload["process_instance_id"])}"
+      )
+
+      data
+    end
+  end
+
+  @spec youtube_media_info_event?(data_t(), json_map()) :: boolean()
+  def youtube_media_info_event?(data, payload) when is_map(data) and is_map(payload) do
+    endpoint_id = payload["endpoint_id"]
+    media_info = payload["media_info"]
+
+    endpoint_id == data.active_source_id and
+      payload["transport"] == "hls" and
+      is_binary(endpoint_id) and is_map(media_info) and is_boolean(payload["live"])
+  end
+
+  @spec observed_datetime(term()) :: DateTime.t()
+  def observed_datetime(value) when is_integer(value) do
+    case DateTime.from_unix(value, :millisecond) do
+      {:ok, datetime} -> DateTime.truncate(datetime, :second)
+      {:error, _reason} -> DateTime.utc_now() |> DateTime.truncate(:second)
+    end
+  end
+
+  def observed_datetime(_value), do: DateTime.utc_now() |> DateTime.truncate(:second)
+
+  @spec persist_youtube_media_info(String.t(), String.t(), boolean(), map(), DateTime.t()) :: :ok
+  def persist_youtube_media_info(route_id, endpoint_id, live, media_info, observed_at)
+      when is_binary(route_id) and is_binary(endpoint_id) and is_boolean(live) and
+             is_map(media_info) and is_struct(observed_at, DateTime) do
+    from(e in Endpoint,
+      where: e.route_id == ^route_id and e.id == ^endpoint_id and e.schema == "YOUTUBE"
+    )
+    |> HydraSrt.Repo.update_all(
+      set: [
+        youtube_live_mode: live,
+        youtube_media_info: media_info,
+        youtube_info_updated_at: observed_at,
+        updated_at: DateTime.utc_now(:microsecond)
+      ]
+    )
+
+    :ok
+  end
+
+  @spec put_source_live_mode(json_map(), String.t(), boolean()) :: json_map()
+  def put_source_live_mode(route, endpoint_id, live)
+      when is_map(route) and is_binary(endpoint_id) and is_boolean(live) do
+    sources =
+      Enum.map(route["sources"] || [], fn
+        %{"id" => ^endpoint_id} = source -> Map.put(source, "youtube_live_mode", live)
+        source -> source
+      end)
+
+    Map.put(route, "sources", sources)
+  end
+
   @spec apply_route_terminal_event(data_t(), route_terminal_payload()) :: data_t()
   def apply_route_terminal_event(data, payload) when is_map(data) and is_map(payload) do
     if matching_process_event?(data, payload) do
@@ -1481,14 +1917,17 @@ defmodule HydraSrt.RouteHandler do
 
   @spec consume_route_terminal(data_t(), route_terminal_t()) :: data_t()
   def consume_route_terminal(data, terminal) when is_map(data) and is_map(terminal) do
-    case terminal.retryable do
-      false ->
+    cond do
+      completed_terminal?(terminal, data.route) ->
+        mark_terminal_completed(data, terminal)
+
+      terminal.retryable == false ->
         mark_terminal_failure(data, terminal.reason_code || "ROUTE_TERMINAL", terminal.detail)
 
-      true ->
+      terminal.retryable == true ->
         drive_retryable_terminal_recovery(data, terminal)
 
-      _ ->
+      true ->
         # Unclassified retryable → fail closed (no auto-retry storm).
         mark_terminal_failure(
           data,
@@ -1496,6 +1935,36 @@ defmodule HydraSrt.RouteHandler do
           terminal.detail
         )
     end
+  end
+
+  @spec completed_terminal?(route_terminal_t() | nil, json_map()) :: boolean()
+  def completed_terminal?(terminal, route) when is_map(route) do
+    source = optional_source_record(route, route["active_source_id"])
+    reason_code = terminal_reason_code(terminal)
+
+    match?({:ok, %{"schema" => "YOUTUBE", "youtube_live_mode" => false}}, source) and
+      (terminal[:retryable] == false or reason_code in ["SOURCE_COMPLETED", "HLS_COMPLETED"])
+  end
+
+  def completed_terminal?(_terminal, _route), do: false
+
+  @spec mark_terminal_completed(data_t(), route_terminal_t()) :: data_t()
+  def mark_terminal_completed(data, terminal) when is_map(data) and is_map(terminal) do
+    Logger.info(
+      "RouteHandler: source completed route_id=#{data.id} reason=#{inspect(terminal.reason_code)}"
+    )
+
+    _ = HydraSrt.mark_route_completed(data.id)
+
+    %{
+      data
+      | route_terminal: terminal,
+        retry_scheduled?: false,
+        recovering?: false,
+        recovery_blocked?: false,
+        source_loss_since_ms: nil,
+        source_loss_signal: nil
+    }
   end
 
   @spec drive_retryable_terminal_recovery(data_t(), route_terminal_t()) :: data_t()
@@ -1802,6 +2271,7 @@ defmodule HydraSrt.RouteHandler do
          :ok <- ensure_ndi_start_allowed(route, source_record),
          {:ok, source} <- source_from_record(source_record, route),
          {:ok, sinks} <- sinks_from_record(route) do
+      notify_youtube_quality_fallback(route_id, source_record, source)
       {:ok, build_config(route_id, source_record, source, sinks)}
     end
   end
@@ -1812,20 +2282,20 @@ defmodule HydraSrt.RouteHandler do
     actions = ndi_policy_actions(route, source_record)
 
     Enum.reduce_while(actions, :ok, fn action, :ok ->
-      case FeaturePolicy.deny_reason(action) do
+      case policy_deny_reason(action) do
         nil -> {:cont, :ok}
         reason -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  @spec ndi_policy_actions(json_map(), json_map()) :: [:receive | :send]
+  @spec ndi_policy_actions(json_map(), json_map()) :: [:receive | :send | :youtube]
   def ndi_policy_actions(route, source_record) when is_map(route) and is_map(source_record) do
     actions =
-      if source_record["schema"] == "NDI" do
-        [:receive]
-      else
-        []
+      case source_record["schema"] do
+        "NDI" -> [:receive]
+        "YOUTUBE" -> [:youtube]
+        _ -> []
       end
 
     destinations = Map.get(route, "destinations", [])
@@ -1836,6 +2306,10 @@ defmodule HydraSrt.RouteHandler do
       actions
     end
   end
+
+  @spec policy_deny_reason(:receive | :send | :youtube) :: String.t() | nil
+  def policy_deny_reason(:youtube), do: YoutubeFeaturePolicy.deny_reason(:enabled)
+  def policy_deny_reason(action), do: FeaturePolicy.deny_reason(action)
 
   @spec ndi_enabled_destination?(json_map() | term()) :: boolean()
   def ndi_enabled_destination?(destination) when is_map(destination) do
@@ -2248,7 +2722,123 @@ defmodule HydraSrt.RouteHandler do
     end
   end
 
+  def source_from_record(%{"schema" => "YOUTUBE"} = source, _route) do
+    url = source["youtube_url"]
+    opts = youtube_resolution_options(source)
+
+    with true <- is_binary(url) and url != "",
+         {:ok, media} <- youtube_cached_resolve(url, opts),
+         {:ok, hls} <- youtube_hls_payload(media, source) do
+      {:ok, %{"kind" => "hls", "hls" => hls}}
+    else
+      false -> {:error, :invalid_source}
+      :miss -> {:error, :resolver_failed}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   def source_from_record(_, _), do: {:error, :invalid_source}
+
+  @spec youtube_hls_payload(map(), json_map()) :: {:ok, json_map()} | {:error, term()}
+  def youtube_hls_payload(media, source) when is_map(media) and is_map(source) do
+    uri = resolved_media_value(media, :uri)
+    live = resolved_media_value(media, :live)
+    end_action = source["youtube_end_action"] || "stop"
+    media_info = resolved_media_value(media, :media_info) || %{}
+    target_duration_ms = media_info["target_duration_ms"] || media_info[:target_duration_ms]
+
+    cond do
+      not (is_binary(uri) and uri != "") ->
+        {:error, :invalid_output}
+
+      not is_boolean(live) ->
+        {:error, :invalid_output}
+
+      end_action not in ["stop", "hold", "loop"] ->
+        {:error, :invalid_source}
+
+      true ->
+        {:ok,
+         %{
+           "uri" => uri,
+           "live" => live,
+           "target_duration_ms" => target_duration_ms,
+           "end_action" => end_action
+         }
+         |> drop_nil_values()}
+    end
+  end
+
+  @spec resolved_media_value(map(), atom()) :: term()
+  def resolved_media_value(media, key) when is_map(media) and is_atom(key) do
+    Map.get(media, key, Map.get(media, Atom.to_string(key)))
+  end
+
+  @spec youtube_uri_expires_at(String.t()) :: integer() | nil
+  def youtube_uri_expires_at(uri) when is_binary(uri) do
+    YoutubeCache.expires_at(uri) ||
+      case Regex.run(~r{/expire/(\d+)}, uri, capture: :all_but_first) do
+        [value] ->
+          case Integer.parse(value) do
+            {expires_at, ""} -> expires_at
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+  end
+
+  def youtube_uri_expires_at(_uri), do: nil
+
+  @spec add_refresh_times(map(), map(), DateTime.t()) :: map()
+  def add_refresh_times(media_info, media, observed_at)
+      when is_map(media_info) and is_map(media) and is_struct(observed_at, DateTime) do
+    media_info = Map.put(media_info, "last_refresh_at", DateTime.to_iso8601(observed_at))
+
+    case youtube_uri_expires_at(resolved_media_value(media, :uri)) do
+      expires_at when is_integer(expires_at) ->
+        next_refresh_at = DateTime.from_unix!(expires_at - :timer.minutes(10), :second)
+
+        Map.put(media_info, "next_refresh_at", DateTime.to_iso8601(next_refresh_at))
+
+      _ ->
+        media_info
+    end
+  end
+
+  @spec notify_youtube_quality_fallback(String.t(), json_map(), typed_endpoint()) :: :ok
+  def notify_youtube_quality_fallback(route_id, source_record, source)
+      when is_binary(route_id) and is_map(source_record) and is_map(source) do
+    selected = source_record["youtube_format_id"]
+
+    if source_record["schema"] == "YOUTUBE" and is_binary(selected) do
+      opts = youtube_resolution_options(source_record) |> Keyword.put(:format_id, selected)
+
+      case youtube_cached_resolve(source_record["youtube_url"], opts) do
+        {:ok, %{format_id: resolved_format_id}} when is_binary(resolved_format_id) ->
+          if resolved_format_id != selected do
+            EventLogger.ingest(%{
+              route_id: route_id,
+              event_type: "youtube_quality_fallback",
+              severity: "warning",
+              source_id: source_record["id"],
+              message: "YouTube quality selection fell back",
+              details_json:
+                Jason.encode!(%{
+                  "selected_format_id" => selected,
+                  "resolved_format_id" => resolved_format_id
+                })
+            })
+          end
+
+        _ ->
+          :ok
+      end
+    end
+
+    :ok
+  end
 
   @spec ndi_source_payload(json_map(), json_map()) :: {:ok, json_map()} | {:error, term()}
   def ndi_source_payload(source, route) when is_map(source) and is_map(route) do
