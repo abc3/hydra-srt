@@ -24,6 +24,7 @@ pub enum Transport {
     Udp,
     Rtp,
     Rtmp,
+    Hls,
 }
 
 impl Transport {
@@ -34,6 +35,7 @@ impl Transport {
             Self::Udp => "udp",
             Self::Rtp => "rtp",
             Self::Rtmp => "rtmp",
+            Self::Hls => "hls",
         }
     }
 }
@@ -243,6 +245,7 @@ impl EventSink {
         element: Option<&str>,
         message: &str,
     ) -> Result<()> {
+        let message = sanitize_detail(message);
         let event = PipelineLogEvent {
             event: "pipeline_log",
             route_id: &self.identity.route_id,
@@ -252,7 +255,31 @@ impl EventSink {
             level,
             category,
             element,
-            message,
+            message: &message,
+            observed_at_ms: observed_at_ms(),
+        };
+
+        self.write_event(&event)
+    }
+
+    pub fn emit_media_info(
+        &self,
+        endpoint_id: &str,
+        live: bool,
+        format_id: Option<&str>,
+        media_info: serde_json::Value,
+    ) -> Result<()> {
+        let event = MediaInfoEvent {
+            event: "media_info",
+            route_id: &self.identity.route_id,
+            config_revision: &self.identity.config_revision,
+            process_instance_id: &self.identity.process_instance_id,
+            sequence: self.next_sequence(),
+            endpoint_id,
+            transport: Transport::Hls,
+            live,
+            format_id,
+            media_info,
             observed_at_ms: observed_at_ms(),
         };
 
@@ -329,9 +356,50 @@ struct RouteTerminalEvent<'a> {
     detail: Option<String>,
 }
 
+#[derive(Serialize)]
+struct MediaInfoEvent<'a> {
+    event: &'static str,
+    route_id: &'a str,
+    config_revision: &'a str,
+    process_instance_id: &'a str,
+    sequence: u64,
+    endpoint_id: &'a str,
+    transport: Transport,
+    live: bool,
+    format_id: Option<&'a str>,
+    media_info: serde_json::Value,
+    observed_at_ms: u64,
+}
+
 pub(crate) fn sanitize_detail(detail: &str) -> String {
     let cleaned: String = detail.chars().filter(|ch| !ch.is_control()).collect();
+    let cleaned = redact_uri_queries(&cleaned);
     truncate_to_byte_limit(&cleaned, DETAIL_MAX_BYTES)
+}
+
+fn redact_uri_queries(value: &str) -> String {
+    let mut redacted = String::with_capacity(value.len());
+    let mut cursor = 0;
+    while let Some(relative_start) = value[cursor..].find("http") {
+        let start = cursor + relative_start;
+        redacted.push_str(&value[cursor..start]);
+        let remainder = &value[start..];
+        let end = remainder
+            .find(|character: char| {
+                character.is_whitespace() || character == '"' || character == '\''
+            })
+            .unwrap_or(remainder.len());
+        let uri = &remainder[..end];
+        if let Some(query_start) = uri.find('?') {
+            redacted.push_str(&uri[..query_start]);
+            redacted.push_str("?[redacted]");
+        } else {
+            redacted.push_str(uri);
+        }
+        cursor = start + end;
+    }
+    redacted.push_str(&value[cursor..]);
+    redacted
 }
 
 fn truncate_to_byte_limit(value: &str, max_bytes: usize) -> String {
@@ -516,6 +584,17 @@ mod tests {
         let sanitized = sanitize_detail(&value);
         assert!(sanitized.is_char_boundary(sanitized.len()));
         assert!(sanitized.len() <= DETAIL_MAX_BYTES);
+    }
+
+    #[test]
+    fn detail_sanitization_redacts_hls_bearer_query_strings() {
+        let detail = "GET https://r3---sn.googlevideo.com/videoplayback?expire=123&sig=secret&lsig=also-secret failed with 403";
+        let sanitized = sanitize_detail(detail);
+        assert_eq!(
+            sanitized,
+            "GET https://r3---sn.googlevideo.com/videoplayback?[redacted] failed with 403"
+        );
+        assert!(!sanitized.contains("secret"));
     }
 
     #[test]
