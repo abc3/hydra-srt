@@ -17,6 +17,9 @@ alias HydraSrt.Env
 # - RTMP_PORT: RTMP ingest server listen port (default 1935)
 # - PHX_CHECK_ORIGIN: WebSocket origin checks (prod default: disabled)
 # - NDI_FEATURE: enables the NDI feature (default false)
+# - YOUTUBE_ENABLED: enables YouTube source resolution (default false)
+# - YOUTUBE_COOKIES_PATH: optional yt-dlp cookies file
+# - YT_DLP_PATH: optional yt-dlp executable path
 
 if System.get_env("PHX_SERVER") do
   config :hydra_srt, HydraSrtWeb.Endpoint, server: true
@@ -28,11 +31,22 @@ config :hydra_srt, rtmp_port: Env.get_integer("RTMP_PORT", 1935)
 # NDI stays off unless NDI_FEATURE is set. Parsed to booleans here so
 # HydraSrt.Ndi.FeaturePolicy only ever reads already-typed flags.
 ndi_feature? = Env.get_boolean("NDI_FEATURE", false)
+youtube_enabled? = Env.get_boolean("YOUTUBE_ENABLED", false)
+youtube_cookies_path = Env.get_binary("YOUTUBE_COOKIES_PATH", nil)
+yt_dlp_path = Env.get_binary("YT_DLP_PATH", nil)
 
 config :hydra_srt, :ndi,
   enabled: ndi_feature?,
   receive: ndi_feature?,
   send: ndi_feature?
+
+# The resolver is swappable: yt-dlp is the current way to get an HLS URL out of
+# YouTube, not a permanent one. Set :resolver to any module implementing
+# HydraSrt.Youtube.Resolver to replace it without touching the control plane.
+config :hydra_srt, :youtube,
+  enabled: youtube_enabled?,
+  cookies_path: youtube_cookies_path,
+  yt_dlp_path: yt_dlp_path
 
 config :hydra_srt,
   rtmp_bootstrap_ttl_ms: Env.get_integer("RTMP_BOOTSTRAP_TTL_MS", :timer.seconds(30)),
