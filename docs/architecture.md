@@ -27,6 +27,21 @@ Each route's media work runs outside the BEAM:
 - GStreamer handles stream processing.
 - A native crash affects the route process that owns that pipeline, not the whole BEAM VM.
 
+### Source types and resolution
+
+The public endpoint schema and the native pipeline kind are intentionally separate.
+YouTube sources are stored and exposed by the REST API as `schema: "YOUTUBE"`, with
+their canonical watch URL and selected media metadata. The Elixir resolver
+(`HydraSrt.Youtube`) resolves that URL to a temporary HLS playlist before a native
+process starts; the bearer playlist URL is never persisted in SQLite or returned by
+the inspection API.
+
+The native process receives only the generic HLS representation: `kind: "hls"` and
+an already-resolved playlist URI. It does not know about YouTube. This lets the
+native adapter use the same MPEG-TS program branches for HLS input while keeping
+YouTube-specific URL resolution, refresh, cookies, and error handling in the
+Elixir control plane.
+
 ## Process Architecture
 
 ### Supervision Tree

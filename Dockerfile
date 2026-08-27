@@ -5,6 +5,9 @@ ARG DEBIAN_VERSION=trixie-20260610-slim
 ARG NODE_MAJOR=24
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
+ARG YT_DLP_VERSION=2025.08.22
+ARG YT_DLP_SHA256_AMD64=982ee32945ace9b14cce975a1bb83d41e16e8e3056acfc65605c36afa006c176
+ARG YT_DLP_SHA256_ARM64=84ee8c06f17d9fbedcebb5953fa56aeae380b9f7bd71d441f72cccbd8ca31399
 
 FROM ${BUILDER_IMAGE} AS builder
 
@@ -90,6 +93,11 @@ RUN mix release
 # the compiled release and other runtime necessities
 FROM ${RUNNER_IMAGE}
 
+ARG TARGETARCH
+ARG YT_DLP_VERSION
+ARG YT_DLP_SHA256_AMD64
+ARG YT_DLP_SHA256_ARM64
+
 ENV LANG en_US.UTF-8
 ENV LANGUAGE en_US:en
 ENV LC_ALL en_US.UTF-8
@@ -109,6 +117,8 @@ RUN apt-get update -y \
     tini \
     curl \
     ffmpeg \
+    ca-certificates \
+    glib-networking \
     libcjson1 \
     libsrt1.5-openssl \
     && apt-get install -y --no-install-recommends \
@@ -123,10 +133,25 @@ RUN apt-get update -y \
     && gst-launch-1.0 --version 2>&1 | tee /tmp/gst-version.txt \
     && grep -E '1\.26\.' /tmp/gst-version.txt
 
+# Keep the extractor reproducible, while allowing YT_DLP_PATH to point at an operator-managed update.
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+    amd64) asset="yt-dlp_linux"; checksum="${YT_DLP_SHA256_AMD64}" ;; \
+    arm64) asset="yt-dlp_linux_aarch64"; checksum="${YT_DLP_SHA256_ARM64}" ;; \
+    *) echo "unsupported yt-dlp architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl --fail --silent --show-error --location --retry 3 --proto '=https' --tlsv1.2 \
+      "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/${asset}" \
+      --output /usr/local/bin/yt-dlp; \
+    echo "${checksum}  /usr/local/bin/yt-dlp" | sha256sum --check --status; \
+    chmod 0755 /usr/local/bin/yt-dlp
+
 # Set the locale
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
 
 WORKDIR "/app"
+
+ENV YT_DLP_PATH="/usr/local/bin/yt-dlp"
 
 # Create directory structure for mounted volumes
 # These directories will be overridden by the volumes
