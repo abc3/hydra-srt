@@ -61,6 +61,7 @@ mod tests {
             Some(true),
             Some(InterfaceName::new("lo").unwrap()),
             None,
+            None,
         );
         apply_sink(&element, &config).expect("udpsink accepts the typed endpoint config");
         configure_sink(&element);

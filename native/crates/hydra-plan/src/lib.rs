@@ -8,8 +8,8 @@ pub mod representations;
 pub use config::{
     parse, BoundedMs, Cidr, DestinationEndpoint, HostAddress, InterfaceName, LatencyMs, LegacyKind,
     MaxQueueLength, MediaPolicy, NdiBandwidth, NdiColorFormat, NdiDestination, NdiSource,
-    NdiTimestampMode, Pbkeylen, PollTimeoutMs, Port, RouteConfig, RtmpEndpoint, RtmpUri,
-    SourceEndpoint, SrtAccess, SrtDestination, SrtMode, SrtSource, SrtUri, UdpEndpoint,
+    NdiTimestampMode, Pbkeylen, PollTimeoutMs, Port, ProgramNumber, RouteConfig, RtmpEndpoint,
+    RtmpUri, SourceEndpoint, SrtAccess, SrtDestination, SrtMode, SrtSource, SrtUri, UdpEndpoint,
 };
 pub use plan::{
     branch_tracks, plan, BranchPlan, GraphPlan, PlanError, QueueClass, SinkAdapterPlan,

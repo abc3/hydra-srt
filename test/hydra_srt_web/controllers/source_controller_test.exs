@@ -61,6 +61,40 @@ defmodule HydraSrtWeb.SourceControllerTest do
     assert json_response(conn, 422)["errors"] != %{}
   end
 
+  test "source test returns discovered programs", %{conn: conn, route: route} do
+    source = source_fixture(route, %{program_number: 12})
+
+    :ok = :meck.new(HydraSrt.SourceProbe, [:passthrough])
+
+    :meck.expect(HydraSrt.SourceProbe, :probe, fn _source, _opts ->
+      {:ok,
+       %{
+         "probe_uri" => "udp://127.0.0.1:5000",
+         "streams" => [],
+         "format" => %{"format_name" => "mpegts"},
+         "programs" => [
+           %{
+             "program_number" => 12,
+             "pmt_pid" => 4097,
+             "pcr_pid" => 258,
+             "name" => "Service",
+             "streams" => [%{"codec_type" => "video", "codec_name" => "h264"}]
+           }
+         ],
+         "raw" => %{}
+       }}
+    end)
+
+    try do
+      conn = post(conn, ~p"/api/routes/#{route.id}/sources/#{source.id}/test")
+
+      assert %{"programs" => [%{"program_number" => 12, "name" => "Service"}]} =
+               json_response(conn, 200)["data"]
+    after
+      :meck.unload(HydraSrt.SourceProbe)
+    end
+  end
+
   test "create and update SRT source streamid", %{conn: conn, route: %{id: route_id}} do
     attrs = %{
       "position" => 0,

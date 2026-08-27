@@ -21,6 +21,7 @@ import type { InterfaceOption, InterfaceRecord } from '../../types/interfaces';
 import SrtAccessFields from './SrtAccessFields';
 import ProtocolSchemaRadio from './ProtocolSchemaRadio';
 import NdiInputFields from './NdiInputFields';
+import MpegTsProgramField from './MpegTsProgramField';
 import { useNdiCapabilities } from './useNdiCapabilities';
 
 const { Title } = Typography;
@@ -539,6 +540,7 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                                                         }
                                                     </Form.Item>
                                                     <SrtAccessFields />
+                                                    <MpegTsProgramField />
                                                 </>
                                             )
                                         }
@@ -627,6 +629,7 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                                                             placeholder="Enter port number" 
                                                         />
                                                     </Form.Item>
+                                                    <MpegTsProgramField />
                                                 </>
                                                     );
                                                 })()

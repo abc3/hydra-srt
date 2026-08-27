@@ -21,6 +21,108 @@ defmodule HydraSrt.Api.EndpointSourceTest do
     assert changeset.valid?
   end
 
+  test "accepts program numbers at both ends of the valid range" do
+    route = route_fixture()
+
+    for program_number <- [1, 65_535] do
+      changeset =
+        Endpoint.source_changeset(%Endpoint{}, %{
+          route_id: route.id,
+          position: 0,
+          schema: "UDP",
+          host: "127.0.0.1",
+          port: 5000,
+          program_number: program_number
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :program_number) == program_number
+    end
+  end
+
+  test "rejects program numbers outside the valid range" do
+    route = route_fixture()
+
+    for program_number <- [0, 65_536] do
+      changeset =
+        Endpoint.source_changeset(%Endpoint{}, %{
+          route_id: route.id,
+          position: 0,
+          schema: "UDP",
+          host: "127.0.0.1",
+          port: 5000,
+          program_number: program_number
+        })
+
+      refute changeset.valid?
+      assert Keyword.has_key?(changeset.errors, :program_number)
+    end
+  end
+
+  test "program number is kept only by supported source schemas" do
+    route = route_fixture()
+
+    source_attrs = %{
+      "UDP" => %{host: "127.0.0.1", port: 5100},
+      "RTP" => %{address: "127.0.0.1", port: 5101},
+      "SRT" => %{mode: "listener", localaddress: "127.0.0.1", localport: 5102},
+      "RTMP" => %{path: "/live/source"},
+      "NDI" => %{ndi_selection_mode: "discovery_name", ndi_source_name: "Camera"}
+    }
+
+    for {schema, attrs} <- source_attrs do
+      changeset =
+        Endpoint.source_changeset(
+          %Endpoint{},
+          Map.merge(attrs, %{
+            route_id: route.id,
+            position: 0,
+            schema: schema,
+            program_number: 12
+          })
+        )
+
+      expected = if schema in ["UDP", "RTP", "SRT"], do: 12, else: nil
+      assert Ecto.Changeset.get_field(changeset, :program_number) == expected
+    end
+  end
+
+  test "destination changesets always clear program number" do
+    route = route_fixture()
+
+    changeset =
+      Endpoint.destination_changeset(%Endpoint{}, %{
+        route_id: route.id,
+        schema: "UDP",
+        host: "127.0.0.1",
+        port: 5200,
+        program_number: 12
+      })
+
+    assert changeset.valid?
+    assert Ecto.Changeset.get_field(changeset, :program_number) == nil
+  end
+
+  test "program number survives create, update, and reload" do
+    route = route_fixture()
+
+    {:ok, source} =
+      HydraSrt.Api.create_source(%{
+        route_id: route.id,
+        position: 0,
+        schema: "UDP",
+        host: "127.0.0.1",
+        port: 5300,
+        program_number: 11
+      })
+
+    assert source.program_number == 11
+
+    {:ok, updated} = HydraSrt.Api.update_source(source, %{program_number: 12})
+    assert updated.program_number == 12
+    assert Repo.get!(Endpoint, source.id).program_number == 12
+  end
+
   test "invalid when schema missing" do
     route = route_fixture()
     changeset = Endpoint.source_changeset(%Endpoint{}, %{route_id: route.id, position: 0})

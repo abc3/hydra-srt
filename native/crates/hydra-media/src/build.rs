@@ -6,7 +6,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use hydra_plan::{
     BranchPlan, BranchTracks, ErrorCode, GraphPlan, LegacyKind, NdiDestination, NdiSource,
-    RequiredMedia, SinkAdapterPlan, SourceAdapterPlan,
+    ProgramNumber, RequiredMedia, SinkAdapterPlan, SourceAdapterPlan,
 };
 
 use crate::adapters::ndi_source::NdiTrack;
@@ -20,6 +20,7 @@ use crate::metrics::{
 };
 use crate::output::StatsWriter;
 use crate::runtime::{EndpointDescriptor, PipelineRuntime};
+use crate::ts_program;
 
 use thiserror::Error;
 
@@ -97,6 +98,7 @@ struct GraphCore {
     ndi_readiness: Option<ndi_source::NdiReadinessMonitor>,
     srt_source_health: Option<srt::SrtSourceHealthMonitor>,
     srt_destination_health: Vec<(String, srt::SrtDestinationHealthMonitor)>,
+    source_requested_pads: Vec<(gst::Element, gst::Pad)>,
     endpoints: Vec<EndpointDescriptor>,
 }
 
@@ -114,6 +116,7 @@ pub struct RunningGraph {
     runtime: PipelineRuntime,
     branch_handles: Vec<(gst::Element, BranchHandle)>,
     endpoints: Vec<EndpointDescriptor>,
+    source_requested_pads: Vec<(gst::Element, gst::Pad)>,
 }
 
 pub fn build(
@@ -209,6 +212,7 @@ pub fn build(
             ndi_readiness: source_result.ndi_readiness,
             srt_source_health: source_result.srt_source_health,
             srt_destination_health,
+            source_requested_pads: source_result.requested_pads,
             endpoints,
         },
         branches,
@@ -226,7 +230,10 @@ impl BuiltGraph {
             let sink_pad = tee
                 .static_pad("sink")
                 .ok_or_else(|| BuildError::new(ErrorCode::LinkFailed, "tee has no sink pad"))?;
-            source_pad.link(&sink_pad).map_err(link_build_error)?;
+            if let Err(error) = source_pad.link(&sink_pad) {
+                release_requested_pads(&self.core.source_requested_pads);
+                return Err(link_build_error(error));
+            }
         }
 
         let mut handles = Vec::with_capacity(self.branches.len());
@@ -244,6 +251,7 @@ impl BuiltGraph {
         }
         if !failures.is_empty() {
             release_handles(&handles);
+            release_requested_pads(&self.core.source_requested_pads);
             return Err(BuildError::aggregate(failures));
         }
 
@@ -266,6 +274,7 @@ impl LinkedGraph {
     pub fn start(self, event_sink: EventSink) -> Result<RunningGraph, BuildError> {
         if let Err(error) = self.core.runtime.lifecycle.emit_starting() {
             release_handles(&self.branch_handles);
+            release_requested_pads(&self.core.source_requested_pads);
             return Err(BuildError::new(ErrorCode::RuntimeError, error.to_string()));
         }
         if let Err(error) = self.core.runtime.pipeline.set_state(gst::State::Playing) {
@@ -276,6 +285,7 @@ impl LinkedGraph {
                 .emit_failed(FailureReason::Startup);
             let _ = self.core.runtime.pipeline.set_state(gst::State::Null);
             release_handles(&self.branch_handles);
+            release_requested_pads(&self.core.source_requested_pads);
             let code = if self.core.ndi_readiness.is_some() {
                 // Best effort: NDI factories were present, so an NDI graph failing its
                 // initial state transition most commonly means the BYOL runtime is absent.
@@ -309,12 +319,14 @@ impl LinkedGraph {
             runtime: self.core.runtime,
             branch_handles: self.branch_handles,
             endpoints: self.core.endpoints,
+            source_requested_pads: self.core.source_requested_pads,
         })
     }
 
     pub fn shutdown(self) -> Result<(), BuildError> {
         let state_result = self.core.runtime.pipeline.set_state(gst::State::Null);
         release_handles(&self.branch_handles);
+        release_requested_pads(&self.core.source_requested_pads);
         state_result
             .map(|_| ())
             .map_err(|error| BuildError::new(ErrorCode::Shutdown, error.to_string()))
@@ -334,6 +346,7 @@ impl RunningGraph {
         self.runtime.running.store(false, Ordering::Relaxed);
         let state_result = self.runtime.pipeline.set_state(gst::State::Null);
         release_handles(&self.branch_handles);
+        release_requested_pads(&self.source_requested_pads);
         state_result
             .map(|_| ())
             .map_err(|error| BuildError::new(ErrorCode::Shutdown, error.to_string()))
@@ -349,6 +362,7 @@ struct SourceBuild {
     endpoint: EndpointDescriptor,
     source_bytes_total: Arc<AtomicU64>,
     processing_pending: Arc<AtomicBool>,
+    requested_pads: Vec<(gst::Element, gst::Pad)>,
 }
 
 fn build_source_bin(
@@ -368,7 +382,13 @@ fn build_source_bin(
             srt::configure_source(&source, config, writer);
             let source_health =
                 srt::build_source_health_monitor(&source, config.mode()).map_err(adapter_error)?;
-            let mut built = finish_program_source(plan, source, LegacyKind::Srt, lifecycle)?;
+            let mut built = finish_program_source(
+                plan,
+                source,
+                LegacyKind::Srt,
+                config.program_number(),
+                lifecycle,
+            )?;
             built.srt_source_health = source_health;
             Ok(built)
         }
@@ -376,19 +396,31 @@ fn build_source_bin(
             let source = make_element(source_element_factory(LegacyKind::Udp), "source element")?;
             udp::apply_source(&source, config).map_err(adapter_error)?;
             maybe_do_timestamp(&source);
-            finish_program_source(plan, source, LegacyKind::Udp, lifecycle)
+            finish_program_source(
+                plan,
+                source,
+                LegacyKind::Udp,
+                config.program_number(),
+                lifecycle,
+            )
         }
         SourceAdapterPlan::Rtp { config, .. } => {
             let source = make_element(source_element_factory(LegacyKind::Rtp), "source element")?;
             rtp::apply_source(&source, config).map_err(adapter_error)?;
             maybe_do_timestamp(&source);
-            finish_program_source(plan, source, LegacyKind::Rtp, lifecycle)
+            finish_program_source(
+                plan,
+                source,
+                LegacyKind::Rtp,
+                config.program_number(),
+                lifecycle,
+            )
         }
         SourceAdapterPlan::Rtmp { config, .. } => {
             let source = make_element(source_element_factory(LegacyKind::Rtmp), "source element")?;
             rtmp::apply(&source, config).map_err(adapter_error)?;
             maybe_do_timestamp(&source);
-            finish_program_source(plan, source, LegacyKind::Rtmp, lifecycle)
+            finish_program_source(plan, source, LegacyKind::Rtmp, None, lifecycle)
         }
     }
 }
@@ -403,12 +435,13 @@ fn finish_program_source(
     plan: &GraphPlan,
     source: gst::Element,
     transport: LegacyKind,
+    program_number: Option<ProgramNumber>,
     lifecycle: &PipelineLifecycleEmitter,
 ) -> Result<SourceBuild, BuildError> {
     let bin_name = format!("source_{}", sanitize_endpoint_id(&plan.source.endpoint_id));
     let bin = gst::Bin::with_name(&bin_name);
 
-    let output_pad = match transport {
+    let upstream_output_pad = match transport {
         LegacyKind::Rtp => {
             let depay = make_element("rtpmp2tdepay", "RTP depayloader")?;
             bin.add_many([&source, &depay])
@@ -425,6 +458,31 @@ fn finish_program_source(
         }
     }
     .ok_or_else(|| BuildError::new(ErrorCode::LinkFailed, "source has no output pad"))?;
+
+    let mut requested_pads = Vec::new();
+    let output_pad = if let Some(program_number) = program_number {
+        let tsparse = make_element("tsparse", "MPEG-TS parser")?;
+        bin.add(&tsparse).map_err(runtime_build_error)?;
+        let sink_pad = tsparse
+            .static_pad("sink")
+            .ok_or_else(|| BuildError::new(ErrorCode::LinkFailed, "tsparse has no sink pad"))?;
+        upstream_output_pad
+            .link(&sink_pad)
+            .map_err(link_build_error)?;
+        let requested_pad = tsparse
+            .request_pad_simple(&format!("program_{}", program_number.get()))
+            .ok_or_else(|| {
+                BuildError::new(
+                    ErrorCode::LinkFailed,
+                    "failed to request tsparse program pad",
+                )
+            })?;
+        ts_program::install_probe(&requested_pad, program_number.get());
+        requested_pads.push((tsparse, requested_pad.clone()));
+        requested_pad
+    } else {
+        upstream_output_pad
+    };
 
     let ghost = gst::GhostPad::builder_with_target(&output_pad)
         .map_err(runtime_build_error)?
@@ -467,6 +525,7 @@ fn finish_program_source(
         },
         source_bytes_total,
         processing_pending,
+        requested_pads,
     })
 }
 
@@ -520,6 +579,7 @@ fn build_ndi_source_bin(
         },
         source_bytes_total,
         processing_pending,
+        requested_pads: Vec::new(),
     })
 }
 

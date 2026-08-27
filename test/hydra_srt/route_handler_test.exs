@@ -276,6 +276,56 @@ defmodule HydraSrt.RouteHandlerTest do
     assert URI.decode_query(URI.parse(source["srt"]["uri"]).query)["streamid"] == "#!::r=channel"
   end
 
+  test "source payloads carry program number only when configured" do
+    records = [
+      {"UDP", "udp", %{"schema" => "UDP", "address" => "127.0.0.1", "port" => 4210}},
+      {"RTP", "rtp", %{"schema" => "RTP", "address" => "127.0.0.1", "port" => 4211}},
+      {"SRT", "srt", %{"schema" => "SRT", "mode" => "listener", "localport" => 4212}}
+    ]
+
+    for {_schema, kind, record} <- records do
+      assert {:ok, source} =
+               RouteHandler.source_from_record(Map.put(record, "program_number", 12))
+
+      assert source[kind]["program_number"] == 12
+
+      assert {:ok, source_without_program} = RouteHandler.source_from_record(record)
+      refute Map.has_key?(source_without_program[kind], "program_number")
+    end
+
+    refute Map.has_key?(
+             RouteHandler.srt_destination_payload(%{"program_number" => 12}, "srt://example:1"),
+             "program_number"
+           )
+  end
+
+  test "a failover source keeps its own program number" do
+    sources = [
+      %{
+        "id" => "primary",
+        "enabled" => true,
+        "schema" => "UDP",
+        "address" => "127.0.0.1",
+        "port" => 4213,
+        "program_number" => 11
+      },
+      %{
+        "id" => "backup",
+        "enabled" => true,
+        "schema" => "UDP",
+        "address" => "127.0.0.1",
+        "port" => 4214,
+        "program_number" => 12
+      }
+    ]
+
+    backup = RouteHandler.failover_target_source(sources, "primary", "passive")
+    assert backup["id"] == "backup"
+
+    assert {:ok, %{"udp" => %{"program_number" => 12}}} =
+             RouteHandler.source_from_record(backup)
+  end
+
   test "strip_cidr_suffix removes netmask from discovered interface ip" do
     assert RouteHandler.strip_cidr_suffix("172.20.20.12/24") == "172.20.20.12"
     assert RouteHandler.strip_cidr_suffix("fe80::1%en0/64") == "fe80::1%en0"

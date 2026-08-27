@@ -21,6 +21,7 @@ defmodule HydraSrt.RouteBackup do
     address port host latency authentication streamid passphrase pbkeylen
     poll_timeout auto_reconnect keep_listening multicast multicast_iface
     bind_address_option path location allowed_list denied_list limit_access
+    program_number
     ndi_source_name ndi_source_address ndi_selection_mode
     ndi_observed_address_snapshot ndi_observed_name_snapshot ndi_selection_observed_at
     ndi_receiver_name ndi_media_policy ndi_bandwidth ndi_color_format

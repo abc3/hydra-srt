@@ -57,6 +57,23 @@ describe('endpointOptions', () => {
     expect(payload?.multicast_iface).toBe('en0');
   });
 
+  it('preserves a selected MPEG-TS program in source payloads', () => {
+    const payload = flattenEndpointPayload({
+      schema: 'UDP',
+      address: '239.1.1.2',
+      port: 5000,
+      program_number: 12,
+    });
+
+    expect(payload?.program_number).toBe(12);
+  });
+
+  it('omits an empty or destination MPEG-TS program value', () => {
+    expect(flattenEndpointPayload({ schema: 'RTP', program_number: null })?.program_number).toBeUndefined();
+    expect(flattenEndpointPayload({ schema: 'RTMP', program_number: 12 })?.program_number).toBeUndefined();
+    expect(flattenEndpointPayload({ schema: 'NDI', program_number: 12 })?.program_number).toBeUndefined();
+  });
+
   it('sends null when a selected interface is cleared', () => {
     const payload = flattenEndpointPayload({
       schema: 'SRT',

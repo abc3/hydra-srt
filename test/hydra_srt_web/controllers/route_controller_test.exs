@@ -219,6 +219,41 @@ defmodule HydraSrtWeb.RouteControllerTest do
       assert json_response(conn, 422)["error"] == "SRT source is missing a valid port"
     end
 
+    test "returns discovered programs from the source probe", %{conn: conn} do
+      :ok = :meck.new(HydraSrt.SourceProbe, [:passthrough])
+
+      :meck.expect(HydraSrt.SourceProbe, :probe, fn _source, _opts ->
+        {:ok,
+         %{
+           "probe_uri" => "udp://127.0.0.1:5000",
+           "streams" => [],
+           "format" => %{"format_name" => "mpegts"},
+           "programs" => [
+             %{
+               "program_number" => 11,
+               "pmt_pid" => 4096,
+               "pcr_pid" => 256,
+               "name" => nil,
+               "streams" => [%{"codec_type" => "audio", "codec_name" => "aac"}]
+             }
+           ],
+           "raw" => %{}
+         }}
+      end)
+
+      try do
+        conn =
+          post(conn, ~p"/api/routes/test-source",
+            route: %{"schema" => "UDP", "address" => "127.0.0.1", "port" => 5000}
+          )
+
+        assert %{"programs" => [%{"program_number" => 11, "name" => nil}]} =
+                 json_response(conn, 200)["data"]
+      after
+        :meck.unload(HydraSrt.SourceProbe)
+      end
+    end
+
     test "returns bad request when route parameter is missing", %{conn: conn} do
       conn = post(conn, ~p"/api/routes/test-source", %{})
 
