@@ -106,11 +106,11 @@ defmodule HydraSrt.Api.EndpointDestinationTest do
     assert message == "bind target is already in use"
   end
 
-  test "rejects duplicate UDP destination target across routes when interface/address/port match" do
+  test "does not reserve a bind target for a UDP destination that only names a remote host" do
     route_a = route_fixture()
     route_b = route_fixture()
 
-    _ =
+    first =
       destination_fixture(route_a, %{
         schema: "UDP",
         interface_sys_name: "eth0",
@@ -118,7 +118,9 @@ defmodule HydraSrt.Api.EndpointDestinationTest do
         port: 12_323
       })
 
-    assert {:error, changeset} =
+    assert first.bind_port == nil
+
+    assert {:ok, second} =
              %Endpoint{}
              |> Endpoint.destination_changeset(%{
                route_id: route_b.id,
@@ -130,8 +132,55 @@ defmodule HydraSrt.Api.EndpointDestinationTest do
              })
              |> Repo.insert()
 
+    assert second.bind_port == nil
+  end
+
+  test "rejects UDP destinations that bind the same local interface and port" do
+    route_a = route_fixture()
+    route_b = route_fixture()
+
+    _ =
+      destination_fixture(route_a, %{
+        schema: "UDP",
+        interface_sys_name: "eth0",
+        host: "127.0.0.1",
+        port: 12_400,
+        localport: 12_401
+      })
+
+    assert {:error, changeset} =
+             %Endpoint{}
+             |> Endpoint.destination_changeset(%{
+               route_id: route_b.id,
+               position: 4,
+               schema: "UDP",
+               interface_sys_name: "eth0",
+               host: "127.0.0.2",
+               port: 12_402,
+               localport: 12_401
+             })
+             |> Repo.insert()
+
     {message, _meta} = changeset.errors[:bind_port]
     assert message == "bind target is already in use"
+  end
+
+  test "keys a bound UDP destination on its local port, not the port it sends to" do
+    route = route_fixture()
+
+    destination =
+      destination_fixture(route, %{
+        schema: "UDP",
+        interface_sys_name: "eth0",
+        host: "239.1.1.1",
+        port: 12_500,
+        localaddress: "192.168.23.15",
+        localport: 12_501
+      })
+
+    assert destination.bind_port == 12_501
+    assert destination.bind_address == "192.168.23.15"
+    assert destination.bind_multicast_group == nil
   end
 
   test "allows updating destination without self-conflict when bind target is unchanged" do
