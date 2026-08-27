@@ -29,9 +29,11 @@
 | RTMP      | ✔     | ✔      |
 | RTP       | ✔     | —      |
 | [NDI](docs/ndi.md) | ✔ | ✔ |
+| [YouTube](docs/youtube.md) | ✔ | — |
 
 NDI is off by default. It needs the NDI runtime, which is not shipped with HydraSRT and
-is installed by the operator: see [docs/ndi.md](docs/ndi.md).
+is installed by the operator: see [docs/ndi.md](docs/ndi.md). The YouTube source is off by
+default and needs a resolver binary the operator installs: see [docs/youtube.md](docs/youtube.md).
 
 ### Planned transports
 
@@ -50,6 +52,7 @@ RTMP output remuxes the route MPEG-TS stream to FLV without decoding. It support
 | One-to-many distribution | Single source to multiple unicast/multicast outputs | Beta |
 | Reliability | Source failover and reconnection | Beta |
 | Security | SRT passphrase and stream ID | Beta |
+| YouTube sources | Take a live or VOD YouTube URL as a route source; see [docs/youtube.md](docs/youtube.md) | Beta |
 | Observability | Prometheus metrics, route stats, and pipeline logs | Beta |
 
 Missing a feature? [Open an issue](https://github.com/streamband/hydra-srt/issues/new?labels=enhancement).
@@ -140,6 +143,7 @@ Setup, deployment, and troubleshooting: [docs/development.md](docs/development.m
 - SRT source and destination modes: Listener, Caller, Rendezvous
 - UDP sources and destinations
 - RTP (TS over RTP) sources
+- YouTube live and VOD sources
 - SRT authentication with passphrase and stream ID support
 - Source failover with primary + backup sources, automatic failover, and manual source switching
 - System metrics via Prometheus `/metrics`
@@ -157,6 +161,7 @@ Setup, deployment, and troubleshooting: [docs/development.md](docs/development.m
 | [docs/mcp.md](docs/mcp.md)            | MCP server, tokens, and client setup |
 | [docs/envs.md](docs/envs.md)          | Environment variables reference       |
 | [docs/ndi.md](docs/ndi.md)            | Installing and enabling NDI           |
+| [docs/youtube.md](docs/youtube.md)    | Configuring YouTube sources           |
 
 ## Contributing
 

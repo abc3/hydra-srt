@@ -49,6 +49,14 @@ All environment variables recognised by Hydra SRT, grouped by purpose.
 | `NDI_FEATURE` | No | `false` | Enables NDI sources and destinations, NDI discovery and the NDI API surface. While disabled, NDI endpoints are rejected with `NDI_DISABLED` and the discovery coordinator is not started. |
 | `HYDRA_NDI_RUNTIME_DIR` | No | — | Directory holding the NDI runtime (`libndi.so.6`), exported to the native pipeline as `NDI_RUNTIME_DIR_V6`. Required for NDI to load at runtime; the runtime is never bundled. |
 
+### YouTube
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `YOUTUBE_ENABLED` | No | `false` | Enables YouTube sources and the YouTube formats/refresh API. |
+| `YOUTUBE_COOKIES_PATH` | No | — | Path to a readable yt-dlp cookies file. Mount the file into the container when using Docker. Cookies bind resolution to the supplied account; protect and rotate them. |
+| `YT_DLP_PATH` | No | `/usr/local/bin/yt-dlp` in the container; `yt-dlp` otherwise | yt-dlp executable used for YouTube resolution. Set this to an operator-managed newer binary when the pinned release becomes stale. |
+
 ---
 
 ## Release
