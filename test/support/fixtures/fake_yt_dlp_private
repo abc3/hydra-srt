@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+echo "ERROR: [youtube] This video is private. Please sign in to view it." >&2
+exit 1

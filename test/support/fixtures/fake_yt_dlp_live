@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+FAKE_YOUTUBE_IS_LIVE=true FAKE_YOUTUBE_LIVE_STATUS=is_live \
+  exec "$(dirname "$0")/fake_yt_dlp_common.sh" "$@"

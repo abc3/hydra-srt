@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+echo "ERROR: [youtube] The uploader has not made this video available in your country" >&2
+exit 1

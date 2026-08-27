@@ -39,6 +39,20 @@ defmodule HydraSrt.LogSanitizerTest do
     assert sanitized =~ ~s("group":"239.1.1.1")
   end
 
+  test "masks bearer query strings but keeps googlevideo and playlist hosts" do
+    payload =
+      ~s({"uri":"https://manifest.googlevideo.com/api/manifest/hls_playlist/itag/96?expire=123&sig=secret","playlist":"http://127.0.0.1:4567/playlist.m3u8?token=secret"})
+
+    sanitized = LogSanitizer.sanitize_payload(payload)
+
+    assert sanitized =~
+             "https://manifest.googlevideo.com/api/manifest/hls_playlist/itag/96?[REDACTED]"
+
+    assert sanitized =~ "http://127.0.0.1:4567/playlist.m3u8?[REDACTED]"
+    refute sanitized =~ "sig=secret"
+    refute sanitized =~ "token=secret"
+  end
+
   test "public_ip? classifies local ranges as not public" do
     for local <- ["0.0.0.0", "10.1.2.3", "100.64.0.1", "127.0.0.1", "169.254.1.1"] do
       refute LogSanitizer.public_ip?(local), local

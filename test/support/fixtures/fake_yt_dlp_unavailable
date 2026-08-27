@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+echo "ERROR: [youtube] The video is unavailable" >&2
+exit 1

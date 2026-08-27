@@ -482,6 +482,26 @@ defmodule HydraSrt.RouteHandlerTest do
     assert {:error, :invalid_source} = RouteHandler.source_from_record(record)
   end
 
+  test "youtube_hls_payload preserves a false live flag for VOD" do
+    media = %{
+      live: false,
+      media_info: %{"video" => %{"height" => 360}},
+      uri: "http://127.0.0.1:4567/playlist.m3u8"
+    }
+
+    assert {:ok, payload} =
+             RouteHandler.youtube_hls_payload(media, %{"youtube_end_action" => "stop"})
+
+    assert payload["live"] == false
+    assert payload["end_action"] == "stop"
+  end
+
+  test "youtube_uri_expires_at reads googlevideo path expiry without retaining the URI" do
+    uri = "https://video.googlevideo.com/expire/1750000000/file/playlist.m3u8?sig=secret"
+
+    assert RouteHandler.youtube_uri_expires_at(uri) == 1_750_000_000
+  end
+
   test "source_from_record with missing options" do
     record = %{"schema" => "SRT"}
     assert {:error, :invalid_source} = RouteHandler.source_from_record(record)

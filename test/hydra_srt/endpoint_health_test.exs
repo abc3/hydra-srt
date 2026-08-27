@@ -53,6 +53,10 @@ defmodule HydraSrt.EndpointHealthTest do
            end)
   end
 
+  test "YOUTUBE endpoint health uses the native hls transport label" do
+    assert EndpointHealth.endpoint_transport(%{"schema" => "YOUTUBE"}) == "hls"
+  end
+
   test "live snapshot merges handler health identity per saved NDI endpoint" do
     route = route_fixture()
 
