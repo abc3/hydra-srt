@@ -68,6 +68,25 @@ defmodule HydraSrt.Notifications.Telegram do
     end
   end
 
+  def handle_info(
+        {:event, %{"event_type" => event_type} = event},
+        state
+      )
+      when event_type in ["youtube_quality_fallback", "youtube_unrecoverable"] do
+    if should_send_event?(state, event) do
+      message = format_youtube_event_message(event)
+
+      _ =
+        Task.Supervisor.start_child(HydraSrt.TaskSupervisor, fn ->
+          send_message(state.bot_token, state.chat_id, message)
+        end)
+
+      {:noreply, remember_last_sent(state, event)}
+    else
+      {:noreply, state}
+    end
+  end
+
   def handle_info({:event, _event}, state) do
     {:noreply, state}
   end
@@ -144,6 +163,30 @@ defmodule HydraSrt.Notifications.Telegram do
     route_label = route_label(route_id)
 
     "Route \"#{route_label}\" (#{route_id}): #{old_status} → #{new_status}"
+  end
+
+  @spec format_youtube_event_message(map()) :: String.t()
+  def format_youtube_event_message(event) when is_map(event) do
+    route_id = Map.get(event, "route_id", "unknown")
+    route_label = route_label(route_id)
+    message = Map.get(event, "message", "YouTube source event")
+
+    details =
+      case event["details_json"] do
+        details_json when is_binary(details_json) ->
+          case Jason.decode(details_json) do
+            {:ok, %{"selected_format_id" => selected, "resolved_format_id" => resolved}} ->
+              " (selected #{selected}, using #{resolved})"
+
+            _ ->
+              ""
+          end
+
+        _ ->
+          ""
+      end
+
+    "Route \"#{route_label}\" (#{route_id}): #{message}#{details}"
   end
 
   def status_transition_from_event(%{"details_json" => details_json})

@@ -1641,6 +1641,13 @@ defmodule HydraSrt.Db do
       "ndi_track_discovery_timeout_ms" => endpoint.ndi_track_discovery_timeout_ms,
       "ndi_max_queue_length" => endpoint.ndi_max_queue_length,
       "ndi_sender_name" => endpoint.ndi_sender_name,
+      "youtube_url" => endpoint.youtube_url,
+      "youtube_format_id" => endpoint.youtube_format_id,
+      "youtube_quality_policy" => endpoint.youtube_quality_policy,
+      "youtube_live_mode" => endpoint.youtube_live_mode,
+      "youtube_media_info" => endpoint.youtube_media_info,
+      "youtube_info_updated_at" => endpoint.youtube_info_updated_at,
+      "youtube_end_action" => endpoint.youtube_end_action,
       "status" => endpoint.status,
       "created_at" => endpoint.inserted_at,
       "updated_at" => endpoint.updated_at

@@ -1,7 +1,7 @@
 defmodule HydraSrt.EndpointHealth do
   @moduledoc """
   Builds the per-route endpoint-health snapshot, across every transport
-  (SRT, UDP, RTMP, NDI) the route is configured with.
+  (SRT, UDP, RTMP, NDI, and HLS) the route is configured with.
 
   Live RouteHandler state is authoritative while a handler exists. When no
   handler is present, records are derived as stopped/unknown from persisted
@@ -72,6 +72,8 @@ defmodule HydraSrt.EndpointHealth do
   end
 
   @spec endpoint_transport(map()) :: String.t()
+  def endpoint_transport(%{"schema" => "YOUTUBE"}), do: "hls"
+
   def endpoint_transport(%{"schema" => schema}) when is_binary(schema),
     do: String.downcase(schema)
 
@@ -93,6 +95,7 @@ defmodule HydraSrt.EndpointHealth do
             |> Map.put("endpoint_id", endpoint_id)
             |> Map.put_new("direction", endpoint["_direction"])
             |> Map.put_new("transport", endpoint_transport(endpoint))
+            |> merge_youtube_metadata(endpoint)
 
           _ ->
             derived_record(endpoint, "unknown")
@@ -144,7 +147,52 @@ defmodule HydraSrt.EndpointHealth do
       "retry_domain" => nil,
       "detail" => nil
     }
+    |> merge_youtube_metadata(endpoint)
   end
+
+  @spec merge_youtube_metadata(map(), map()) :: map()
+  def merge_youtube_metadata(record, %{"schema" => "YOUTUBE"} = endpoint)
+      when is_map(record) and is_map(endpoint) do
+    record
+    |> maybe_put_metadata("youtube_live_mode", endpoint["youtube_live_mode"])
+    |> maybe_put_metadata("youtube_media_info", endpoint["youtube_media_info"])
+    |> maybe_put_metadata("youtube_info_updated_at", endpoint["youtube_info_updated_at"])
+    |> maybe_put_refresh_time(
+      "youtube_last_refresh_at",
+      endpoint["youtube_media_info"],
+      "last_refresh_at"
+    )
+    |> maybe_put_next_refresh(endpoint["youtube_media_info"])
+  end
+
+  def merge_youtube_metadata(record, _endpoint), do: record
+
+  @spec maybe_put_metadata(map(), String.t(), term()) :: map()
+  def maybe_put_metadata(record, _key, nil), do: record
+  def maybe_put_metadata(record, key, value), do: Map.put(record, key, value)
+
+  @spec maybe_put_next_refresh(map(), term()) :: map()
+  def maybe_put_next_refresh(record, media_info) when is_map(media_info) do
+    next_refresh = media_info["next_refresh_at"] || media_info[:next_refresh_at]
+
+    if is_nil(next_refresh) do
+      record
+    else
+      Map.put(record, "youtube_next_refresh_at", next_refresh)
+    end
+  end
+
+  def maybe_put_next_refresh(record, _media_info), do: record
+
+  @spec maybe_put_refresh_time(map(), String.t(), term(), String.t()) :: map()
+  def maybe_put_refresh_time(record, key, media_info, media_key) when is_map(media_info) do
+    case media_info[media_key] do
+      value when is_binary(value) -> Map.put(record, key, value)
+      _ -> record
+    end
+  end
+
+  def maybe_put_refresh_time(record, _key, _media_info, _media_key), do: record
 
   @spec iso8601(DateTime.t()) :: String.t()
   def iso8601(%DateTime{} = now) do

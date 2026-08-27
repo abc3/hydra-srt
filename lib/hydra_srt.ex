@@ -8,6 +8,7 @@ defmodule HydraSrt do
   @status_starting "starting"
   @status_stopped "stopped"
   @status_failed "failed"
+  @status_completed "completed"
   @route_status_transition_event [:hydra, :route, :status, :transition]
 
   # Runtime route statuses considered "live" (mirror of LIVE_ROUTE_STATUSES in
@@ -217,6 +218,9 @@ defmodule HydraSrt do
   @spec mark_route_stopped(String.t()) :: {:ok, map()} | {:error, term()}
   def mark_route_stopped(id), do: mark_route_with_terminal_stats(id, @status_stopped)
 
+  @spec mark_route_completed(String.t()) :: {:ok, map()} | {:error, term()}
+  def mark_route_completed(id), do: mark_route_with_terminal_stats(id, @status_completed)
+
   @spec mark_route_with_terminal_stats(String.t(), String.t()) ::
           {:ok, map()} | {:error, term()}
   def mark_route_with_terminal_stats(id, status) do
@@ -302,7 +306,7 @@ defmodule HydraSrt do
           "stopped_at" => nil
         }
 
-      status when status in [@status_stopped, @status_failed] ->
+      status when status in [@status_stopped, @status_failed, @status_completed] ->
         %{
           "status" => status,
           "stopped_at" => now

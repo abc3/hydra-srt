@@ -38,24 +38,40 @@ defmodule HydraSrt.Stats.EventLogger do
   end
 
   def log_pipeline_failed(route_id, source_id, reason, message) do
-    ingest(%{
-      route_id: route_id,
-      event_type: "pipeline_failed",
-      severity: "error",
-      source_id: source_id,
-      reason: reason,
-      message: message
-    })
+    log_source_event(route_id, source_id, "pipeline_failed", "error", reason, message)
   end
 
   def log_pipeline_reconnecting(route_id, source_id, reason \\ nil) do
+    log_source_event(
+      route_id,
+      source_id,
+      "pipeline_reconnecting",
+      "warning",
+      reason,
+      "Pipeline reconnecting"
+    )
+  end
+
+  def log_youtube_unrecoverable(route_id, source_id, reason) do
+    log_source_event(
+      route_id,
+      source_id,
+      "youtube_unrecoverable",
+      "error",
+      reason,
+      "YouTube source remains unrecoverable"
+    )
+  end
+
+  # One shape for every event that is about a source failing on a route.
+  defp log_source_event(route_id, source_id, event_type, severity, reason, message) do
     ingest(%{
       route_id: route_id,
-      event_type: "pipeline_reconnecting",
-      severity: "warning",
+      event_type: event_type,
+      severity: severity,
       source_id: source_id,
       reason: reason,
-      message: "Pipeline reconnecting"
+      message: message
     })
   end
 

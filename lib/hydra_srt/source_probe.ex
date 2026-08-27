@@ -98,6 +98,14 @@ defmodule HydraSrt.SourceProbe do
               {:error, "UDP source is missing a valid port"}
           end
 
+        "hls" ->
+          hls = source["hls"] || %{}
+
+          case hls["uri"] do
+            uri when is_binary(uri) and byte_size(uri) > 0 -> {:ok, uri}
+            _ -> {:error, "HLS source is missing a valid URI"}
+          end
+
         other ->
           {:error, "Unsupported source type for probe: #{inspect(other)}"}
       end
@@ -329,7 +337,7 @@ defmodule HydraSrt.SourceProbe do
   defp sanitize_output(value), do: value
 
   defp sanitize_uri(value) when is_binary(value) do
-    LogSanitizer.mask_passphrase(value)
+    LogSanitizer.sanitize_payload(value)
   end
 
   defp sanitize_uri(value), do: value
