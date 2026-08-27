@@ -3,6 +3,7 @@
  */
 import { authFetch } from './auth';
 import { API_BASE_URL } from './constants';
+import type { YoutubeInspectResult } from '../types/youtube';
 
 type JsonPrimitive = string | number | boolean;
 type QueryValue = JsonPrimitive | null | undefined;
@@ -237,6 +238,8 @@ export const routesApi = {
     return response.json();
   },
 
+  getEndpointHealth: async (id: string) => requestJson(`/api/routes/${encodeURIComponent(id)}/endpoint-health`, {}, 'Failed to load endpoint health'),
+
   getStatusesAnalytics: async (params: QueryParams = {}) => {
     const querySuffix = buildQuerySuffix(params);
     const response = await authFetch(`/api/routes/statuses/analytics${querySuffix}`);
@@ -309,6 +312,20 @@ export const routesApi = {
 
     return data;
   },
+};
+
+export const youtubeApi = {
+  inspect: async (url: string, qualityPolicy?: string): Promise<YoutubeInspectResult> => {
+    const query = new URLSearchParams({ url });
+    if (qualityPolicy) query.set('quality_policy', qualityPolicy);
+    return requestJson(`/api/youtube/formats?${query.toString()}`, {}, 'Failed to inspect YouTube source');
+  },
+
+  refresh: async (payload: { url: string; format_id?: string | null; quality_policy?: string | null }) =>
+    requestJson('/api/youtube/refresh', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }, 'Failed to refresh YouTube source'),
 };
 
 export const sourcesApi = {

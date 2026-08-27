@@ -59,6 +59,7 @@ import SourceTimeline from './SourceTimeline';
 import PipelineLogsTab from './PipelineLogsTab';
 import SrtHealthTab from './SrtHealthTab';
 import NdiHealthTab from './NdiHealthTab';
+import YoutubeHealthTab from './YoutubeHealthTab';
 import { useNdiCapabilities } from './useNdiCapabilities';
 import { isNdiRunnable } from './ndiCapabilityState';
 import { ndiApi } from '../../utils/ndiApi';
@@ -187,6 +188,8 @@ const getRuntimeStatusMeta = (status: string | null | undefined): RuntimeStatusM
       return { badgeStatus: 'warning', label: normalized };
     case 'failed':
       return { badgeStatus: 'error', label: normalized };
+    case 'completed':
+      return { badgeStatus: 'success', label: normalized };
     case 'stopped':
       return { badgeStatus: 'error', label: normalized };
     default:
@@ -293,11 +296,11 @@ const hasRouteReachedActionResult = (route: RouteRecord | null | undefined, acti
     return ACTIVE_ROUTE_STATUSES.has(runtimeStatus);
   }
 
-  return runtimeStatus === 'stopped' || runtimeStatus === 'failed';
+  return runtimeStatus === 'stopped' || runtimeStatus === 'failed' || runtimeStatus === 'completed';
 };
 
 const isTerminalRuntimeStatus = (status: string | null | undefined) =>
-  ['stopped', 'failed'].includes((status || '').toLowerCase());
+  ['stopped', 'failed', 'completed'].includes((status || '').toLowerCase());
 
 const RouteItem = () => {
   const navigate = useNavigate();
@@ -962,6 +965,10 @@ const RouteItem = () => {
     const endpoints = [...(routeData?.sources || []), ...(routeData?.destinations || [])];
     return endpoints.some((endpoint) => String(endpoint?.schema || '').toUpperCase() === 'NDI');
   }, [routeData?.destinations, routeData?.sources]);
+  const hasYoutubeSources = useMemo(
+    () => (routeData?.sources || []).some((endpoint) => String(endpoint?.schema || '').toUpperCase() === 'YOUTUBE'),
+    [routeData?.sources],
+  );
   const ndiStartBlocked = useMemo(() => {
     if (!hasNdiEndpoints) {
       return false;
@@ -1168,6 +1175,7 @@ const RouteItem = () => {
         { text: 'Restarting', value: 'restarting' },
         { text: 'Processing', value: 'processing' },
         { text: 'Reconnecting', value: 'reconnecting' },
+        { text: 'Completed', value: 'completed' },
         { text: 'Failed', value: 'failed' },
         { text: 'Stopped', value: 'stopped' },
       ],
@@ -1759,6 +1767,19 @@ const RouteItem = () => {
                           messageApi.error(getErrorMessage(error, 'NDI probe failed'));
                         });
                       }}
+                    />
+                  ),
+                }]
+              : []),
+            ...(hasYoutubeSources
+              ? [{
+                  key: 'youtube_health',
+                  label: 'YouTube Health',
+                  children: (
+                    <YoutubeHealthTab
+                      routeId={id as string}
+                      sources={routeData?.sources || []}
+                      routeActive={!isTerminalRuntimeStatus(routeData?.schema_status || routeData?.status)}
                     />
                   ),
                 }]

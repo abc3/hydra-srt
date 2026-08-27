@@ -282,7 +282,9 @@ describe('RouteItem', () => {
     );
 
     await screen.findByText('Endpoints');
-    expect(screen.getByText('Type')).toBeInTheDocument();
+    // Sources and destinations share the endpoint columns, and the events log has
+    // a Type column of its own, so only Active identifies a single table.
+    expect(screen.getAllByText('Type').length).toBeGreaterThan(0);
     expect(screen.getByText('Active')).toBeInTheDocument();
 
     expect(subscribeToItemStatus).toHaveBeenCalledWith('r1', expect.any(Function));

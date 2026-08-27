@@ -1,13 +1,14 @@
 /** Route source/destination endpoint edit forms and API summaries. */
 
 import type { NdiEndpointFields } from './ndi';
+import type { YoutubeEndpointFields } from './youtube';
 
-export type EndpointFormValues = Record<string, unknown> & NdiEndpointFields & {
+export type EndpointFormValues = Record<string, unknown> & NdiEndpointFields & YoutubeEndpointFields & {
   id?: string;
   name?: string;
   enabled?: boolean;
   node?: string;
-  schema?: 'SRT' | 'UDP' | 'RTP' | 'RTMP' | 'NDI' | string;
+  schema?: 'SRT' | 'UDP' | 'RTP' | 'RTMP' | 'NDI' | 'YOUTUBE' | string;
   mode?: 'caller' | 'listener' | 'rendezvous' | string;
   interface_sys_name?: string;
   address?: string;

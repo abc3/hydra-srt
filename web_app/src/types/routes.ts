@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
 import type { BadgeProps } from 'antd';
 import type { NdiEndpointFields, NdiEndpointHealthRecord } from './ndi';
+import type { YoutubeEndpointFields } from './youtube';
 
 /** Shared route/domain shapes for the routes UI (API payloads are partially typed). */
 
-export type RouteEndpoint = Record<string, unknown> & NdiEndpointFields & {
+export type RouteEndpoint = Record<string, unknown> & NdiEndpointFields & YoutubeEndpointFields & {
   id?: string;
   name?: string;
   enabled?: boolean;

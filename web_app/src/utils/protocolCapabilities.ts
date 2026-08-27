@@ -1,4 +1,4 @@
-export type ProtocolSchema = 'SRT' | 'UDP' | 'RTP' | 'RTMP' | 'NDI';
+export type ProtocolSchema = 'SRT' | 'UDP' | 'RTP' | 'RTMP' | 'NDI' | 'YOUTUBE';
 
 export type ProtocolDirection = 'source' | 'destination';
 
@@ -18,6 +18,7 @@ export const PROTOCOL_CAPABILITIES: readonly ProtocolCapability[] = [
   { schema: 'RTP', label: 'RTP', source: true, destination: false, requiresFeatureFlag: false },
   { schema: 'RTMP', label: 'RTMP', source: true, destination: true, requiresFeatureFlag: false },
   { schema: 'NDI', label: 'NDI', source: true, destination: true, requiresFeatureFlag: true },
+  { schema: 'YOUTUBE', label: 'YouTube', source: true, destination: false, requiresFeatureFlag: false },
 ] as const;
 
 export const listSelectableProtocols = (

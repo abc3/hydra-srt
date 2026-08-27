@@ -45,7 +45,7 @@ import { dashboardApi } from '../utils/api';
 
 const { Text, Title } = Typography;
 
-type StatusKey = 'processing' | 'starting' | 'reconnecting' | 'restarting' | 'failed' | 'stopped' | 'other';
+type StatusKey = 'processing' | 'starting' | 'reconnecting' | 'restarting' | 'completed' | 'failed' | 'stopped' | 'other';
 
 type DashboardEvent = {
   ts?: string | null;
@@ -112,12 +112,13 @@ type DashboardData = {
 const cardStyle = { height: '100%', border: '1px solid #303030' };
 const chartGridStyle = { stroke: '#3a3a3a', strokeWidth: 0.6, strokeDasharray: '2 4' };
 
-const statusOrder: StatusKey[] = ['processing', 'starting', 'reconnecting', 'restarting', 'failed', 'stopped', 'other'];
+const statusOrder: StatusKey[] = ['processing', 'starting', 'reconnecting', 'restarting', 'completed', 'failed', 'stopped', 'other'];
 const statusMeta: Record<StatusKey, { label: string; color: string }> = {
   processing: { label: 'Processing', color: '#52c41a' },
   starting: { label: 'Starting', color: '#1677ff' },
   reconnecting: { label: 'Reconnecting', color: '#fa8c16' },
   restarting: { label: 'Restarting', color: '#faad14' },
+  completed: { label: 'Completed', color: '#52c41a' },
   failed: { label: 'Failed', color: '#ff4d4f' },
   stopped: { label: 'Stopped', color: '#8c8c8c' },
   other: { label: 'Other', color: '#722ed1' },
@@ -128,6 +129,7 @@ const protocolColors: Record<string, string> = {
   UDP: '#13c2c2',
   RTP: '#faad14',
   RTMP: '#eb2f96',
+  YOUTUBE: '#ff4d4f',
 };
 
 const AUTO_REFRESH_SECONDS = 5;

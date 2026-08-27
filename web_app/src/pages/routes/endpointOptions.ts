@@ -213,6 +213,26 @@ const stripNdiClientOwnedFields = (flat: EndpointRecord): EndpointRecord => {
   return next;
 };
 
+const normalizeYoutubeEndpoint = (flat: EndpointRecord): EndpointRecord => {
+  if (flat.schema !== 'YOUTUBE') {
+    return flat;
+  }
+
+  if (typeof flat.youtube_url === 'string') {
+    flat.youtube_url = flat.youtube_url.trim();
+  }
+  if (typeof flat.youtube_quality_policy !== 'string' || flat.youtube_quality_policy.trim() === '') {
+    flat.youtube_quality_policy = 'best[height<=1080]';
+  } else {
+    flat.youtube_quality_policy = flat.youtube_quality_policy.trim();
+  }
+  if (flat.youtube_end_action !== 'stop' && flat.youtube_end_action !== 'hold' && flat.youtube_end_action !== 'loop') {
+    flat.youtube_end_action = 'stop';
+  }
+
+  return flat;
+};
+
 export const normalizeEndpointForForm = (endpoint: EndpointRecord | null | undefined): EndpointRecord | null | undefined => {
   if (!endpoint) {
     return endpoint;
@@ -280,7 +300,7 @@ export const normalizeEndpointForForm = (endpoint: EndpointRecord | null | undef
   flat.denied_list = normalizeIpAccessList(flat.denied_list);
   flat.limit_access = flat.limit_access ?? false;
 
-  return normalizeNdiEndpoint(flat);
+  return normalizeYoutubeEndpoint(normalizeNdiEndpoint(flat));
 };
 
 export const flattenEndpointPayload = (endpoint: EndpointRecord | null | undefined): EndpointRecord | null | undefined => {
