@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+echo "ERROR: [youtube] This live event will begin in a few moments" >&2
+exit 1

@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+echo "ERROR: [youtube] Sign in to confirm you're not a bot" >&2
+exit 1

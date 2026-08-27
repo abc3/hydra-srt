@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+cat >&2 <<'EOF'
+[youtube] jNQXAC9IVRw: Downloading tv simply player API JSON
+[youtube] jNQXAC9IVRw: Downloading player 6a0e84d6-main
+ERROR: [youtube] jNQXAC9IVRw: The page needs to be reloaded.
+EOF
+exit 1

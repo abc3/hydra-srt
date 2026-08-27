@@ -1,0 +1,5 @@
+[https @ 0x...] HTTP error 403 Forbidden
+[in#0 @ 0x...] Failed to open segment 2994473 of playlist 0
+[in#0 @ 0x...] Segment 2994473 of playlist 0 failed too many times, skipping
+[in#0 @ 0x...] Error when loading first segment 'https://rr8---sn-....googlevideo.com/videoplayback/...'
+Error opening input file https://manifest.googlevideo.com/api/manifest/hls_playlist/...

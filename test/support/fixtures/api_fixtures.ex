@@ -111,6 +111,19 @@ defmodule HydraSrt.ApiFixtures do
     HydraSrt.Api.get_source!(source.id)
   end
 
+  @doc "Generate a YouTube source for a given route."
+  def youtube_source_fixture(route, attrs \\ %{}) do
+    source_fixture(
+      route,
+      Enum.into(attrs, %{
+        schema: "YOUTUBE",
+        youtube_url: "https://www.youtube.com/watch?v=fixture",
+        youtube_quality_policy: "best[height<=1080]",
+        youtube_end_action: "stop"
+      })
+    )
+  end
+
   @doc """
   Generate a interface.
   """
