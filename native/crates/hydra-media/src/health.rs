@@ -7,9 +7,10 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use hydra_plan::ErrorCode;
 
+use crate::adapters::hls;
 use crate::adapters::ndi_source::classify_readiness_details;
 use crate::events::{EndpointDirection, EndpointState, EventSink, RetryDomain, Transport};
-use crate::lifecycle::FailureReason;
+use crate::lifecycle::{FailureReason, StopReason};
 use crate::runtime::{EndpointDescriptor, PipelineRuntime};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,9 +105,25 @@ pub fn attach_bus_watch(
     let main_loop = runtime.loop_.clone();
     let pipeline_obj = runtime.pipeline.clone().upcast::<gst::Object>();
     let source_obj = runtime.source.clone().upcast::<gst::Object>();
+    let source_element = runtime.source.clone();
     let lifecycle = runtime.lifecycle.clone();
     let processing_pending = runtime.processing_pending.clone();
     let route_playing = Arc::new(AtomicBool::new(false));
+
+    if let Some(endpoint) = endpoints
+        .iter()
+        .find(|endpoint| endpoint.direction == EndpointDirection::Source)
+        .filter(|endpoint| endpoint.transport == Transport::Hls)
+    {
+        if let Some(policy) = hls::eos_policy(&source_element) {
+            hls::attach_media_info_monitor(
+                &source_element,
+                event_sink.clone(),
+                endpoint.clone(),
+                policy.live,
+            );
+        }
+    }
 
     bus.add_watch(move |_bus, msg| {
         use gst::MessageView;
@@ -121,7 +138,15 @@ pub fn attach_bus_watch(
                     route_playing.load(Ordering::Acquire),
                 );
                 let retry_domain = retry_domain(classification.retryable, endpoint.as_ref());
-                let detail = error.to_string();
+                let gst_detail = format_gst_bus_message(&error, error_message.debug().as_deref());
+                let access_denied = endpoint.as_ref().is_some_and(|endpoint| {
+                    endpoint.transport == Transport::Hls && hls_access_denied(&gst_detail)
+                });
+                let detail = if access_denied {
+                    format!("HLS_ACCESS_DENIED: {gst_detail}")
+                } else {
+                    error.to_string()
+                };
 
                 if let Some(endpoint) = endpoint.as_ref() {
                     let _ = event_sink.emit_endpoint_health(
@@ -142,11 +167,16 @@ pub fn attach_bus_watch(
                     Some(&detail),
                 );
                 let element_name = msg.src().map(|src| src.name());
+                let category = if access_denied {
+                    HLS_ACCESS_CATEGORY
+                } else {
+                    PIPELINE_LOG_CATEGORY
+                };
                 let _ = event_sink.emit_pipeline_log(
                     "ERROR",
-                    PIPELINE_LOG_CATEGORY,
+                    category,
                     element_name.as_deref(),
-                    &format_gst_bus_message(&error, error_message.debug().as_deref()),
+                    &gst_detail,
                 );
                 let _ = lifecycle.emit_failed(FailureReason::RuntimeError);
                 main_loop.quit();
@@ -166,24 +196,34 @@ pub fn attach_bus_watch(
                 );
             }
             MessageView::Eos(..) => {
-                if let Some((endpoint, code, detail)) = classify_source_eos(&endpoint_by_bin) {
+                if let Some((endpoint, code, detail, retryable, clean)) =
+                    classify_source_eos(&endpoint_by_bin, &source_element)
+                {
                     let _ = event_sink.emit_endpoint_health(
                         &endpoint.endpoint_id,
                         endpoint.direction,
                         endpoint.transport,
-                        EndpointState::Failed,
+                        if clean {
+                            EndpointState::Stopped
+                        } else {
+                            EndpointState::Failed
+                        },
                         Some(code),
-                        Some(true),
-                        Some(RetryDomain::Route),
+                        Some(retryable),
+                        Some(retry_domain(retryable, Some(&endpoint))),
                         Some(detail),
                     );
                     let _ = event_sink.emit_route_terminal(
                         code,
-                        true,
-                        RetryDomain::Route,
+                        retryable,
+                        retry_domain(retryable, Some(&endpoint)),
                         Some(detail),
                     );
-                    let _ = lifecycle.emit_failed(FailureReason::RuntimeError);
+                    if clean {
+                        let _ = lifecycle.emit_stopped(StopReason::Eos);
+                    } else {
+                        let _ = lifecycle.emit_failed(FailureReason::RuntimeError);
+                    }
                 } else {
                     eos_seen.store(true, Ordering::Relaxed);
                 }
@@ -235,6 +275,15 @@ pub fn attach_bus_watch(
 /// `Error`/`Warning` message, as opposed to the RTMP remux adapter's own emitter
 /// (category `"rtmp_remux"`) or the raw GST_DEBUG text stream.
 const PIPELINE_LOG_CATEGORY: &str = "gst_bus";
+const HLS_ACCESS_CATEGORY: &str = "hls_access";
+
+fn hls_access_denied(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    detail.contains("403")
+        || detail.contains("forbidden")
+        || detail.contains("not authorized")
+        || detail.contains("unauthorized")
+}
 
 /// Combines a GError's message with its (optional) extra debug string into a single
 /// human-readable line, such as the SRT plugin's wrong-passphrase diagnostic:
@@ -268,7 +317,17 @@ fn classify_error_message(
     if let Some(classification) = classify_ndi_sender_start_failure(endpoint, route_playing) {
         return classification;
     }
-    classify_gst_error(&error_message.error())
+    let classification = classify_gst_error(&error_message.error());
+    if endpoint.is_some_and(|endpoint| {
+        endpoint.transport == Transport::Hls && classification.code == ErrorCode::NegotiationFailed
+    }) {
+        ErrorClassification {
+            code: classification.code,
+            retryable: true,
+        }
+    } else {
+        classification
+    }
 }
 
 /// The exact text GStreamer's SRT plugin (gst-plugins-bad's `srtobject.c`) writes into
@@ -365,7 +424,8 @@ fn retry_domain(retryable: bool, endpoint: Option<&EndpointDescriptor>) -> Retry
 
 fn classify_source_eos(
     endpoint_by_bin: &HashMap<String, EndpointDescriptor>,
-) -> Option<(EndpointDescriptor, ErrorCode, &'static str)> {
+    source: &gst::Element,
+) -> Option<(EndpointDescriptor, ErrorCode, &'static str, bool, bool)> {
     // A route process builds exactly one source bin, so find is unambiguous.
     // Fail loudly in debug builds if a future multi source graph breaks that,
     // because map iteration order would then pick an arbitrary endpoint.
@@ -382,12 +442,47 @@ fn classify_source_eos(
         .values()
         .find(|endpoint| endpoint.direction == EndpointDirection::Source)
         .map(|endpoint| {
-            let (code, detail) = if endpoint.transport == Transport::Ndi {
-                (ErrorCode::NdiSourceEos, "NDI source reached end of stream")
+            let (code, detail, retryable, clean) = if endpoint.transport == Transport::Ndi {
+                (
+                    ErrorCode::NdiSourceEos,
+                    "NDI source reached end of stream",
+                    true,
+                    false,
+                )
+            } else if endpoint.transport == Transport::Hls {
+                match hls::eos_policy(source) {
+                    Some(policy)
+                        if !policy.live && policy.end_action == hydra_plan::HlsEndAction::Stop =>
+                    {
+                        (
+                            ErrorCode::SourceEos,
+                            "HLS VOD reached end of stream",
+                            false,
+                            true,
+                        )
+                    }
+                    Some(_) => (
+                        ErrorCode::SourceEos,
+                        "Live HLS source reached end of stream",
+                        true,
+                        false,
+                    ),
+                    None => (
+                        ErrorCode::SourceEos,
+                        "HLS source reached end of stream",
+                        true,
+                        false,
+                    ),
+                }
             } else {
-                (ErrorCode::SourceEos, "Live source reached end of stream")
+                (
+                    ErrorCode::SourceEos,
+                    "Live source reached end of stream",
+                    true,
+                    false,
+                )
             };
-            (endpoint.clone(), code, detail)
+            (endpoint.clone(), code, detail, retryable, clean)
         })
 }
 
@@ -581,14 +676,21 @@ mod tests {
 
     #[test]
     fn source_eos_classification_makes_srt_retryable_on_the_route_domain() {
+        let _ = gst::init();
         let endpoint = srt_endpoint();
         let endpoints = HashMap::from([(endpoint.bin_name.clone(), endpoint.clone())]);
+        let source = gst::ElementFactory::make("identity")
+            .build()
+            .expect("source");
 
-        let (_, code, detail) = classify_source_eos(&endpoints).expect("source endpoint");
+        let (_, code, detail, retryable, clean) =
+            classify_source_eos(&endpoints, &source).expect("source endpoint");
 
         assert_eq!(code, ErrorCode::SourceEos);
         assert_eq!(detail, "Live source reached end of stream");
-        assert_eq!(retry_domain(true, Some(&endpoint)), RetryDomain::Route);
+        assert!(retryable);
+        assert!(!clean);
+        assert_eq!(retry_domain(retryable, Some(&endpoint)), RetryDomain::Route);
     }
 
     #[test]
@@ -596,11 +698,16 @@ mod tests {
         let destination = non_srt_endpoint();
         let endpoints = HashMap::from([(destination.bin_name.clone(), destination)]);
 
-        assert_eq!(classify_source_eos(&endpoints), None);
+        let _ = gst::init();
+        let source = gst::ElementFactory::make("identity")
+            .build()
+            .expect("source");
+        assert_eq!(classify_source_eos(&endpoints, &source), None);
     }
 
     #[test]
     fn ndi_source_eos_keeps_its_existing_code_and_detail() {
+        let _ = gst::init();
         let endpoint = EndpointDescriptor {
             bin_name: "source_ndi".to_string(),
             endpoint_id: "ndi-source".to_string(),
@@ -609,10 +716,81 @@ mod tests {
         };
         let endpoints = HashMap::from([(endpoint.bin_name.clone(), endpoint)]);
 
-        let (_, code, detail) = classify_source_eos(&endpoints).expect("source endpoint");
+        let source = gst::ElementFactory::make("identity")
+            .build()
+            .expect("source");
+        let (_, code, detail, retryable, clean) =
+            classify_source_eos(&endpoints, &source).expect("source endpoint");
 
         assert_eq!(code, ErrorCode::NdiSourceEos);
         assert_eq!(detail, "NDI source reached end of stream");
+        assert!(retryable);
+        assert!(!clean);
+    }
+
+    #[test]
+    fn hls_vod_eos_is_a_clean_terminal_success() {
+        let _ = gst::init();
+        let endpoint = EndpointDescriptor {
+            bin_name: "source_hls".to_string(),
+            endpoint_id: "hls-source".to_string(),
+            direction: EndpointDirection::Source,
+            transport: Transport::Hls,
+        };
+        let endpoints = HashMap::from([(endpoint.bin_name.clone(), endpoint)]);
+        let source = gst::ElementFactory::make("identity")
+            .build()
+            .expect("source");
+        let config = hydra_plan::HlsSource::new(
+            hydra_plan::HlsUri::new("http://127.0.0.1:4567/playlist.m3u8").expect("uri"),
+            false,
+            None,
+            hydra_plan::HlsEndAction::Stop,
+        );
+        hls::set_eos_policy(&source, &config);
+
+        let (_, code, detail, retryable, clean) =
+            classify_source_eos(&endpoints, &source).expect("source endpoint");
+        assert_eq!(code, ErrorCode::SourceEos);
+        assert_eq!(detail, "HLS VOD reached end of stream");
+        assert!(!retryable);
+        assert!(clean);
+    }
+
+    #[test]
+    fn hls_live_eos_remains_retryable() {
+        let _ = gst::init();
+        let endpoint = EndpointDescriptor {
+            bin_name: "source_hls".to_string(),
+            endpoint_id: "hls-source".to_string(),
+            direction: EndpointDirection::Source,
+            transport: Transport::Hls,
+        };
+        let endpoints = HashMap::from([(endpoint.bin_name.clone(), endpoint)]);
+        let source = gst::ElementFactory::make("identity")
+            .build()
+            .expect("source");
+        let config = hydra_plan::HlsSource::new(
+            hydra_plan::HlsUri::new("http://127.0.0.1:4567/playlist.m3u8").expect("uri"),
+            true,
+            None,
+            hydra_plan::HlsEndAction::Stop,
+        );
+        hls::set_eos_policy(&source, &config);
+
+        let (_, _, _, retryable, clean) =
+            classify_source_eos(&endpoints, &source).expect("source endpoint");
+        assert!(retryable);
+        assert!(!clean);
+    }
+
+    #[test]
+    fn hls_access_failures_have_a_distinct_diagnostic_classification() {
+        assert!(hls_access_denied(
+            "HTTP 403 Forbidden while fetching segment"
+        ));
+        assert!(hls_access_denied("resource was not authorized"));
+        assert!(!hls_access_denied("connection timed out"));
     }
 
     #[test]

@@ -10,7 +10,7 @@ use hydra_plan::{
 };
 
 use crate::adapters::ndi_source::NdiTrack;
-use crate::adapters::{ndi_sink, ndi_source, rtmp, rtp, srt, udp};
+use crate::adapters::{hls, ndi_sink, ndi_source, rtmp, rtp, srt, udp};
 use crate::branch::{configure_queue, profiles_for, BranchHandle, QueueProfiles};
 use crate::events::{EndpointDirection, EventSink, Transport};
 use crate::lifecycle::{FailureReason, PipelineLifecycleEmitter};
@@ -422,6 +422,32 @@ fn build_source_bin(
             maybe_do_timestamp(&source);
             finish_program_source(plan, source, LegacyKind::Rtmp, None, lifecycle)
         }
+        SourceAdapterPlan::Hls { config } => {
+            let source = make_element("urisourcebin", "HLS source element")?;
+            hls::validate_end_action(config).map_err(hls_adapter_error)?;
+            hls::apply(&source, config).map_err(adapter_error)?;
+            hls::set_eos_policy(&source, config);
+            let bin_name = format!("source_{}", sanitize_endpoint_id(&plan.source.endpoint_id));
+            let bin = gst::Bin::with_name(&bin_name);
+            let output_pad = hls::build_source_contents(
+                &bin,
+                &source,
+                config.target_duration_ms().map(|duration| duration.get()),
+            )
+            .map_err(hls_adapter_error)?
+            .ok_or_else(|| {
+                BuildError::new(ErrorCode::LinkFailed, "HLS source has no output pad")
+            })?;
+            finish_source_with_output(
+                plan,
+                source,
+                bin,
+                output_pad,
+                Transport::Hls,
+                Vec::new(),
+                lifecycle,
+            )
+        }
     }
 }
 
@@ -484,6 +510,27 @@ fn finish_program_source(
         upstream_output_pad
     };
 
+    finish_source_with_output(
+        plan,
+        source,
+        bin,
+        output_pad,
+        legacy_transport(transport),
+        requested_pads,
+        lifecycle,
+    )
+}
+
+fn finish_source_with_output(
+    plan: &GraphPlan,
+    source: gst::Element,
+    bin: gst::Bin,
+    output_pad: gst::Pad,
+    transport: Transport,
+    requested_pads: Vec<(gst::Element, gst::Pad)>,
+    lifecycle: &PipelineLifecycleEmitter,
+) -> Result<SourceBuild, BuildError> {
+    let bin_name = bin.name().to_string();
     let ghost = gst::GhostPad::builder_with_target(&output_pad)
         .map_err(runtime_build_error)?
         .name("src")
@@ -521,7 +568,7 @@ fn finish_program_source(
             bin_name,
             endpoint_id: plan.source.endpoint_id.clone(),
             direction: EndpointDirection::Source,
-            transport: legacy_transport(transport),
+            transport,
         },
         source_bytes_total,
         processing_pending,
@@ -978,6 +1025,10 @@ fn link_build_error(error: impl fmt::Display) -> BuildError {
 }
 
 fn rtmp_adapter_error(error: rtmp::RtmpAdapterError) -> BuildError {
+    BuildError::new(error.code(), error.detail())
+}
+
+fn hls_adapter_error(error: hls::HlsAdapterError) -> BuildError {
     BuildError::new(error.code(), error.detail())
 }
 

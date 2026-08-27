@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use gstreamer::prelude::*;
 use hydra_plan::{
-    Cidr, DestinationEndpoint, HostAddress, InterfaceName, LegacyKind, Port, ProgramNumber,
-    RouteConfig, RtmpEndpoint, RtmpUri, SourceEndpoint, SrtAccess, SrtDestination, SrtMode,
-    SrtSource, SrtUri, UdpEndpoint,
+    Cidr, DestinationEndpoint, HlsEndAction, HlsSource, HlsUri, HostAddress, InterfaceName,
+    LegacyKind, Port, ProgramNumber, RouteConfig, RtmpEndpoint, RtmpUri, SourceEndpoint,
+    SrtAccess, SrtDestination, SrtMode, SrtSource, SrtUri, UdpEndpoint,
 };
 
 use super::*;
@@ -58,6 +58,18 @@ fn rtmp_source(id: &str, name: &str, rtmp: RtmpEndpoint) -> SourceEndpoint {
         id: id.to_string(),
         name: name.to_string(),
         rtmp,
+    }
+}
+fn hls_source(id: &str, name: &str, live: bool) -> SourceEndpoint {
+    SourceEndpoint::Hls {
+        id: id.to_string(),
+        name: name.to_string(),
+        hls: HlsSource::new(
+            HlsUri::new("http://127.0.0.1:4567/playlist.m3u8").unwrap(),
+            live,
+            Some(hydra_plan::HlsTargetDurationMs::new(5_000).unwrap()),
+            HlsEndAction::Stop,
+        ),
     }
 }
 fn srt_dest(id: &str, name: &str, srt: SrtDestination) -> DestinationEndpoint {
@@ -172,6 +184,13 @@ fn selected_srt_source() -> SrtSource {
 }
 fn rtmp_ep(location: &str) -> RtmpEndpoint {
     RtmpEndpoint::new(RtmpUri::new(location).unwrap())
+}
+
+fn hls_plan(live: bool) -> hydra_plan::GraphPlan {
+    plan_route(
+        hls_source("source-hls", "HLS source", live),
+        vec![udp_dest("dest", "Dest", udp_ep("127.0.0.1", 4402))],
+    )
 }
 
 fn multi_udp_plan() -> hydra_plan::GraphPlan {
@@ -355,6 +374,84 @@ fn legacy_rtmp_source_builds_mpegts_remux_path() {
     let counts = factory_counts(&built.core.runtime.pipeline);
     assert_eq!(counts.get("parsebin"), Some(&1));
     assert_eq!(counts.get("mpegtsmux"), Some(&1));
+}
+
+#[test]
+fn hls_source_builds_static_ghost_and_time_bounded_pacer_inputs() {
+    let _ = gst::init();
+    for factory in ["urisourcebin", "parsebin", "mpegtsmux", "identity", "queue"] {
+        if gst::ElementFactory::find(factory).is_none() {
+            eprintln!("skipped: HLS factory absent: {factory}");
+            return;
+        }
+    }
+    let built = build(hls_plan(true), writer()).expect("HLS source builds");
+    let source_bin = built
+        .core
+        .runtime
+        .pipeline
+        .by_name("source_source_hls")
+        .expect("HLS source bin")
+        .downcast::<gst::Bin>()
+        .expect("HLS source bin type");
+    assert!(source_bin.static_pad("src").is_some());
+    assert_eq!(
+        source_bin
+            .by_name("hls_mpegtsmux")
+            .expect("HLS mux")
+            .static_pad("src")
+            .expect("HLS mux src")
+            .name(),
+        "src"
+    );
+    assert_eq!(
+        built.core.endpoints[0].transport,
+        crate::events::Transport::Hls
+    );
+    assert_eq!(
+        built.core.runtime.source.property::<String>("uri"),
+        "http://127.0.0.1:4567/playlist.m3u8"
+    );
+}
+
+#[test]
+fn hls_dynamic_parsed_pad_links_through_the_pacer() {
+    let _ = gst::init();
+    for factory in ["appsrc", "mpegtsmux", "identity", "queue", "h264parse"] {
+        if gst::ElementFactory::find(factory).is_none() {
+            eprintln!("skipped: HLS dynamic-link factory absent: {factory}");
+            return;
+        }
+    }
+    let bin = gst::Bin::with_name("hls_dynamic_test");
+    let mux = gst::ElementFactory::make("mpegtsmux")
+        .name("hls_test_mux")
+        .build()
+        .expect("HLS mux");
+    let appsrc = gst::ElementFactory::make("appsrc")
+        .name("hls_test_input")
+        .build()
+        .expect("HLS input");
+    let caps = gst::Caps::builder("video/x-h264")
+        .field("stream-format", "byte-stream")
+        .field("alignment", "au")
+        .build();
+    appsrc.set_property("caps", caps);
+    bin.add_many([&appsrc, &mux]).expect("HLS test elements");
+    let source_pad = appsrc.static_pad("src").expect("HLS input src");
+
+    crate::adapters::hls::link_parsed_pad(&bin, &mux, &source_pad, 2_000, "hls_parsebin")
+        .expect("HLS dynamic link");
+
+    assert!(source_pad.is_linked());
+    let pacer = bin.by_name("hls_pacer_hls_parsebin_src");
+    assert_eq!(pacer.expect("HLS pacer").property::<bool>("sync"), true);
+    assert_eq!(
+        bin.by_name("hls_queue_hls_parsebin_src")
+            .expect("HLS pacing queue")
+            .property::<u64>("max-size-time"),
+        2_000_000_000
+    );
 }
 
 #[test]
