@@ -65,3 +65,6 @@ hydra_srt_analytics.*
 /priv/static/
 
 data/victoria-*
+
+# Temper flaky-test history
+/.temper/

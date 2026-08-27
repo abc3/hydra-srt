@@ -107,7 +107,8 @@ defmodule HydraSrt.MixProject do
       {:benchee, "~> 1.3", only: :dev},
 
       # Test utilities
-      {:meck, "~> 1.0", only: [:dev, :test], override: true}
+      {:meck, "~> 1.0", only: [:dev, :test], override: true},
+      {:temper, "~> 0.2", only: [:dev, :test], runtime: false}
     ]
   end
 
