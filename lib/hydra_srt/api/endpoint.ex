@@ -32,7 +32,7 @@ defmodule HydraSrt.Api.Endpoint do
   @ndi_timeout_ms_max 60_000
   @ndi_max_queue_length_min 1
   @ndi_max_queue_length_max 64
-  @source_schemas ~w(SRT UDP RTP RTMP NDI)
+  @source_schemas ~w(SRT UDP RTP RTMP NDI YOUTUBE)
   @destination_schemas ~w(SRT UDP RTMP NDI)
   @program_source_schemas ~w(SRT UDP RTP)
 
@@ -99,6 +99,16 @@ defmodule HydraSrt.Api.Endpoint do
     :ndi_sender_name
   ]
 
+  @youtube_fields [
+    :youtube_url,
+    :youtube_format_id,
+    :youtube_quality_policy,
+    :youtube_live_mode,
+    :youtube_media_info,
+    :youtube_info_updated_at,
+    :youtube_end_action
+  ]
+
   @type t :: %__MODULE__{}
 
   @type ndi_field ::
@@ -121,6 +131,15 @@ defmodule HydraSrt.Api.Endpoint do
           | :ndi_sender_name_key
 
   @type ndi_ip_family :: :ipv4 | :ipv6
+
+  @type youtube_field ::
+          :youtube_url
+          | :youtube_format_id
+          | :youtube_quality_policy
+          | :youtube_live_mode
+          | :youtube_media_info
+          | :youtube_info_updated_at
+          | :youtube_end_action
 
   @type bind_target :: %{
           interface: String.t(),
@@ -186,6 +205,15 @@ defmodule HydraSrt.Api.Endpoint do
     # Server-derived collision key; never cast from input or serialized.
     field :ndi_sender_name_key, :string
 
+    # YouTube operator intent and observed resolver snapshot.
+    field :youtube_url, :string
+    field :youtube_format_id, :string
+    field :youtube_quality_policy, :string
+    field :youtube_live_mode, :boolean
+    field :youtube_media_info, :map
+    field :youtube_info_updated_at, :utc_datetime
+    field :youtube_end_action, :string
+
     # Normalized bind tuple for DB uniqueness.
     field :bind_interface, :string
     field :bind_address, :string
@@ -215,6 +243,9 @@ defmodule HydraSrt.Api.Endpoint do
     from(e in query, where: e.type == "destination")
   end
 
+  @spec youtube_fields() :: [youtube_field()]
+  def youtube_fields, do: @youtube_fields
+
   @spec source_changeset(t() | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def source_changeset(endpoint, attrs) do
     endpoint
@@ -235,6 +266,7 @@ defmodule HydraSrt.Api.Endpoint do
     )
     |> validate_rtmp_required_fields()
     |> validate_ndi_fields()
+    |> validate_youtube_fields()
     |> validate_number(:position, greater_than_or_equal_to: 0)
     |> put_bind_target_fields()
     |> unique_constraint([:route_id, :position, :type], name: @source_unique_constraint)
@@ -266,6 +298,7 @@ defmodule HydraSrt.Api.Endpoint do
     |> validate_inclusion(:schema, @destination_schemas)
     |> validate_rtmp_required_fields()
     |> validate_ndi_fields()
+    |> validate_youtube_fields()
     |> put_bind_target_fields()
     |> unique_constraint([:route_id, :position, :type], name: @source_unique_constraint)
     |> unique_constraint(:bind_port,
@@ -333,7 +366,7 @@ defmodule HydraSrt.Api.Endpoint do
         :stopped_at,
         :last_probe_at,
         :last_failure_at
-      ] ++ @ndi_cast_fields
+      ] ++ @ndi_cast_fields ++ @youtube_fields
     )
   end
 
@@ -388,6 +421,65 @@ defmodule HydraSrt.Api.Endpoint do
     else
       put_change(changeset, :program_number, nil)
     end
+  end
+
+  @spec validate_youtube_fields(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def validate_youtube_fields(changeset) do
+    case get_field(changeset, :schema) do
+      "YOUTUBE" ->
+        changeset
+        |> normalize_youtube_fields()
+        |> validate_required([:youtube_url, :youtube_quality_policy])
+        |> validate_youtube_url()
+        |> validate_inclusion(:youtube_end_action, ["stop", "hold", "loop"])
+
+      _ ->
+        clear_youtube_fields(changeset)
+    end
+  end
+
+  @spec normalize_youtube_fields(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def normalize_youtube_fields(changeset) do
+    changeset
+    |> put_default_endpoint_field(:youtube_quality_policy, "best[height<=1080]")
+    |> put_default_endpoint_field(:youtube_end_action, "stop")
+    |> normalize_youtube_string_fields()
+  end
+
+  @spec put_default_endpoint_field(Ecto.Changeset.t(), atom(), term()) :: Ecto.Changeset.t()
+  def put_default_endpoint_field(changeset, field, default) do
+    case fetch_field(changeset, field) do
+      {_, nil} -> put_change(changeset, field, default)
+      _ -> changeset
+    end
+  end
+
+  @spec normalize_youtube_string_fields(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def normalize_youtube_string_fields(changeset) do
+    Enum.reduce(
+      [:youtube_url, :youtube_format_id, :youtube_quality_policy, :youtube_end_action],
+      changeset,
+      fn field, acc -> update_change(acc, field, &normalize_optional_string/1) end
+    )
+  end
+
+  @spec validate_youtube_url(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def validate_youtube_url(changeset) do
+    case get_field(changeset, :youtube_url) do
+      value when is_binary(value) and value != "" ->
+        case HydraSrt.Youtube.Url.canonicalize(value) do
+          {:ok, canonical_url} -> put_change(changeset, :youtube_url, canonical_url)
+          {:error, _reason} -> add_error(changeset, :youtube_url, "must be a YouTube watch URL")
+        end
+
+      _ ->
+        changeset
+    end
+  end
+
+  @spec clear_youtube_fields(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def clear_youtube_fields(changeset) do
+    Enum.reduce(@youtube_fields, changeset, fn field, acc -> put_change(acc, field, nil) end)
   end
 
   defp put_bind_target_fields(changeset) do

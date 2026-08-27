@@ -4,8 +4,8 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::config::{
-    ConfigError, DestinationEndpoint, LegacyKind, NdiDestination, NdiSource, RouteConfig,
-    RtmpEndpoint, SourceEndpoint, SrtDestination, SrtSource, UdpEndpoint,
+    ConfigError, DestinationEndpoint, HlsSource, LegacyKind, NdiDestination, NdiSource,
+    RouteConfig, RtmpEndpoint, SourceEndpoint, SrtDestination, SrtSource, UdpEndpoint,
 };
 use crate::reason::ErrorCode;
 use crate::representations::{BranchTracks, MediaKind, RequiredMedia, TrackNeed};
@@ -29,6 +29,9 @@ pub enum SourceAdapterPlan {
     Ndi {
         config: NdiSource,
         media: RequiredMedia,
+    },
+    Hls {
+        config: HlsSource,
     },
     Srt {
         config: SrtSource,
@@ -131,7 +134,8 @@ pub fn plan(config: &RouteConfig) -> Result<GraphPlan, PlanError> {
         SourceEndpoint::Srt { .. }
         | SourceEndpoint::Udp { .. }
         | SourceEndpoint::Rtp { .. }
-        | SourceEndpoint::Rtmp { .. } => plan_program(config),
+        | SourceEndpoint::Rtmp { .. }
+        | SourceEndpoint::Hls { .. } => plan_program(config),
     }
 }
 
@@ -295,6 +299,13 @@ fn program_source_plan(source: &SourceEndpoint) -> Result<SourcePlan, PlanError>
                 media: MediaKind::MpegTsProgram,
             },
         }),
+        SourceEndpoint::Hls { id, name, hls } => Ok(SourcePlan {
+            endpoint_id: id.clone(),
+            endpoint_name: name.clone(),
+            adapter: SourceAdapterPlan::Hls {
+                config: hls.clone(),
+            },
+        }),
     }
 }
 
@@ -343,6 +354,7 @@ impl SourceAdapterPlan {
     pub const fn legacy_kind(&self) -> Option<LegacyKind> {
         match self {
             Self::Ndi { .. } => None,
+            Self::Hls { .. } => None,
             Self::Srt { .. } => Some(LegacyKind::Srt),
             Self::Udp { .. } => Some(LegacyKind::Udp),
             Self::Rtp { .. } => Some(LegacyKind::Rtp),

@@ -85,6 +85,9 @@ impl From<MaxQueueLength> for u64 {
 
 pub type NdiTimeoutMs = BoundedMs<1_000, 60_000>;
 
+/// HLS target duration hint in milliseconds (inclusive).
+pub type HlsTargetDurationMs = BoundedMs<100, 120_000>;
+
 /// SRT latency in milliseconds (inclusive).
 pub type LatencyMs = BoundedMs<0, 600_000>;
 
@@ -373,6 +376,46 @@ impl TryFrom<String> for RtmpUri {
 
 impl From<RtmpUri> for String {
     fn from(value: RtmpUri) -> Self {
+        value.0
+    }
+}
+
+/// Validated HLS playlist URI. HTTPS is accepted for any host; HTTP is only
+/// accepted for loopback hosts used by local test harnesses.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct HlsUri(String);
+
+impl HlsUri {
+    pub fn new(value: impl Into<String>) -> Result<Self, ConfigError> {
+        let value = value.into();
+        let valid = !value.is_empty()
+            && !value.chars().any(char::is_whitespace)
+            && hls_uri_has_allowed_scheme_and_host(&value);
+        if !valid {
+            return Err(ConfigError::InvalidUri {
+                scheme: "https (or http loopback)",
+                value,
+            });
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for HlsUri {
+    type Error = ConfigError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<HlsUri> for String {
+    fn from(value: HlsUri) -> Self {
         value.0
     }
 }
@@ -1009,6 +1052,62 @@ pub struct RtmpEndpoint {
     location: RtmpUri,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HlsEndAction {
+    Stop,
+    Hold,
+    Loop,
+}
+
+impl Default for HlsEndAction {
+    fn default() -> Self {
+        Self::Stop
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HlsSource {
+    uri: HlsUri,
+    live: bool,
+    target_duration_ms: Option<HlsTargetDurationMs>,
+    #[serde(default)]
+    end_action: HlsEndAction,
+}
+
+impl HlsSource {
+    pub fn new(
+        uri: HlsUri,
+        live: bool,
+        target_duration_ms: Option<HlsTargetDurationMs>,
+        end_action: HlsEndAction,
+    ) -> Self {
+        Self {
+            uri,
+            live,
+            target_duration_ms,
+            end_action,
+        }
+    }
+
+    pub fn uri(&self) -> &HlsUri {
+        &self.uri
+    }
+
+    pub const fn live(&self) -> bool {
+        self.live
+    }
+
+    pub const fn target_duration_ms(&self) -> Option<HlsTargetDurationMs> {
+        self.target_duration_ms
+    }
+
+    pub const fn end_action(&self) -> HlsEndAction {
+        self.end_action
+    }
+}
+
 impl RtmpEndpoint {
     pub fn new(location: RtmpUri) -> Self {
         Self { location }
@@ -1052,6 +1151,12 @@ pub enum SourceEndpoint {
         name: String,
         rtmp: RtmpEndpoint,
     },
+    Hls {
+        id: String,
+        #[serde(default)]
+        name: String,
+        hls: HlsSource,
+    },
 }
 
 impl SourceEndpoint {
@@ -1061,7 +1166,8 @@ impl SourceEndpoint {
             | Self::Srt { id, .. }
             | Self::Udp { id, .. }
             | Self::Rtp { id, .. }
-            | Self::Rtmp { id, .. } => id,
+            | Self::Rtmp { id, .. }
+            | Self::Hls { id, .. } => id,
         }
     }
 
@@ -1071,12 +1177,17 @@ impl SourceEndpoint {
             | Self::Srt { name, .. }
             | Self::Udp { name, .. }
             | Self::Rtp { name, .. }
-            | Self::Rtmp { name, .. } => name,
+            | Self::Rtmp { name, .. }
+            | Self::Hls { name, .. } => name,
         }
     }
 
     pub const fn is_ndi(&self) -> bool {
         matches!(self, Self::Ndi { .. })
+    }
+
+    pub const fn is_hls(&self) -> bool {
+        matches!(self, Self::Hls { .. })
     }
 
     pub const fn legacy_kind(&self) -> Option<LegacyKind> {
@@ -1086,6 +1197,7 @@ impl SourceEndpoint {
             Self::Udp { .. } => Some(LegacyKind::Udp),
             Self::Rtp { .. } => Some(LegacyKind::Rtp),
             Self::Rtmp { .. } => Some(LegacyKind::Rtmp),
+            Self::Hls { .. } => None,
         }
     }
 }
@@ -1258,11 +1370,45 @@ fn authority_has_host_port(authority: &str) -> bool {
     host.parse::<Ipv4Addr>().is_ok() || is_dns_hostname(host)
 }
 
+fn hls_uri_has_allowed_scheme_and_host(value: &str) -> bool {
+    let Some((scheme, remainder)) = value.split_once("://") else {
+        return false;
+    };
+    let authority = remainder.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+
+    match scheme {
+        "https" => true,
+        "http" => is_loopback_host(authority),
+        _ => false,
+    }
+}
+
+fn is_loopback_host(authority: &str) -> bool {
+    let host = if let Some(value) = authority.strip_prefix('[') {
+        value.split_once(']').map_or("", |(host, _)| host)
+    } else {
+        authority
+            .rsplit_once(':')
+            .filter(|(_, port)| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()))
+            .map_or(authority, |(host, _)| host)
+    };
+    host == "localhost"
+        || host
+            .parse::<Ipv4Addr>()
+            .is_ok_and(|address| address.is_loopback())
+        || host
+            .parse::<Ipv6Addr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        parse, ConfigError, HostAddress, NdiBandwidth, NdiColorFormat, NdiTimestampMode, Pbkeylen,
-        Port, ProgramNumber, SrtMode, SrtUri,
+        parse, ConfigError, HlsEndAction, HlsUri, HostAddress, NdiBandwidth, NdiColorFormat,
+        NdiTimestampMode, Pbkeylen, Port, ProgramNumber, SrtMode, SrtUri,
     };
     use crate::{plan, ErrorCode};
 
@@ -1399,6 +1545,10 @@ mod tests {
     fn newtypes_reject_invalid_values() {
         assert!(SrtUri::new("http://127.0.0.1:9000").is_err());
         assert!(SrtUri::new("srt://127.0.0.1:9000").is_ok());
+        assert!(HlsUri::new("https://video.example/playlist.m3u8").is_ok());
+        assert!(HlsUri::new("http://127.0.0.1:9000/playlist.m3u8").is_ok());
+        assert!(HlsUri::new("http://192.0.2.1/playlist.m3u8").is_err());
+        assert!(HlsUri::new("rtmp://video.example/playlist").is_err());
         assert!(Port::new(0).is_err());
         assert!(Port::new(65535).is_ok());
         assert!(ProgramNumber::new(0).is_err());
@@ -1408,5 +1558,35 @@ mod tests {
         assert!(HostAddress::new("").is_err());
         assert!(HostAddress::new("127.0.0.1").is_ok());
         assert_eq!(SrtMode::Caller.as_str(), "caller");
+        assert_eq!(HlsEndAction::default(), HlsEndAction::Stop);
+    }
+
+    #[test]
+    fn hls_source_defaults_end_action_to_stop() {
+        let config = parse(
+            r#"{
+              "route_id":"r","config_revision":"c","process_instance_id":"p",
+              "source":{"id":"s","kind":"hls","hls":{"uri":"http://127.0.0.1:9000/playlist.m3u8","live":false}},
+              "destinations":[{"id":"d","kind":"udp","udp":{"address":"127.0.0.1","port":5000}}]
+            }"#,
+        )
+        .unwrap();
+        let super::SourceEndpoint::Hls { hls, .. } = config.source else {
+            panic!("expected HLS source");
+        };
+        assert_eq!(hls.end_action(), HlsEndAction::Stop);
+        let planned = plan(&parse(
+            r#"{
+              "route_id":"r","config_revision":"c","process_instance_id":"p",
+              "source":{"id":"s","kind":"hls","hls":{"uri":"http://127.0.0.1:9000/playlist.m3u8","live":false}},
+              "destinations":[{"id":"d","kind":"udp","udp":{"address":"127.0.0.1","port":5000}}]
+            }"#,
+        )
+        .unwrap())
+        .unwrap();
+        assert!(matches!(
+            planned.source.adapter,
+            crate::SourceAdapterPlan::Hls { .. }
+        ));
     }
 }
