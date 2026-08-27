@@ -90,4 +90,9 @@ describe('protocolCapabilities', () => {
     expect(listSelectableProtocols('destination', { ndiFeatureEnabled: true }).map((p) => p.schema)).toContain('NDI');
     expect(listSelectableProtocols('destination', { ndiFeatureEnabled: true }).map((p) => p.schema)).not.toContain('RTP');
   });
+
+  it('shows YouTube only as a source protocol', () => {
+    expect(listSelectableProtocols('source').map((p) => p.schema)).toContain('YOUTUBE');
+    expect(listSelectableProtocols('destination').map((p) => p.schema)).not.toContain('YOUTUBE');
+  });
 });

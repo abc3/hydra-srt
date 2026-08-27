@@ -152,6 +152,8 @@ const getStatusMeta = (status: string | null | undefined) => {
       return { color: '#1677ff', label: status };
     case 'restarting':
       return { color: '#fa8c16', label: status };
+    case 'completed':
+      return { color: '#52c41a', label: status };
     case 'failed':
       return { color: '#b37feb', label: status };
     case 'stopped':
@@ -187,7 +189,7 @@ const hasRouteReachedActionResult = (route: RouteRecord | null | undefined, acti
     return ACTIVE_ROUTE_STATUSES.has(runtimeStatus);
   }
 
-  return runtimeStatus === 'stopped' || runtimeStatus === 'failed';
+  return runtimeStatus === 'stopped' || runtimeStatus === 'failed' || runtimeStatus === 'completed';
 };
 
 const formatUptime = (startedAt: string | null | undefined, status: string | null | undefined, nowMs: number) => {

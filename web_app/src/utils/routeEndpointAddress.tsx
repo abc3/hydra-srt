@@ -37,6 +37,13 @@ export const getEndpointAddressString = (endpoint: RouteEndpoint | null | undefi
           || 'N/A',
       );
     }
+    case 'YOUTUBE': {
+      const mediaInfo = getEndpointOption(endpoint, 'youtube_media_info');
+      if (mediaInfo && typeof mediaInfo === 'object' && typeof (mediaInfo as { title?: unknown }).title === 'string') {
+        return String((mediaInfo as { title: string }).title);
+      }
+      return String(getEndpointOption(endpoint, 'youtube_url') || endpoint.name || 'N/A');
+    }
     default:
       return 'N/A';
   }
@@ -65,6 +72,8 @@ export const renderProtocolTag = (schema: string | null | undefined): ReactNode 
       return <Tag color="purple">RTMP</Tag>;
     case 'NDI':
       return <Tag color="geekblue">NDI</Tag>;
+    case 'YOUTUBE':
+      return <Tag color="red">YouTube</Tag>;
     default:
       return null;
   }

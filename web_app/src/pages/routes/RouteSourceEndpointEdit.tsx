@@ -22,6 +22,7 @@ import SrtAccessFields from './SrtAccessFields';
 import ProtocolSchemaRadio from './ProtocolSchemaRadio';
 import NdiInputFields from './NdiInputFields';
 import MpegTsProgramField from './MpegTsProgramField';
+import YoutubeInputFields from './YoutubeInputFields';
 import { useNdiCapabilities } from './useNdiCapabilities';
 
 const { Title } = Typography;
@@ -560,6 +561,12 @@ const RouteSourceEndpointEdit = ({ initialValues, onChange }: RouteSourceEndpoin
                                                     <Input placeholder="/test/channel" />
                                                 </Form.Item>
                                             )
+                                        }
+                                    </Form.Item>
+
+                                    <Form.Item noStyle dependencies={['schema']}>
+                                        {({ getFieldValue }) =>
+                                            getFieldValue('schema') === 'YOUTUBE' && <YoutubeInputFields />
                                         }
                                     </Form.Item>
 

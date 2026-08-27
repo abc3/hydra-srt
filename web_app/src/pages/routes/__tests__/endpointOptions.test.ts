@@ -144,4 +144,17 @@ describe('endpointOptions', () => {
     expect(payload?.ndi_source_name).toBeNull();
     expect(payload?.selection_token).toBeUndefined();
   });
+
+  it('normalizes YouTube fallback and VOD policy defaults without introducing a media URL', () => {
+    const endpoint = normalizeEndpointForForm({
+      schema: 'YOUTUBE',
+      youtube_url: ' https://www.youtube.com/watch?v=fixture ',
+      youtube_quality_policy: ' ',
+      youtube_end_action: 'unknown',
+    });
+
+    expect(endpoint?.youtube_url).toBe('https://www.youtube.com/watch?v=fixture');
+    expect(endpoint?.youtube_quality_policy).toBe('best[height<=1080]');
+    expect(endpoint?.youtube_end_action).toBe('stop');
+  });
 });

@@ -7,7 +7,7 @@ type RouteRecordLike = {
 
 export const ACTIVE_ROUTE_STATUSES = new Set<string>(['started', 'processing', 'starting', 'restarting', 'reconnecting', 'stopping']);
 export const LIVE_ROUTE_STATUSES = new Set<string>(['started', 'processing', 'starting', 'restarting', 'reconnecting']);
-export const ROUTE_RUNTIME_STATUSES = ['starting', 'restarting', 'processing', 'reconnecting', 'failed', 'stopped'] as const;
+export const ROUTE_RUNTIME_STATUSES = ['starting', 'restarting', 'processing', 'reconnecting', 'completed', 'failed', 'stopped'] as const;
 
 export const formatStatusLabel = (status: string | null | undefined) =>
   status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Unknown';

@@ -46,6 +46,7 @@ import type { EndpointRecord } from './endpointOptions';
 import SrtAccessFields from './SrtAccessFields';
 import ProtocolSchemaRadio from './ProtocolSchemaRadio';
 import NdiInputFields from './NdiInputFields';
+import YoutubeInputFields from './YoutubeInputFields';
 import NdiOutputFields from './NdiOutputFields';
 import MpegTsProgramField from './MpegTsProgramField';
 import { useNdiCapabilities } from './useNdiCapabilities';
@@ -1056,6 +1057,10 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                                     savedObservedName={getFieldValue(['sources', field.name, 'ndi_observed_name_snapshot'])}
                                   />
                                 );
+                              }
+
+                              if (schema === 'YOUTUBE') {
+                                return <YoutubeInputFields namePrefix={['sources', field.name]} />;
                               }
 
                               return null;
