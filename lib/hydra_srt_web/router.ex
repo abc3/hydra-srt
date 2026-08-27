@@ -92,6 +92,10 @@ defmodule HydraSrtWeb.Router do
     post "/ndi/discovery/refresh", NdiSourcesController, :refresh
     post "/ndi/probes", NdiProbesController, :create
 
+    post "/youtube/inspect", YoutubeController, :inspect
+    get "/youtube/formats", YoutubeController, :formats
+    post "/youtube/refresh", YoutubeController, :refresh
+
     get "/nodes", NodeController, :index
     get "/nodes/:id", NodeController, :show
     get "/nodes/:id/analytics", NodeController, :analytics
