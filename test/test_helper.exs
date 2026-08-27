@@ -1,4 +1,4 @@
-ExUnit.start()
+ExUnit.start(formatters: [ExUnit.CLIFormatter, Temper.Formatter])
 
 test_args = System.argv()
 
