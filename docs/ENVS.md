@@ -53,7 +53,7 @@ All environment variables recognised by Hydra SRT, grouped by purpose.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `YOUTUBE_ENABLED` | No | `false` | Enables YouTube sources and the YouTube formats/refresh API. |
+| `YOUTUBE_ENABLED` | No | `true` | Enables YouTube sources and the YouTube formats/refresh API. Set to `false` to turn the feature off. |
 | `YOUTUBE_COOKIES_PATH` | No | — | Path to a readable yt-dlp cookies file. Mount the file into the container when using Docker. Cookies bind resolution to the supplied account; protect and rotate them. |
 | `YT_DLP_PATH` | No | `/usr/local/bin/yt-dlp` in the container; `yt-dlp` otherwise | yt-dlp executable used for YouTube resolution. Set this to an operator-managed newer binary when the pinned release becomes stale. |
 

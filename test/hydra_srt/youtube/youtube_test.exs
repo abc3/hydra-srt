@@ -10,6 +10,13 @@ defmodule HydraSrt.YoutubeTest do
 
   @watch_url "https://www.youtube.com/watch?v=fO9e9jnhYK8"
 
+  defmodule UnsupportedResolver do
+    @behaviour HydraSrt.Youtube.Resolver
+
+    @spec resolve(String.t(), keyword()) :: HydraSrt.Youtube.Resolver.result()
+    def resolve(_url, _opts), do: {:error, :unsupported_format}
+  end
+
   setup do
     Youtube.invalidate(@watch_url)
     :ok
@@ -40,6 +47,17 @@ defmodule HydraSrt.YoutubeTest do
     end)
   end
 
+  test "inspect builds a variant list from the resolved media" do
+    FakeYtDlp.with_variant(:live, "http://127.0.0.1:4567/playlist.m3u8", fn ->
+      assert {:ok, inspected} = Youtube.inspect(@watch_url)
+
+      assert [%{format_id: "96", label: "format 96", has_video: true, has_audio: true}] =
+               inspected.variants
+
+      assert inspected.live
+    end)
+  end
+
   test "surfaces a changed format when the selected itag is unavailable" do
     url = "http://127.0.0.1:4567/playlist.m3u8"
 
@@ -48,6 +66,21 @@ defmodule HydraSrt.YoutubeTest do
       assert resolved.format_id == "91"
       assert resolved.media_info["format_fallback"]
     end)
+  end
+
+  test "keeps an unsupported format error when no policy fallback is available" do
+    previous = Application.get_env(:hydra_srt, :youtube, :__unset__)
+    Application.put_env(:hydra_srt, :youtube, resolver: UnsupportedResolver)
+
+    on_exit(fn ->
+      case previous do
+        :__unset__ -> Application.delete_env(:hydra_srt, :youtube)
+        value -> Application.put_env(:hydra_srt, :youtube, value)
+      end
+    end)
+
+    assert {:error, :unsupported_format} = Youtube.resolve_uncached(@watch_url, [])
+    assert {:error, :unsupported_format} = Youtube.resolve_uncached(@watch_url, format_id: "96")
   end
 
   test "resolve floor blocks a different policy before spawning yt-dlp again" do
@@ -85,6 +118,33 @@ defmodule HydraSrt.YoutubeTest do
 
     assert Youtube.error_message(:bot_check_challenge) =~ "cookies"
     assert Youtube.error_message(:media_access_forbidden) =~ "403"
+  end
+
+  test "maps every resolver reason to a non-empty client message" do
+    reasons = [
+      :invalid_url,
+      :bot_check_challenge,
+      :resolver_not_found,
+      :resolver_timeout,
+      :resolver_failed,
+      :invalid_output,
+      :unsupported_format,
+      :cookies_unreadable,
+      :private_video,
+      :not_live,
+      :geo_blocked,
+      :video_unavailable,
+      :bot_reload_challenge,
+      :resolver_outdated,
+      :media_access_forbidden,
+      :resolve_rate_limited,
+      :not_implemented
+    ]
+
+    for reason <- reasons do
+      assert is_binary(Youtube.error_message(reason))
+      refute Youtube.error_message(reason) == ""
+    end
   end
 
   test "media 403 captured signature is actionable" do

@@ -256,7 +256,8 @@ defmodule HydraSrt.SourceProbe do
   @doc false
   @spec normalize_programs(term()) :: [map()]
   def normalize_programs(programs) when is_list(programs) do
-    Enum.map(programs, fn program ->
+    programs
+    |> Enum.map(fn program ->
       tags = if is_map(program["tags"]), do: program["tags"], else: %{}
       name = if is_binary(tags["service_name"]), do: tags["service_name"], else: nil
 
@@ -268,9 +269,21 @@ defmodule HydraSrt.SourceProbe do
         "streams" => normalize_program_streams(program["streams"])
       }
     end)
+    |> Enum.filter(&selectable_program?/1)
   end
 
   def normalize_programs(_), do: []
+
+  # Program number 0 is reserved for the NIT and is never a service, and ffprobe also
+  # reports a bare PAT entry that way when it read the table before the PMT arrived.
+  # Neither is something an operator can select, so they must not reach the picker.
+  @spec selectable_program?(map()) :: boolean()
+  defp selectable_program?(program) do
+    case program["program_number"] do
+      number when is_integer(number) and number > 0 -> true
+      _ -> false
+    end
+  end
 
   @spec normalize_program_streams(term()) :: [map()]
   def normalize_program_streams(streams) when is_list(streams) do

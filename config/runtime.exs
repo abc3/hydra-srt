@@ -17,7 +17,7 @@ alias HydraSrt.Env
 # - RTMP_PORT: RTMP ingest server listen port (default 1935)
 # - PHX_CHECK_ORIGIN: WebSocket origin checks (prod default: disabled)
 # - NDI_FEATURE: enables the NDI feature (default false)
-# - YOUTUBE_ENABLED: enables YouTube source resolution (default false)
+# - YOUTUBE_ENABLED: enables YouTube source resolution (default true)
 # - YOUTUBE_COOKIES_PATH: optional yt-dlp cookies file
 # - YT_DLP_PATH: optional yt-dlp executable path
 
@@ -31,7 +31,7 @@ config :hydra_srt, rtmp_port: Env.get_integer("RTMP_PORT", 1935)
 # NDI stays off unless NDI_FEATURE is set. Parsed to booleans here so
 # HydraSrt.Ndi.FeaturePolicy only ever reads already-typed flags.
 ndi_feature? = Env.get_boolean("NDI_FEATURE", false)
-youtube_enabled? = Env.get_boolean("YOUTUBE_ENABLED", false)
+youtube_enabled? = Env.get_boolean("YOUTUBE_ENABLED", true)
 youtube_cookies_path = Env.get_binary("YOUTUBE_COOKIES_PATH", nil)
 yt_dlp_path = Env.get_binary("YT_DLP_PATH", nil)
 

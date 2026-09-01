@@ -7,7 +7,6 @@ import {
   Empty,
   Row,
   Space,
-  Statistic,
   Tag,
   Typography,
 } from 'antd';
@@ -32,15 +31,46 @@ const stringValue = (object: Record<string, unknown> | null | undefined, keys: s
   const item = value(object, keys);
   return typeof item === 'string' && item.length > 0 ? item : '—';
 };
-const displayValue = (object: Record<string, unknown> | null | undefined, keys: string[]) => {
+const laneValue = (object: Record<string, unknown> | null | undefined, keys: string[]) => {
   const item = value(object, keys);
-  if (typeof item === 'string' || typeof item === 'number') return String(item);
-  if (item && typeof item === 'object') return JSON.stringify(item);
-  return '—';
+  return item && typeof item === 'object' ? item as Record<string, unknown> : null;
 };
+const formatCaps = (item: unknown): string => {
+  if (typeof item === 'string' && item.length > 0) return item;
+  if (!item || typeof item !== 'object') return '—';
+  const caps = item as Record<string, unknown>;
+  const codec = typeof caps.codec === 'string' && caps.codec.length > 0 ? caps.codec : null;
+  const width = typeof caps.width === 'number' && Number.isFinite(caps.width) ? caps.width : null;
+  const height = typeof caps.height === 'number' && Number.isFinite(caps.height) ? caps.height : null;
+  const fps = typeof caps.fps === 'number' && Number.isFinite(caps.fps) ? caps.fps : null;
+  const resolution = width != null && height != null ? `${width}×${height}` : null;
+  const fpsPart = fps != null ? `@${fps}` : null;
+  const parts = [codec, resolution, fpsPart].filter((part): part is string => part != null);
+  return parts.length > 0 ? parts.join(' ') : '—';
+};
+const capsValue = (object: Record<string, unknown> | null | undefined, keys: string[]) => formatCaps(value(object, keys));
 const numberValue = (object: Record<string, unknown> | null | undefined, keys: string[]) => {
   const item = value(object, keys);
   return typeof item === 'number' && Number.isFinite(item) ? item : null;
+};
+const laneBitratePart = (label: string, lane: Record<string, unknown> | null) => {
+  const kbps = numberValue(lane, ['bitrate_kbps']);
+  return kbps != null ? `${label} ${kbps}kbps` : null;
+};
+export const formatCombinedBitrate = (
+  videoLane: Record<string, unknown> | null,
+  audioLane: Record<string, unknown> | null,
+) => {
+  const video = laneBitratePart('Video', videoLane);
+  const audio = laneBitratePart('Audio', audioLane);
+  if (video && audio) return `${video} / ${audio}`;
+  if (video) return video;
+  if (audio) return audio;
+  return '—';
+};
+const pipelineStateLabel = (health: HealthRecord | undefined, routeActive: boolean) => {
+  if (typeof health?.state === 'string') return health.state;
+  return routeActive ? 'Awaiting health' : 'stopped';
 };
 const mediaValue = (endpoint: RouteEndpoint): YoutubeMediaInfo | null => {
   const media = endpoint.youtube_media_info;
@@ -120,8 +150,10 @@ const YoutubeHealthTab = ({ routeId, sources, routeActive = true }: Props) => {
             : actualMediaInfo && typeof actualMediaInfo === 'object'
               ? actualMediaInfo as Record<string, unknown>
             : health;
-        const state = typeof health?.state === 'string' ? health.state : routeActive ? 'unknown' : 'stopped';
+        const state = pipelineStateLabel(health, routeActive);
         const status = state === 'streaming' ? 'success' : state === 'reconnecting' ? 'processing' : 'default';
+        const videoLane = laneValue(actual, ['video', 'video_lane']);
+        const audioLane = laneValue(actual, ['audio', 'audio_lane']);
         const title = typeof media?.title === 'string' ? media.title : endpoint.name || endpoint.youtube_url || 'YouTube source';
 
         return (
@@ -144,12 +176,12 @@ const YoutubeHealthTab = ({ routeId, sources, routeActive = true }: Props) => {
               </Col>
               <Col xs={24} lg={12}>
                 <Card size="small" title="Actual from the pipeline">
-                  <Row gutter={[8, 8]}>
-                    <Col span={12}><Statistic title="Caps" value={displayValue(actual, ['caps', 'video_caps', 'video'])} /></Col>
-                    <Col span={12}><Statistic title="Current bitrate" value={numberValue(actual, ['current_bitrate_kbps', 'bitrate_kbps', 'bitrate', 'bitrate_bps']) ?? '—'} suffix={numberValue(actual, ['current_bitrate_kbps', 'bitrate_kbps', 'bitrate']) != null ? 'kbps' : undefined} /></Col>
-                    <Col span={12}><Statistic title="Discontinuities" value={numberValue(actual, ['discontinuity_count', 'discontinuities']) ?? '—'} /></Col>
-                    <Col span={12}><Statistic title="Segment stalls" value={numberValue(actual, ['segment_stalls', 'segment_stall_count', 'stall_count']) ?? '—'} /></Col>
-                  </Row>
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <Text><b>Caps:</b> {capsValue(actual, ['caps', 'video_caps', 'video'])}</Text>
+                    <Text><b>Bitrate:</b> {formatCombinedBitrate(videoLane, audioLane)}</Text>
+                    <Text><b>Discontinuities:</b> {numberValue(actual, ['discontinuity_count', 'discontinuities']) ?? '—'}</Text>
+                    <Text><b>Segment stalls:</b> {numberValue(actual, ['segment_stalls', 'segment_stall_count', 'stall_count']) ?? '—'}</Text>
+                  </Space>
                   <Space direction="vertical" style={{ width: '100%', marginTop: 12 }}>
                     <Text><b>Last refresh:</b> {displayDate(value(actual, ['last_refresh_at', 'last_refresh_time']) || value(endpoint, ['youtube_last_refresh_at']))}</Text>
                     <Text><b>Next scheduled refresh:</b> {displayDate(value(actual, ['next_refresh_at', 'next_scheduled_refresh']) || value(endpoint, ['youtube_next_refresh_at']))}</Text>

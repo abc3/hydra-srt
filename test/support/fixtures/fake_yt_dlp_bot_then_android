@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+case "$*" in
+  *youtube:player_client=mweb*)
+    echo "ERROR: [youtube] Sign in to confirm you're not a bot" >&2
+    exit 1
+    ;;
+  *youtube:player_client=android*)
+    FAKE_YOUTUBE_TITLE="android fixture" FAKE_YOUTUBE_UPLOADER="android" \
+      exec "$(dirname "$0")/fake_yt_dlp_common.sh" "$@"
+    ;;
+  *)
+    echo "ERROR: unknown player client" >&2
+    exit 1
+    ;;
+esac

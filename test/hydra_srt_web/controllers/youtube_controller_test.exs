@@ -6,6 +6,15 @@ defmodule HydraSrtWeb.YoutubeControllerTest do
   @url "https://www.youtube.com/watch?v=fO9e9jnhYK8"
 
   setup %{conn: conn} do
+    previous_youtube = Application.get_env(:hydra_srt, :youtube, :__unset__)
+
+    on_exit(fn ->
+      case previous_youtube do
+        :__unset__ -> Application.delete_env(:hydra_srt, :youtube)
+        value -> Application.put_env(:hydra_srt, :youtube, value)
+      end
+    end)
+
     # The resolver cache is global, so one test's result would otherwise answer
     # the next test's request for the same video.
     :ok = HydraSrt.Youtube.invalidate(@url)
@@ -20,8 +29,23 @@ defmodule HydraSrtWeb.YoutubeControllerTest do
 
       assert body["data"]["title"] == "Hydra HLS fixture"
       assert body["data"]["is_live"] == true
+      assert [%{"format_id" => "96", "label" => "format 96"}] = body["data"]["variants"]
       refute Jason.encode!(body) =~ "playlist.m3u8"
     end)
+  end
+
+  test "denies inspect and refresh when the YouTube feature is disabled", %{conn: conn} do
+    Application.put_env(:hydra_srt, :youtube, enabled: false)
+
+    response = post(conn, ~p"/api/youtube/inspect", %{"url" => @url})
+    body = json_response(response, 424)
+
+    assert body["error"]["code"] == "YOUTUBE_DISABLED"
+    assert body["error"]["message"] =~ "disabled"
+
+    refresh_conn = build_conn() |> put_req_header("accept", "application/json") |> log_in_user()
+    response = post(refresh_conn, ~p"/api/youtube/refresh", %{"url" => @url})
+    assert json_response(response, 424)["error"]["code"] == "YOUTUBE_DISABLED"
   end
 
   test "GET formats uses the authenticated inspect endpoint", %{conn: conn} do

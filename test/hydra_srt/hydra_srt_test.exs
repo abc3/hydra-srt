@@ -53,6 +53,17 @@ defmodule HydraSrtTest do
              Enum.map(reloaded_route["destinations"], &Map.take(&1, ["enabled", "status"]))
   end
 
+  test "set_route_runtime_status/2 broadcasts the processing transition" do
+    route = route_fixture(%{status: "started", schema_status: "started"})
+    Phoenix.PubSub.subscribe(HydraSrt.PubSub, "item:" <> route.id)
+
+    assert {:ok, updated} = HydraSrt.set_route_runtime_status(route.id, "processing")
+
+    assert updated["schema_status"] == "processing"
+    assert_receive {:item_status, %{item_id: route_id, status: "processing"}}
+    assert route_id == route.id
+  end
+
   test "set_route_status/2 sets stopped_at and keeps started_at when route stops" do
     started_at = ~U[2025-02-18 14:51:00Z]
 

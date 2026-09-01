@@ -5,6 +5,7 @@ import { getToken } from './auth';
 type Payload = Record<string, unknown>;
 type Listener = (payload: Payload) => void;
 type ItemSubscription = { listeners: Set<Listener>; refCount: number };
+type SubscriptionOperation = { action: 'subscribe' | 'unsubscribe' };
 
 let socket: any = null;
 let channel: any = null;
@@ -14,20 +15,25 @@ let channelJoinInFlight = false;
 let statsSubscribed = false;
 let statsSubscribePending = false;
 let statsSubscribedOnServer = false;
+let statsSubscriptionOperation: SubscriptionOperation | null = null;
 let systemPipelinesSubscribed = false;
 let systemPipelinesSubscribePending = false;
 let systemPipelinesSubscribedOnServer = false;
+let systemPipelinesSubscriptionOperation: SubscriptionOperation | null = null;
 let nodesSubscribed = false;
 let nodesSubscribePending = false;
 let nodesSubscribedOnServer = false;
+let nodesSubscriptionOperation: SubscriptionOperation | null = null;
 const statsListeners = new Set<Listener>();
 const systemPipelinesListeners = new Set<Listener>();
 const nodesListeners = new Set<Listener>();
 const itemSubscriptions = new Map<string, ItemSubscription>();
 const itemSubscriptionsOnServer = new Set<string>();
+const itemSubscriptionOperations = new Map<string, SubscriptionOperation>();
 const itemSourceListeners = new Map<string, Set<Listener>>();
 const routeEventsListeners = new Map<string, Set<Listener>>();
 const routeEventsSubscriptionsOnServer = new Set<string>();
+const routeEventsSubscriptionOperations = new Map<string, SubscriptionOperation>();
 const endpointHealthListeners = new Map<string, Set<Listener>>();
 
 /**
@@ -57,118 +63,265 @@ const getSocketEndpoint = () => {
   }
 };
 
-const pushStatsSubscription = () => {
-  if (!channel || !statsSubscribed) {
+const reconcileStatsSubscription = () => {
+  if (!channel || !channelJoined || channelJoinInFlight || statsSubscriptionOperation) {
     return;
   }
 
-  if (!channelJoined || channelJoinInFlight) {
-    statsSubscribePending = true;
+  const shouldBeSubscribed = statsSubscribed;
+  if (shouldBeSubscribed === statsSubscribedOnServer) {
     return;
   }
 
+  const operation: SubscriptionOperation = {
+    action: shouldBeSubscribed ? 'subscribe' : 'unsubscribe',
+  };
   statsSubscribePending = false;
+  statsSubscriptionOperation = operation;
+
   channel
-    .push('stats:subscribe', {})
+    .push(`stats:${operation.action}`, {})
     .receive('ok', () => {
-      statsSubscribedOnServer = true;
+      if (statsSubscriptionOperation !== operation) {
+        return;
+      }
+
+      statsSubscriptionOperation = null;
+      statsSubscribedOnServer = operation.action === 'subscribe';
+      reconcileStatsSubscription();
     })
     .receive('error', (error: unknown) => {
-      console.error('[realtime] stats subscribe failed', error);
+      if (statsSubscriptionOperation !== operation) {
+        return;
+      }
+
+      statsSubscriptionOperation = null;
+      const desiredChanged = operation.action === 'subscribe' ? !statsSubscribed : statsSubscribed;
+      if (desiredChanged) {
+        reconcileStatsSubscription();
+      }
+      console.error(`[realtime] stats ${operation.action} failed`, error);
     });
+};
+
+const reconcileSystemPipelinesSubscription = () => {
+  if (!channel || !channelJoined || channelJoinInFlight || systemPipelinesSubscriptionOperation) {
+    return;
+  }
+
+  const shouldBeSubscribed = systemPipelinesSubscribed;
+  if (shouldBeSubscribed === systemPipelinesSubscribedOnServer) {
+    return;
+  }
+
+  const operation: SubscriptionOperation = {
+    action: shouldBeSubscribed ? 'subscribe' : 'unsubscribe',
+  };
+  systemPipelinesSubscribePending = false;
+  systemPipelinesSubscriptionOperation = operation;
+
+  channel
+    .push(`system_pipelines:${operation.action}`, {})
+    .receive('ok', () => {
+      if (systemPipelinesSubscriptionOperation !== operation) {
+        return;
+      }
+
+      systemPipelinesSubscriptionOperation = null;
+      systemPipelinesSubscribedOnServer = operation.action === 'subscribe';
+      reconcileSystemPipelinesSubscription();
+    })
+    .receive('error', (error: unknown) => {
+      if (systemPipelinesSubscriptionOperation !== operation) {
+        return;
+      }
+
+      systemPipelinesSubscriptionOperation = null;
+      const desiredChanged = operation.action === 'subscribe'
+        ? !systemPipelinesSubscribed
+        : systemPipelinesSubscribed;
+      if (desiredChanged) {
+        reconcileSystemPipelinesSubscription();
+      }
+      console.error(`[realtime] system pipelines ${operation.action} failed`, error);
+    });
+};
+
+const reconcileNodesSubscription = () => {
+  if (!channel || !channelJoined || channelJoinInFlight || nodesSubscriptionOperation) {
+    return;
+  }
+
+  const shouldBeSubscribed = nodesSubscribed;
+  if (shouldBeSubscribed === nodesSubscribedOnServer) {
+    return;
+  }
+
+  const operation: SubscriptionOperation = {
+    action: shouldBeSubscribed ? 'subscribe' : 'unsubscribe',
+  };
+  nodesSubscribePending = false;
+  nodesSubscriptionOperation = operation;
+
+  channel
+    .push(`nodes:${operation.action}`, {})
+    .receive('ok', () => {
+      if (nodesSubscriptionOperation !== operation) {
+        return;
+      }
+
+      nodesSubscriptionOperation = null;
+      nodesSubscribedOnServer = operation.action === 'subscribe';
+      reconcileNodesSubscription();
+    })
+    .receive('error', (error: unknown) => {
+      if (nodesSubscriptionOperation !== operation) {
+        return;
+      }
+
+      nodesSubscriptionOperation = null;
+      const desiredChanged = operation.action === 'subscribe' ? !nodesSubscribed : nodesSubscribed;
+      if (desiredChanged) {
+        reconcileNodesSubscription();
+      }
+      console.error(`[realtime] nodes ${operation.action} failed`, error);
+    });
+};
+
+const reconcileItemSubscription = (itemId: string) => {
+  if (!channel || !channelJoined || channelJoinInFlight || itemSubscriptionOperations.has(itemId)) {
+    return;
+  }
+
+  const shouldBeSubscribed = itemSubscriptions.has(itemId);
+  const subscribedOnServer = itemSubscriptionsOnServer.has(itemId);
+  if (shouldBeSubscribed === subscribedOnServer) {
+    return;
+  }
+
+  const operation: SubscriptionOperation = {
+    action: shouldBeSubscribed ? 'subscribe' : 'unsubscribe',
+  };
+  itemSubscriptionOperations.set(itemId, operation);
+
+  channel
+    .push(`item:${operation.action}`, { item_id: itemId })
+    .receive('ok', () => {
+      if (itemSubscriptionOperations.get(itemId) !== operation) {
+        return;
+      }
+
+      itemSubscriptionOperations.delete(itemId);
+      if (operation.action === 'subscribe') {
+        itemSubscriptionsOnServer.add(itemId);
+      } else {
+        itemSubscriptionsOnServer.delete(itemId);
+      }
+      reconcileItemSubscription(itemId);
+    })
+    .receive('error', (error: unknown) => {
+      if (itemSubscriptionOperations.get(itemId) !== operation) {
+        return;
+      }
+
+      itemSubscriptionOperations.delete(itemId);
+      const desiredChanged = operation.action === 'subscribe'
+        ? !itemSubscriptions.has(itemId)
+        : itemSubscriptions.has(itemId);
+      if (desiredChanged) {
+        reconcileItemSubscription(itemId);
+      }
+      console.error(`[realtime] item ${operation.action} failed`, itemId, error);
+    });
+};
+
+const reconcileRouteEventsSubscription = (routeId: string) => {
+  if (!channel || !channelJoined || channelJoinInFlight || routeEventsSubscriptionOperations.has(routeId)) {
+    return;
+  }
+
+  const shouldBeSubscribed = routeEventsListeners.has(routeId);
+  const subscribedOnServer = routeEventsSubscriptionsOnServer.has(routeId);
+  if (shouldBeSubscribed === subscribedOnServer) {
+    return;
+  }
+
+  const operation: SubscriptionOperation = {
+    action: shouldBeSubscribed ? 'subscribe' : 'unsubscribe',
+  };
+  routeEventsSubscriptionOperations.set(routeId, operation);
+
+  channel
+    .push(`events:${operation.action}`, { route_id: routeId })
+    .receive('ok', () => {
+      if (routeEventsSubscriptionOperations.get(routeId) !== operation) {
+        return;
+      }
+
+      routeEventsSubscriptionOperations.delete(routeId);
+      if (operation.action === 'subscribe') {
+        routeEventsSubscriptionsOnServer.add(routeId);
+      } else {
+        routeEventsSubscriptionsOnServer.delete(routeId);
+      }
+      reconcileRouteEventsSubscription(routeId);
+    })
+    .receive('error', (error: unknown) => {
+      if (routeEventsSubscriptionOperations.get(routeId) !== operation) {
+        return;
+      }
+
+      routeEventsSubscriptionOperations.delete(routeId);
+      const desiredChanged = operation.action === 'subscribe'
+        ? !routeEventsListeners.has(routeId)
+        : routeEventsListeners.has(routeId);
+      if (desiredChanged) {
+        reconcileRouteEventsSubscription(routeId);
+      }
+      console.error(`[realtime] events ${operation.action} failed`, routeId, error);
+    });
+};
+
+const pushStatsSubscription = () => {
+  if (!statsSubscribed) {
+    return;
+  }
+
+  statsSubscribePending = true;
+  reconcileStatsSubscription();
 };
 
 const pushStatsUnsubscription = () => {
   statsSubscribePending = false;
-
-  if (!channel || !channelJoined || !statsSubscribedOnServer) {
-    return;
-  }
-
-  channel
-    .push('stats:unsubscribe', {})
-    .receive('ok', () => {
-      statsSubscribedOnServer = false;
-    })
-    .receive('error', (error: unknown) => {
-      console.error('[realtime] stats unsubscribe failed', error);
-    });
+  reconcileStatsSubscription();
 };
 
 const pushSystemPipelinesSubscription = () => {
-  if (!channel || !systemPipelinesSubscribed) {
+  if (!systemPipelinesSubscribed) {
     return;
   }
 
-  if (!channelJoined || channelJoinInFlight) {
-    systemPipelinesSubscribePending = true;
-    return;
-  }
-
-  systemPipelinesSubscribePending = false;
-  channel
-    .push('system_pipelines:subscribe', {})
-    .receive('ok', () => {
-      systemPipelinesSubscribedOnServer = true;
-    })
-    .receive('error', (error: unknown) => {
-      console.error('[realtime] system pipelines subscribe failed', error);
-    });
+  systemPipelinesSubscribePending = true;
+  reconcileSystemPipelinesSubscription();
 };
 
 const pushSystemPipelinesUnsubscription = () => {
   systemPipelinesSubscribePending = false;
-
-  if (!channel || !channelJoined || !systemPipelinesSubscribedOnServer) {
-    return;
-  }
-
-  channel
-    .push('system_pipelines:unsubscribe', {})
-    .receive('ok', () => {
-      systemPipelinesSubscribedOnServer = false;
-    })
-    .receive('error', (error: unknown) => {
-      console.error('[realtime] system pipelines unsubscribe failed', error);
-    });
+  reconcileSystemPipelinesSubscription();
 };
 
 const pushNodesSubscription = () => {
-  if (!channel || !nodesSubscribed) {
+  if (!nodesSubscribed) {
     return;
   }
 
-  if (!channelJoined || channelJoinInFlight) {
-    nodesSubscribePending = true;
-    return;
-  }
-
-  nodesSubscribePending = false;
-  channel
-    .push('nodes:subscribe', {})
-    .receive('ok', () => {
-      nodesSubscribedOnServer = true;
-    })
-    .receive('error', (error: unknown) => {
-      console.error('[realtime] nodes subscribe failed', error);
-    });
+  nodesSubscribePending = true;
+  reconcileNodesSubscription();
 };
 
 const pushNodesUnsubscription = () => {
   nodesSubscribePending = false;
-
-  if (!channel || !channelJoined || !nodesSubscribedOnServer) {
-    return;
-  }
-
-  channel
-    .push('nodes:unsubscribe', {})
-    .receive('ok', () => {
-      nodesSubscribedOnServer = false;
-    })
-    .receive('error', (error: unknown) => {
-      console.error('[realtime] nodes unsubscribe failed', error);
-    });
+  reconcileNodesSubscription();
 };
 
 const addItemListener = (itemId: string, listener?: Listener) => {
@@ -205,41 +358,15 @@ const removeItemListener = (itemId: string, listener?: Listener) => {
 };
 
 const pushItemSubscription = (itemId: string) => {
-  if (!channel || !itemId || !itemSubscriptions.has(itemId)) {
+  if (!itemId || !itemSubscriptions.has(itemId)) {
     return;
   }
 
-  if (!channelJoined || channelJoinInFlight) {
-    return;
-  }
-
-  if (itemSubscriptionsOnServer.has(itemId)) {
-    return;
-  }
-
-  channel
-    .push('item:subscribe', { item_id: itemId })
-    .receive('ok', () => {
-      itemSubscriptionsOnServer.add(itemId);
-    })
-    .receive('error', (error: unknown) => {
-      console.error('[realtime] item subscribe failed', itemId, error);
-    });
+  reconcileItemSubscription(itemId);
 };
 
 const pushItemUnsubscription = (itemId: string) => {
-  if (!channel || !channelJoined || !itemSubscriptionsOnServer.has(itemId)) {
-    return;
-  }
-
-  channel
-    .push('item:unsubscribe', { item_id: itemId })
-    .receive('ok', () => {
-      itemSubscriptionsOnServer.delete(itemId);
-    })
-    .receive('error', (error: unknown) => {
-      console.error('[realtime] item unsubscribe failed', itemId, error);
-    });
+  reconcileItemSubscription(itemId);
 };
 
 const pushAllItemSubscriptions = () => {
@@ -249,41 +376,15 @@ const pushAllItemSubscriptions = () => {
 };
 
 const pushRouteEventsSubscription = (routeId: string) => {
-  if (!channel || !routeId || !routeEventsListeners.has(routeId)) {
+  if (!routeId || !routeEventsListeners.has(routeId)) {
     return;
   }
 
-  if (!channelJoined || channelJoinInFlight) {
-    return;
-  }
-
-  if (routeEventsSubscriptionsOnServer.has(routeId)) {
-    return;
-  }
-
-  channel
-    .push('events:subscribe', { route_id: routeId })
-    .receive('ok', () => {
-      routeEventsSubscriptionsOnServer.add(routeId);
-    })
-    .receive('error', (error: unknown) => {
-      console.error('[realtime] events subscribe failed', routeId, error);
-    });
+  reconcileRouteEventsSubscription(routeId);
 };
 
 const pushRouteEventsUnsubscription = (routeId: string) => {
-  if (!channel || !channelJoined || !routeEventsSubscriptionsOnServer.has(routeId)) {
-    return;
-  }
-
-  channel
-    .push('events:unsubscribe', { route_id: routeId })
-    .receive('ok', () => {
-      routeEventsSubscriptionsOnServer.delete(routeId);
-    })
-    .receive('error', (error: unknown) => {
-      console.error('[realtime] events unsubscribe failed', routeId, error);
-    });
+  reconcileRouteEventsSubscription(routeId);
 };
 
 const pushAllRouteEventsSubscriptions = () => {
@@ -307,10 +408,15 @@ const closeRealtimeTransport = () => {
   channelJoined = false;
   channelJoinInFlight = false;
   statsSubscribedOnServer = false;
+  statsSubscriptionOperation = null;
   systemPipelinesSubscribedOnServer = false;
+  systemPipelinesSubscriptionOperation = null;
   nodesSubscribedOnServer = false;
+  nodesSubscriptionOperation = null;
   itemSubscriptionsOnServer.clear();
+  itemSubscriptionOperations.clear();
   routeEventsSubscriptionsOnServer.clear();
+  routeEventsSubscriptionOperations.clear();
 };
 
 export const connectRealtime = () => {
@@ -417,10 +523,15 @@ export const connectRealtime = () => {
     channelJoined = false;
     channelJoinInFlight = false;
     statsSubscribedOnServer = false;
+    statsSubscriptionOperation = null;
     systemPipelinesSubscribedOnServer = false;
+    systemPipelinesSubscriptionOperation = null;
     nodesSubscribedOnServer = false;
+    nodesSubscriptionOperation = null;
     itemSubscriptionsOnServer.clear();
+    itemSubscriptionOperations.clear();
     routeEventsSubscriptionsOnServer.clear();
+    routeEventsSubscriptionOperations.clear();
   });
 
   socket.onOpen(() => {
@@ -435,10 +546,15 @@ export const connectRealtime = () => {
     channelJoined = false;
     channelJoinInFlight = false;
     statsSubscribedOnServer = false;
+    statsSubscriptionOperation = null;
     systemPipelinesSubscribedOnServer = false;
+    systemPipelinesSubscriptionOperation = null;
     nodesSubscribedOnServer = false;
+    nodesSubscriptionOperation = null;
     itemSubscriptionsOnServer.clear();
+    itemSubscriptionOperations.clear();
     routeEventsSubscriptionsOnServer.clear();
+    routeEventsSubscriptionOperations.clear();
   });
 
   socket.connect();
@@ -477,20 +593,25 @@ export const disconnectRealtime = () => {
   statsSubscribed = false;
   statsSubscribePending = false;
   statsSubscribedOnServer = false;
+  statsSubscriptionOperation = null;
   systemPipelinesSubscribed = false;
   systemPipelinesSubscribePending = false;
   systemPipelinesSubscribedOnServer = false;
+  systemPipelinesSubscriptionOperation = null;
   nodesSubscribed = false;
   nodesSubscribePending = false;
   nodesSubscribedOnServer = false;
+  nodesSubscriptionOperation = null;
   statsListeners.clear();
   systemPipelinesListeners.clear();
   nodesListeners.clear();
   itemSubscriptions.clear();
   itemSubscriptionsOnServer.clear();
+  itemSubscriptionOperations.clear();
   itemSourceListeners.clear();
   routeEventsListeners.clear();
   routeEventsSubscriptionsOnServer.clear();
+  routeEventsSubscriptionOperations.clear();
   endpointHealthListeners.clear();
 };
 

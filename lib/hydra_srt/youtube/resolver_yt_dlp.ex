@@ -5,9 +5,9 @@ defmodule HydraSrt.Youtube.ResolverYtDlp do
 
   # yt-dlp does not expand escapes in --print, so a "\t" template emits the two
   # literal characters and nothing splits on a real tab. Ask for JSON instead.
-  @print_template "%(.{id,is_live,format_id,duration,title,uploader,webpage_url})j"
+  @print_template "%(.{id,is_live,format_id,duration,title,uploader,webpage_url,vbr,abr,tbr})j"
   @default_timeout_ms :timer.seconds(15)
-  @default_clients ["mweb", "android"]
+  @default_clients ["android", "mweb"]
 
   @type metadata :: HydraSrt.Youtube.Resolver.metadata()
 
@@ -119,29 +119,49 @@ defmodule HydraSrt.Youtube.ResolverYtDlp do
         case parse_output(output) do
           {:ok, _resolved_url, metadata} ->
             case ensure_muxed(metadata) do
-              :ok ->
-                {:ok, output, client}
-
-              {:error, :unsupported_format} when rest != [] ->
-                try_clients(executable, url, opts, rest)
-
-              {:error, reason} ->
-                {:error, reason}
+              :ok -> {:ok, output, client}
+              {:error, reason} -> retry_or_return(reason, executable, url, opts, rest)
             end
 
           {:error, reason} ->
-            {:error, reason}
+            retry_or_return(reason, executable, url, opts, rest)
         end
 
-      {:error, :unsupported_format} when rest != [] ->
-        try_clients(executable, url, opts, rest)
-
       {:error, reason} ->
-        {:error, reason}
+        retry_or_return(reason, executable, url, opts, rest)
     end
   end
 
   def try_clients(_executable, _url, _opts, []), do: {:error, :unsupported_format}
+
+  @spec retry_or_return(atom(), String.t(), String.t(), keyword(), [String.t()]) ::
+          {:ok, binary(), String.t()} | {:error, atom()}
+  def retry_or_return(reason, executable, url, opts, rest) do
+    if retryable_client_error?(reason) and rest != [] do
+      try_clients(executable, url, opts, rest)
+    else
+      {:error, reason}
+    end
+  end
+
+  @spec retryable_client_error?(atom()) :: boolean()
+  def retryable_client_error?(reason) do
+    case reason do
+      :unsupported_format -> true
+      :bot_check_challenge -> true
+      :bot_reload_challenge -> true
+      :resolver_failed -> true
+      :resolver_timeout -> true
+      :invalid_output -> true
+      :resolver_outdated -> true
+      :media_access_forbidden -> true
+      :private_video -> false
+      :not_live -> false
+      :geo_blocked -> false
+      :video_unavailable -> false
+      _ -> false
+    end
+  end
 
   @spec selection(keyword()) :: String.t()
   def selection(opts) do
@@ -298,7 +318,18 @@ defmodule HydraSrt.Youtube.ResolverYtDlp do
   @spec parse_metadata_line(String.t()) :: {:ok, metadata()} | {:error, :invalid_output}
   def parse_metadata_line(line) when is_binary(line) do
     case decode_metadata_json(line) do
-      [id, is_live, format_id, duration, title, uploader, webpage_url] ->
+      [
+        id,
+        is_live,
+        format_id,
+        duration,
+        title,
+        uploader,
+        webpage_url,
+        vbr,
+        abr,
+        tbr
+      ] ->
         {:ok,
          metadata_map(%{
            id: id,
@@ -307,7 +338,10 @@ defmodule HydraSrt.Youtube.ResolverYtDlp do
            duration: duration,
            title: title,
            uploader: uploader,
-           webpage_url: webpage_url
+           webpage_url: webpage_url,
+           vbr: vbr,
+           abr: abr,
+           tbr: tbr
          })}
 
       _ ->
@@ -345,28 +379,32 @@ defmodule HydraSrt.Youtube.ResolverYtDlp do
 
   @spec metadata_map(map()) :: metadata()
   def metadata_map(fields) when is_map(fields) do
-    id = Map.get(fields, :id, "unknown")
-    live = Map.get(fields, :live, false)
-    format_id = Map.get(fields, :format_id)
-    duration = Map.get(fields, :duration)
-    title = Map.get(fields, :title)
-    uploader = Map.get(fields, :uploader)
-    webpage_url = Map.get(fields, :webpage_url)
-    vcodec = Map.get(fields, :vcodec)
-    acodec = Map.get(fields, :acodec)
-    width = Map.get(fields, :width)
-    height = Map.get(fields, :height)
-    fps = Map.get(fields, :fps)
+    id = fields[:id] || "unknown"
+    live = fields[:live] || false
+    format_id = fields[:format_id]
+    duration = fields[:duration]
+    title = fields[:title]
+    uploader = fields[:uploader]
+    webpage_url = fields[:webpage_url]
+    vcodec = fields[:vcodec]
+    acodec = fields[:acodec]
+    width = fields[:width]
+    height = fields[:height]
+    fps = fields[:fps]
+    vbr = normalize_bitrate(fields[:vbr])
+    abr = normalize_bitrate(fields[:abr])
+    tbr = normalize_bitrate(fields[:tbr])
 
     media_info =
       %{
-        "video" => video_info(vcodec, width, height, fps),
-        "audio" => audio_info(acodec),
+        "video" => video_info(vcodec, width, height, fps, vbr),
+        "audio" => audio_info(acodec, abr),
         "duration" => normalize_value(duration),
         "title" => normalize_value(title),
         "uploader" => normalize_value(uploader),
         "format_id" => normalize_format(format_id)
       }
+      |> maybe_put(:declared_bitrate_kbps, tbr)
 
     %{
       id: id,
@@ -381,18 +419,28 @@ defmodule HydraSrt.Youtube.ResolverYtDlp do
     }
   end
 
-  @spec video_info(term(), term(), term(), term()) :: map()
-  def video_info(vcodec, width, height, fps) do
+  @spec video_info(term(), term(), term(), term(), number() | nil) :: map()
+  def video_info(vcodec, width, height, fps, declared_bitrate_kbps) do
     %{
       "codec" => normalize_value(vcodec),
       "width" => parse_integer(width),
       "height" => parse_integer(height),
       "fps" => parse_number(fps)
     }
+    |> maybe_put(:declared_bitrate_kbps, declared_bitrate_kbps)
+  end
+
+  @spec video_info(term(), term(), term(), term()) :: map()
+  def video_info(vcodec, width, height, fps), do: video_info(vcodec, width, height, fps, nil)
+
+  @spec audio_info(term(), number() | nil) :: map()
+  def audio_info(acodec, declared_bitrate_kbps) do
+    %{"codec" => normalize_value(acodec)}
+    |> maybe_put(:declared_bitrate_kbps, declared_bitrate_kbps)
   end
 
   @spec audio_info(term()) :: map()
-  def audio_info(acodec), do: %{"codec" => normalize_value(acodec)}
+  def audio_info(acodec), do: audio_info(acodec, nil)
 
   @spec maybe_put(map(), atom(), term()) :: map()
   def maybe_put(map, _key, nil), do: map
@@ -427,6 +475,14 @@ defmodule HydraSrt.Youtube.ResolverYtDlp do
     normalize_value(value)
   end
 
+  @spec normalize_bitrate(term()) :: non_neg_integer() | nil
+  def normalize_bitrate(value) do
+    case parse_number(value) do
+      number when is_number(number) and number >= 0 -> round(number)
+      _ -> nil
+    end
+  end
+
   @spec parse_live(String.t()) :: boolean()
   def parse_live(value), do: parse_live(value, nil)
 
@@ -436,12 +492,15 @@ defmodule HydraSrt.Youtube.ResolverYtDlp do
       {:ok, %{"id" => id} = map} ->
         [
           id,
-          Map.get(map, "is_live"),
-          Map.get(map, "format_id"),
-          Map.get(map, "duration"),
-          Map.get(map, "title"),
-          Map.get(map, "uploader"),
-          Map.get(map, "webpage_url")
+          map["is_live"],
+          map["format_id"],
+          map["duration"],
+          map["title"],
+          map["uploader"],
+          map["webpage_url"],
+          map["vbr"],
+          map["abr"],
+          map["tbr"]
         ]
 
       _ ->
@@ -550,8 +609,9 @@ defmodule HydraSrt.Youtube.ResolverYtDlp do
       String.contains?(message, "the page needs to be reloaded") ->
         :bot_reload_challenge
 
-      String.contains?(message, "requested format") and
-          String.contains?(message, "not available") ->
+      (String.contains?(message, "requested format") and
+         String.contains?(message, "not available")) or
+          String.contains?(message, "no video formats found") ->
         :unsupported_format
 
       String.contains?(message, "private") or
