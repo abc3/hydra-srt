@@ -21,6 +21,55 @@ defmodule HydraSrt.Api.EndpointSourceTest do
     assert changeset.valid?
   end
 
+  test "a blank youtube quality policy falls back to the default instead of blocking the save" do
+    route = route_fixture()
+
+    changeset =
+      Endpoint.source_changeset(%Endpoint{}, %{
+        route_id: route.id,
+        position: 0,
+        schema: "YOUTUBE",
+        youtube_url: "https://www.youtube.com/watch?v=fO9e9jnhYK8",
+        youtube_quality_policy: ""
+      })
+
+    assert changeset.valid?
+    assert Ecto.Changeset.get_field(changeset, :youtube_quality_policy) == "best[height<=1080]"
+    assert Ecto.Changeset.get_field(changeset, :youtube_end_action) == "stop"
+  end
+
+  test "a whitespace-only youtube quality policy also falls back to the default" do
+    route = route_fixture()
+
+    changeset =
+      Endpoint.source_changeset(%Endpoint{}, %{
+        route_id: route.id,
+        position: 0,
+        schema: "YOUTUBE",
+        youtube_url: "https://www.youtube.com/watch?v=fO9e9jnhYK8",
+        youtube_quality_policy: "   "
+      })
+
+    assert changeset.valid?
+    assert Ecto.Changeset.get_field(changeset, :youtube_quality_policy) == "best[height<=1080]"
+  end
+
+  test "an explicit youtube quality policy is kept" do
+    route = route_fixture()
+
+    changeset =
+      Endpoint.source_changeset(%Endpoint{}, %{
+        route_id: route.id,
+        position: 0,
+        schema: "YOUTUBE",
+        youtube_url: "https://www.youtube.com/watch?v=fO9e9jnhYK8",
+        youtube_quality_policy: "best[height<=720]"
+      })
+
+    assert changeset.valid?
+    assert Ecto.Changeset.get_field(changeset, :youtube_quality_policy) == "best[height<=720]"
+  end
+
   test "accepts program numbers at both ends of the valid range" do
     route = route_fixture()
 
