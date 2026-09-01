@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import type { CSSProperties } from 'react';
 import { 
+  Alert,
   Button, 
   Checkbox, 
   Form, 
@@ -10,14 +11,15 @@ import {
   theme, 
   Typography, 
   Card,
-  Space,
-  message
+  Space
 } from 'antd';
+import type { InputRef } from 'antd';
 import { 
   LockOutlined, 
   UserOutlined
 } from '@ant-design/icons';
 import { login, isAuthenticated } from '../utils/auth';
+import type { ApiError } from '../utils/apiError';
 import { ROUTES } from '../utils/constants';
 
 const { useToken } = theme;
@@ -38,12 +40,45 @@ const getPostLoginTarget = (pathname: string | undefined): string => {
   return pathname;
 };
 
+const describeLoginError = (error: unknown): string => {
+  const apiError = (typeof error === 'object' && error !== null ? error : {}) as Partial<ApiError>;
+
+  if (typeof apiError.status !== 'number') {
+    return 'Cannot reach the server. Check your connection and try again.';
+  }
+
+  if (apiError.status === 400) {
+    return 'Invalid request. Please try again.';
+  }
+
+  if (apiError.status === 401 || apiError.status === 403) {
+    return 'Invalid username or password';
+  }
+
+  if (apiError.status === 429) {
+    return 'Too many sign-in attempts. Please wait and try again.';
+  }
+
+  if (apiError.status >= 500) {
+    return 'Server error. Please try again.';
+  }
+
+  if (typeof apiError.message === 'string' && apiError.message.length > 0) {
+    return apiError.message;
+  }
+
+  return 'Sign in failed. Please try again.';
+};
+
 const Login = () => {
   const { token } = useToken();
   const screens = useBreakpoint();
   const navigate = useNavigate();
   const location = useLocation();
+  const [form] = Form.useForm<LoginFormValues>();
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const passwordRef = useRef<InputRef>(null);
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -54,20 +89,20 @@ const Login = () => {
   }, [navigate, location]);
 
   const onFinish = async (values: LoginFormValues) => {
+    setError(null);
+
     try {
       setLoading(true);
-      
-      // Call the login function from auth.js
       await login(values.username, values.password);
-      
-      message.success('Login successful!');
-      
+
       // Redirect to the page the user was trying to access, or to routes
       const from = getPostLoginTarget(location.state?.from?.pathname);
       navigate(from, { replace: true });
     } catch (error) {
       console.error('Login error:', error);
-      message.error('Invalid username or password');
+      setError(describeLoginError(error));
+      form.setFieldValue('password', '');
+      passwordRef.current?.focus();
     } finally {
       setLoading(false);
     }
@@ -120,6 +155,7 @@ const Login = () => {
         </div>
         
         <Form
+          form={form}
           name="login_form"
           initialValues={{ remember: true }}
           onFinish={onFinish}
@@ -146,8 +182,15 @@ const Login = () => {
               prefix={<LockOutlined />}
               placeholder="Password"
               autoComplete="current-password"
+              ref={passwordRef}
             />
           </Form.Item>
+
+          {error ? (
+            <Form.Item>
+              <Alert type="error" showIcon role="alert" data-testid="login-error" message={error} />
+            </Form.Item>
+          ) : null}
           
           <Form.Item>
             <Space style={{ width: '100%', justifyContent: 'space-between' }}>
