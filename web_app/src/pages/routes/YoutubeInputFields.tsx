@@ -23,8 +23,13 @@ type FieldName = string | number | Array<string | number>;
 type InspectState = 'idle' | 'checking' | 'success' | 'error';
 
 type Props = {
-  /** Prefix is the Form.List path; standalone source editing uses no prefix. */
+  /** Form.Item names are scoped by the enclosing Form.List, so this is the entry index only. */
   namePrefix?: Array<string | number>;
+  /**
+   * useWatch and setFieldValue read from the form root instead, so inside a Form.List they
+   * need the list name in front of the index. Defaults to namePrefix for a flat form.
+   */
+  valuePrefix?: Array<string | number>;
 };
 
 const fieldName = (prefix: Props['namePrefix'], key: string): FieldName =>
@@ -93,16 +98,17 @@ const errorMessage = (error: unknown): { message: string; code: string | null } 
   return { code, message: labels[code || ''] || getErrorMessage(error, 'YouTube inspection failed.') };
 };
 
-const YoutubeInputFields = ({ namePrefix }: Props) => {
+const YoutubeInputFields = ({ namePrefix, valuePrefix }: Props) => {
   const form = Form.useFormInstance();
+  const valuePath = (key: string): FieldName => fieldName(valuePrefix ?? namePrefix, key);
   const [messageApi, contextHolder] = message.useMessage();
-  const url = Form.useWatch(fieldName(namePrefix, 'youtube_url'), form) as string | undefined;
-  const policy = Form.useWatch(fieldName(namePrefix, 'youtube_quality_policy'), form) as string | undefined;
-  const savedMedia = Form.useWatch(fieldName(namePrefix, 'youtube_media_info'), form) as YoutubeMediaInfo | null | undefined;
-  const savedLive = Form.useWatch(fieldName(namePrefix, 'youtube_live_mode'), form) as boolean | null | undefined;
-  const savedFormat = Form.useWatch(fieldName(namePrefix, 'youtube_format_id'), form) as string | null | undefined;
-  const infoUpdatedAt = Form.useWatch(fieldName(namePrefix, 'youtube_info_updated_at'), form) as string | null | undefined;
-  const nextRefreshAt = Form.useWatch(fieldName(namePrefix, 'youtube_next_refresh_at'), form) as string | null | undefined;
+  const url = Form.useWatch(valuePath('youtube_url'), form) as string | undefined;
+  const policy = Form.useWatch(valuePath('youtube_quality_policy'), form) as string | undefined;
+  const savedMedia = Form.useWatch(valuePath('youtube_media_info'), form) as YoutubeMediaInfo | null | undefined;
+  const savedLive = Form.useWatch(valuePath('youtube_live_mode'), form) as boolean | null | undefined;
+  const savedFormat = Form.useWatch(valuePath('youtube_format_id'), form) as string | null | undefined;
+  const infoUpdatedAt = Form.useWatch(valuePath('youtube_info_updated_at'), form) as string | null | undefined;
+  const nextRefreshAt = Form.useWatch(valuePath('youtube_next_refresh_at'), form) as string | null | undefined;
   const [state, setState] = useState<InspectState>('idle');
   const [inspectData, setInspectData] = useState<YoutubeInspectData | null>(null);
   const [checkedUrl, setCheckedUrl] = useState<string | null>(null);
@@ -149,12 +155,12 @@ const YoutubeInputFields = ({ namePrefix }: Props) => {
       setState('success');
       setFailureMessage(null);
       if (data.variants.length > 0 && !savedFormat) {
-        form.setFieldValue(fieldName(namePrefix, 'youtube_format_id'), data.variants[0].format_id);
+        form.setFieldValue(valuePath('youtube_format_id'), data.variants[0].format_id);
       }
       if (data.media_info) {
-        form.setFieldValue(fieldName(namePrefix, 'youtube_media_info'), data.media_info);
+        form.setFieldValue(valuePath('youtube_media_info'), data.media_info);
       }
-      form.setFieldValue(fieldName(namePrefix, 'youtube_live_mode'), data.live);
+      form.setFieldValue(valuePath('youtube_live_mode'), data.live);
     } catch (error) {
       setState('error');
       setInspectData(null);
@@ -195,7 +201,7 @@ const YoutubeInputFields = ({ namePrefix }: Props) => {
         label="Quality fallback policy"
         name={fieldName(namePrefix, 'youtube_quality_policy')}
         initialValue="best[height<=1080]"
-        extra="Left empty it falls back to best[height<=1080]. Used at route start when the event is not live yet or the selected format is unavailable."
+        extra="Which stream to take when no fixed quality is picked. best[height<=720] means the best one up to 720p."
       >
         <Input placeholder="best[height<=1080]" />
       </Form.Item>
@@ -219,7 +225,7 @@ const YoutubeInputFields = ({ namePrefix }: Props) => {
         </Button>
       </Space>
       <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
-        Refreshing restarts the source; downstream receivers will reconnect briefly. This is expected.
+        Refreshing restarts the source; downstream receivers will reconnect briefly.
       </Text>
       <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
         Resolution obtained: {displayDate(infoUpdatedAt)} · Next refresh due: {displayDate(nextRefreshAt)}
