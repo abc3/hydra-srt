@@ -12,7 +12,7 @@ import {
   MessageOutlined,
   DashboardOutlined,
 } from '@ant-design/icons';
-import { Button, Layout, Menu, Grid, Dropdown, message, Breadcrumb, Tooltip } from 'antd';
+import { Button, Layout, Menu, Grid, Dropdown, Breadcrumb, Tooltip } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { logout, getUser } from '../utils/auth';
 import { ROUTES } from '../utils/constants';
@@ -152,7 +152,6 @@ const MainLayout = ({ children }: { children: ReactNode }) => {
   const handleLogout = () => {
     // Use the logout function from auth.js
     logout();
-    message.success('Logged out successfully');
   };
 
   const dropdownItems = {

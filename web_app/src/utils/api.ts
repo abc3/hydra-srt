@@ -2,6 +2,7 @@
  * API service for making authenticated requests to the backend
  */
 import { authFetch } from './auth';
+import { parseJsonResponse, throwApiErrorIfNeeded } from './apiError';
 import { API_BASE_URL } from './constants';
 import type { YoutubeInspectResult } from '../types/youtube';
 
@@ -9,11 +10,6 @@ type JsonPrimitive = string | number | boolean;
 type QueryValue = JsonPrimitive | null | undefined;
 type QueryParams = Record<string, QueryValue>;
 type Payload = Record<string, unknown>;
-type ApiError = Error & {
-  status?: number;
-  payload?: unknown;
-  errors?: unknown;
-};
 
 const buildQuerySuffix = (params: QueryParams = {}): string => {
   const query = new URLSearchParams();
@@ -30,34 +26,6 @@ const buildQuerySuffix = (params: QueryParams = {}): string => {
 const publicFetch = async (url: string, options: RequestInit = {}) => {
   const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
   return fetch(fullUrl, options);
-};
-
-const parseJsonResponse = async (response: Response): Promise<unknown> => {
-  const contentType = response.headers.get('content-type');
-
-  if (!contentType || !contentType.includes('application/json')) {
-    return null;
-  }
-
-  return response.json();
-};
-
-const throwApiErrorIfNeeded = async (response: Response, fallbackMessage: string) => {
-  if (response.ok) {
-    return;
-  }
-
-  const payload = (await parseJsonResponse(response)) as Record<string, unknown> | null;
-  const message =
-    payload?.error ||
-    payload?.message ||
-    (payload?.errors ? 'Validation failed' : null) ||
-    fallbackMessage;
-  const error = new Error(typeof message === 'string' ? message : fallbackMessage) as ApiError;
-  error.status = response.status;
-  error.payload = payload;
-  error.errors = payload?.errors;
-  throw error;
 };
 
 const requestJson = async <T = unknown>(url: string, options: RequestInit = {}, fallbackMessage = 'Request failed'): Promise<T> => {

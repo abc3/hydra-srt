@@ -36,6 +36,24 @@ The token is obtained by logging in and should be sent in the `Authorization` he
       "user": "username"
     }
     ```
+*   **Response:** `401 Unauthorized`
+    ```json
+    {
+      "error": {
+        "code": "INVALID_CREDENTIALS",
+        "message": "Invalid username or password"
+      }
+    }
+    ```
+*   **Response:** `400 Bad Request`
+    ```json
+    {
+      "error": {
+        "code": "INVALID_REQUEST",
+        "message": "Invalid request format"
+      }
+    }
+    ```
 
 ## Routes Management
 

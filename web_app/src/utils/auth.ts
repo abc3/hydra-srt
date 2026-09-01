@@ -2,6 +2,7 @@
  * Authentication utility functions
  */
 import { API_BASE_URL, AUTH_TOKEN_KEY, AUTH_USER_KEY } from './constants';
+import { throwApiErrorIfNeeded } from './apiError';
 
 type AuthUser = Record<string, unknown>;
 type AuthHeaders = Record<string, string>;
@@ -137,32 +138,25 @@ export const authFetch = async (url: string, options: AuthFetchOptions = {}) => 
 
 // Login function
 export const login = async (username: string, password: string) => {
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+  const response = await fetch(`${API_BASE_URL}/api/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      login: {
+        user: username,
+        password: password,
       },
-      body: JSON.stringify({ 
-        login: {
-          user: username, 
-          password: password
-        }
-      }),
-    });
+    }),
+  });
 
-    if (!response.ok) {
-      throw new Error('Login failed');
-    }
+  await throwApiErrorIfNeeded(response, 'Sign in failed. Please try again.');
 
-    const data = (await response.json()) as { token: string; user: AuthUser };
-    setToken(data.token);
-    setUser(data.user);
-    return data;
-  } catch (error) {
-    console.error('Login error:', error);
-    throw error;
-  }
+  const data = (await response.json()) as { token: string; user: AuthUser };
+  setToken(data.token);
+  setUser(data.user);
+  return data;
 };
 
 // Logout function
