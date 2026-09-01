@@ -195,8 +195,7 @@ const YoutubeInputFields = ({ namePrefix }: Props) => {
         label="Quality fallback policy"
         name={fieldName(namePrefix, 'youtube_quality_policy')}
         initialValue="best[height<=1080]"
-        rules={[{ required: true, message: 'Please enter a quality fallback policy' }]}
-        extra="Used at route start when the event is not live yet or the selected format is unavailable."
+        extra="Left empty it falls back to best[height<=1080]. Used at route start when the event is not live yet or the selected format is unavailable."
       >
         <Input placeholder="best[height<=1080]" />
       </Form.Item>
