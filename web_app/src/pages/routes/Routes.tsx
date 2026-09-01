@@ -3,6 +3,7 @@ import { Table, Card, Button, Space, Typography, message, Modal, Dropdown, Toolt
 import {
   PlusOutlined,
   EditOutlined,
+  CopyOutlined,
   DeleteOutlined,
   ExclamationCircleFilled,
   CloseCircleFilled,
@@ -1375,6 +1376,11 @@ const Routes = () => {
             label: 'Edit',
           },
           {
+            key: 'duplicate',
+            icon: <CopyOutlined />,
+            label: 'Duplicate',
+          },
+          {
             key: 'delete',
             icon: <DeleteOutlined />,
             label: routeBusy ? (
@@ -1395,6 +1401,11 @@ const Routes = () => {
 
           if (key === 'edit') {
             navigate(`/routes/${record.id}/edit`);
+            return;
+          }
+
+          if (key === 'duplicate') {
+            navigate(`/routes/new/edit?duplicate_from=${encodeURIComponent(record.id)}`);
             return;
           }
 

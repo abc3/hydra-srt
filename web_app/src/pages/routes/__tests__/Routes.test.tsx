@@ -18,6 +18,15 @@ type RealtimeMockExports = typeof realtime & {
   __emitStats: (payload: RealtimeStatsPayload) => void;
 };
 
+const { mockNavigate } = vi.hoisted(() => ({
+  mockNavigate: vi.fn(),
+}));
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  return { ...actual, useNavigate: () => mockNavigate };
+});
+
 const realtimeMock = realtime as RealtimeMockExports;
 const { subscribeToItemSource, subscribeToItemStatus, subscribeToRouteEvents } = realtimeMock;
 
@@ -225,6 +234,23 @@ describe('Routes', () => {
           total: 0,
         },
       },
+    });
+  });
+
+  it('navigates to new route form when Duplicate is selected', async () => {
+    renderRoutes();
+
+    await screen.findAllByText('Starting route');
+
+    fireEvent.click(screen.getByRole('button', { name: /route actions for starting route/i }));
+
+    const duplicateAction = await screen.findByRole('menuitem', { name: /duplicate/i });
+    await act(async () => {
+      fireEvent.click(duplicateAction);
+    });
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/routes/new/edit?duplicate_from=starting-route');
     });
   });
 

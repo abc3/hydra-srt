@@ -11,6 +11,7 @@ import {
   Row,
   Col,
   Drawer,
+  Alert,
   message,
   Typography,
 } from 'antd';
@@ -23,7 +24,7 @@ import {
   PlusOutlined,
   DeleteOutlined,
 } from '@ant-design/icons';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { destinationsApi, interfacesApi, routesApi, sourcesApi, tagsApi } from '../../utils/api';
 import { ROUTES } from '../../utils/constants';
@@ -39,6 +40,8 @@ import {
   SourceTestResult,
   TagOption,
 } from '../../types/routes';
+import { buildRouteClone } from './routeClone';
+import type { CloneWarning, RouteCloneDraft } from './routeClone';
 import { applyBackendEndpointErrors } from './endpointFormErrors';
 import { buildInterfaceSelection } from './interfaceSelection';
 import { flattenEndpointPayload, getEndpointOption, normalizeEndpointForForm } from './endpointOptions';
@@ -93,7 +96,7 @@ const getInitialFormValues = (initialValues?: Partial<RouteEditFormValues>): Rou
   ...initialValues,
 });
 
-const normalizeRouteForForm = (route: RouteRecord | null | undefined): RouteEditFormValues | null | undefined => {
+const normalizeRouteForForm = (route: RouteRecord | RouteCloneDraft | null | undefined): RouteEditFormValues | null | undefined => {
   if (!route) {
     return undefined;
   }
@@ -117,8 +120,11 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
   const [form] = Form.useForm<RouteEditFormValues>();
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const isNew = id === 'new';
+  const cloneSourceId = isNew ? searchParams.get('duplicate_from') : null;
   const [messageApi, contextHolder] = message.useMessage();
-  const [loading, setLoading] = useState(id !== 'new');
+  const [loading, setLoading] = useState(id !== 'new' || Boolean(cloneSourceId));
   const [testingSourceIndex, setTestingSourceIndex] = useState<number | null>(null);
   const [interfacesLoading, setInterfacesLoading] = useState(false);
   const [interfaceOptions, setInterfaceOptions] = useState<InterfaceOption[]>([]);
@@ -126,15 +132,15 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
   const [soleInterface, setSoleInterface] = useState<string | undefined>(undefined);
   const [availableTags, setAvailableTags] = useState<TagOption[]>([]);
   const [routeData, setRouteData] = useState<RouteRecord | null>(null);
+  const [cloneWarnings, setCloneWarnings] = useState<CloneWarning[]>([]);
+  const [clonedFromName, setClonedFromName] = useState<string | null>(null);
   const [testResultOpen, setTestResultOpen] = useState(false);
   const [testResultData, setTestResultData] = useState<SourceTestResult | null>(null);
   const [testedSourceIndex, setTestedSourceIndex] = useState<number | null>(null);
   const { capabilities, loading: capabilitiesLoading } = useNdiCapabilities();
   const ndiFeatureEnabled = capabilities?.feature_enabled === true;
-  const dataFetchedRef = useRef(false);
+  const fetchedRouteIdRef = useRef<string | null>(null);
   const previousSourceModesRef = useRef<(string | undefined)[]>([]);
-
-  const isNew = id === 'new';
 
   useEffect(() => {
     if (window.setBreadcrumbItems) {
@@ -157,10 +163,10 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
               },
             ]
           : []),
-        { title: id === 'new' ? 'New Route' : 'Edit Route' },
+        { title: cloneSourceId ? 'Clone Route' : id === 'new' ? 'New Route' : 'Edit Route' },
       ]);
     }
-  }, [id, routeData, loading]);
+  }, [id, routeData, loading, cloneSourceId]);
 
   useEffect(() => {
     let mounted = true;
@@ -254,16 +260,19 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
   }, [messageApi]);
 
   useEffect(() => {
-    if (isNew || dataFetchedRef.current) {
+    const sourceRouteId = isNew ? cloneSourceId : id;
+    if (!sourceRouteId || fetchedRouteIdRef.current === sourceRouteId) {
       return;
     }
 
-    dataFetchedRef.current = true;
+    fetchedRouteIdRef.current = sourceRouteId;
 
     routesApi
-      .getById(id as string)
+      .getById(sourceRouteId)
       .then((result) => {
-        const rawRoute = (result as ApiDataResponse<RouteRecord>).data;
+        const fetched = (result as ApiDataResponse<RouteRecord>).data;
+        const clone = cloneSourceId ? buildRouteClone(fetched) : null;
+        const rawRoute = clone ? clone.route : fetched;
         const route = normalizeRouteForForm(rawRoute);
         const sources = Array.isArray(route?.sources) && route.sources.length > 0
           ? [...route.sources].sort(
@@ -285,14 +294,26 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
           backup_probe_interval_ms: route?.backup_probe_interval_ms ?? 5000,
         };
 
-        setRouteData(rawRoute);
+        if (clone) {
+          setCloneWarnings(clone.warnings);
+          setClonedFromName(typeof fetched.name === 'string' ? fetched.name : null);
+          // A clone must never inherit the source route's persisted endpoints, or saving would update them
+          // instead of creating new ones.
+          setRouteData(null);
+        } else {
+          setRouteData(fetched);
+        }
         form.setFieldsValue(values as Parameters<typeof form.setFieldsValue>[0]);
       })
       .catch((error) => {
-        messageApi.error(`Failed to fetch route data: ${getErrorMessage(error, 'Unknown error')}`);
+        messageApi.error(
+          cloneSourceId
+            ? `Failed to load the route to clone: ${getErrorMessage(error, 'Unknown error')}`
+            : `Failed to fetch route data: ${getErrorMessage(error, 'Unknown error')}`,
+        );
       })
       .finally(() => setLoading(false));
-  }, [id, isNew, form, messageApi]);
+  }, [id, isNew, cloneSourceId, form, messageApi]);
 
   const availableNodes = useMemo(() => [{ label: 'self', value: 'self' }], []);
 
@@ -682,9 +703,33 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
           <Space align="center" size="middle">
             <Button icon={<ArrowLeftOutlined />} onClick={handleBack}>Back</Button>
             <Title level={3} style={{ margin: 0, fontSize: '1.75rem', fontWeight: 600 }}>
-              {isNew ? 'Add Route' : 'Edit Route'}
+              {cloneSourceId ? 'Clone Route' : isNew ? 'Add Route' : 'Edit Route'}
             </Title>
           </Space>
+
+          {clonedFromName ? (
+            <Alert
+              type="warning"
+              showIcon
+              message={`Cloned from ${clonedFromName}`}
+              description={(
+                <>
+                  <div>Ports, addresses and credentials were copied unchanged. Change them before saving if this route has to run next to the original.</div>
+                  {cloneWarnings.length > 0 ? (
+                    <ul>
+                      {cloneWarnings.map((warning) => {
+                        const label = warning.list === 'sources' ? 'Source' : 'Destination';
+                        const text = warning.kind === 'bind_target'
+                          ? `${label} "${warning.name}" binds a port the original route already holds.`
+                          : `Destination "${warning.name}" NDI sender name was renamed to keep it unique.`;
+                        return <li key={`${warning.list}-${warning.index}-${warning.kind}`}>{text}</li>;
+                      })}
+                    </ul>
+                  ) : null}
+                </>
+              )}
+            />
+          ) : null}
 
           <Row gutter={24}>
             <Col style={{ width: '100%', maxWidth: '1200px' }}>
