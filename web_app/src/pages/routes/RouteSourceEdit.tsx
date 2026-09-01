@@ -1060,7 +1060,7 @@ const RouteSourceEdit = ({ initialValues = {}, onChange = null }: RouteSourceEdi
                               }
 
                               if (schema === 'YOUTUBE') {
-                                return <YoutubeInputFields namePrefix={[field.name]} />;
+                                return <YoutubeInputFields namePrefix={[field.name]} valuePrefix={['sources', field.name]} />;
                               }
 
                               return null;
