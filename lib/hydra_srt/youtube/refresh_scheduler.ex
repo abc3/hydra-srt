@@ -3,6 +3,7 @@ defmodule HydraSrt.Youtube.RefreshScheduler do
 
   use GenServer
 
+  alias HydraSrt.Youtube.FeaturePolicy
   alias HydraSrt.Youtube.Url
 
   @default_jitter_ms :timer.seconds(30)
@@ -23,7 +24,7 @@ defmodule HydraSrt.Youtube.RefreshScheduler do
       {:ok, canonical} ->
         server = Keyword.get(opts, :server, __MODULE__)
 
-        if is_pid(GenServer.whereis(server)) do
+        if FeaturePolicy.enabled?() and is_pid(GenServer.whereis(server)) do
           GenServer.cast(server, {:schedule, canonical, opts})
         end
 
@@ -60,11 +61,13 @@ defmodule HydraSrt.Youtube.RefreshScheduler do
 
   def handle_cast({:cancel, canonical}, state), do: {:noreply, cancel_timer(state, canonical)}
 
-  @spec handle_info({:refresh, String.t()}, state()) :: {:noreply, state()}
+  @spec handle_info({:refresh, String.t()} | term(), state()) :: {:noreply, state()}
   def handle_info({:refresh, canonical}, state) do
     Phoenix.PubSub.broadcast(HydraSrt.PubSub, "youtube:refresh", {:youtube_refresh, canonical})
     {:noreply, %{state | timers: Map.delete(state.timers, canonical)}}
   end
+
+  def handle_info(_message, state), do: {:noreply, state}
 
   @spec delay_ms(keyword()) :: pos_integer()
   def delay_ms(opts) do
@@ -81,8 +84,10 @@ defmodule HydraSrt.Youtube.RefreshScheduler do
     base =
       if is_integer(expires_at),
         do:
-          max(@minimum_delay_ms, expires_at - now_seconds() - div(@safety_margin_ms, 1_000)) *
-            1_000,
+          max(
+            div(@minimum_delay_ms, 1_000),
+            expires_at - now_seconds() - div(@safety_margin_ms, 1_000)
+          ) * 1_000,
         else: @minimum_delay_ms
 
     jitter = Keyword.get(opts, :jitter_ms, @default_jitter_ms)

@@ -109,7 +109,8 @@ const YoutubeInputFields = ({ namePrefix }: Props) => {
   const [failureMessage, setFailureMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    if (checkedUrl !== url) {
+    const normalizedUrl = (url || '').trim();
+    if (checkedUrl !== normalizedUrl) {
       setState('idle');
       setInspectData(null);
       setFailureMessage(null);

@@ -298,6 +298,7 @@ describe('Routes', () => {
     });
 
     expect(await screen.findByText('running')).toBeInTheDocument();
+    expect(routesApi.getAll).toHaveBeenCalledTimes(1);
   });
 
   it('shows route in and out stats while status is not stopped', async () => {

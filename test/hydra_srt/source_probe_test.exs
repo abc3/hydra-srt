@@ -177,6 +177,27 @@ defmodule HydraSrt.SourceProbeTest do
            }
   end
 
+  test "normalize_programs/1 drops entries an operator could never select" do
+    programs = [
+      %{"program_num" => 0, "pmt_pid" => 0, "pcr_pid" => 0, "streams" => []},
+      %{
+        "program_num" => 12,
+        "pmt_pid" => 4097,
+        "pcr_pid" => 258,
+        "tags" => %{"service_name" => "Service02"},
+        "streams" => [%{"codec_type" => "video", "codec_name" => "h264"}]
+      }
+    ]
+
+    assert [%{"program_number" => 12}] = SourceProbe.normalize_programs(programs)
+  end
+
+  test "normalize_programs/1 drops a program whose number is missing" do
+    assert SourceProbe.normalize_programs([
+             %{"pmt_pid" => 4096, "pcr_pid" => 256, "streams" => []}
+           ]) == []
+  end
+
   test "normalize_programs/1 returns an empty list when ffprobe reports no programs" do
     assert SourceProbe.normalize_programs([]) == []
     assert SourceProbe.normalize_programs(nil) == []

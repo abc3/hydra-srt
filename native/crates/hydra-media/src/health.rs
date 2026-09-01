@@ -497,6 +497,19 @@ mod tests {
         NDI_REQUIRED_VIDEO_REASON,
     };
 
+    fn classify_message(
+        message: &gst::Message,
+        endpoint: Option<&EndpointDescriptor>,
+        route_playing: bool,
+    ) -> ErrorClassification {
+        match message.view() {
+            gst::MessageView::Error(error_message) => {
+                classify_error_message(error_message, endpoint, route_playing)
+            }
+            _ => panic!("expected error message"),
+        }
+    }
+
     #[test]
     fn typed_error_mapping_never_depends_on_message_text() {
         let cases = [
@@ -785,12 +798,111 @@ mod tests {
     }
 
     #[test]
+    fn hls_vod_hold_and_loop_eos_remain_retryable_until_supported() {
+        let _ = gst::init();
+        for end_action in [
+            hydra_plan::HlsEndAction::Hold,
+            hydra_plan::HlsEndAction::Loop,
+        ] {
+            let endpoint = EndpointDescriptor {
+                bin_name: "source_hls".to_string(),
+                endpoint_id: "hls-source".to_string(),
+                direction: EndpointDirection::Source,
+                transport: Transport::Hls,
+            };
+            let endpoints = HashMap::from([(endpoint.bin_name.clone(), endpoint)]);
+            let source = gst::ElementFactory::make("identity")
+                .build()
+                .expect("source");
+            let config = hydra_plan::HlsSource::new(
+                hydra_plan::HlsUri::new("http://127.0.0.1:4567/playlist.m3u8").expect("uri"),
+                false,
+                None,
+                end_action,
+            );
+            hls::set_eos_policy(&source, &config);
+
+            let (_, code, detail, retryable, clean) =
+                classify_source_eos(&endpoints, &source).expect("source endpoint");
+            assert_eq!(code, ErrorCode::SourceEos);
+            assert_eq!(detail, "Live HLS source reached end of stream");
+            assert!(retryable);
+            assert!(!clean);
+        }
+    }
+
+    #[test]
     fn hls_access_failures_have_a_distinct_diagnostic_classification() {
         assert!(hls_access_denied(
             "HTTP 403 Forbidden while fetching segment"
         ));
         assert!(hls_access_denied("resource was not authorized"));
+        assert!(hls_access_denied(
+            "HTTP 401 UNAUTHORIZED while fetching playlist"
+        ));
+        assert!(!hls_access_denied(
+            "HTTP 404 Not Found while fetching segment"
+        ));
         assert!(!hls_access_denied("connection timed out"));
+    }
+
+    #[test]
+    fn error_message_classification_prefers_adapter_details_over_gstreamer_fallback() {
+        let details = gst::Structure::builder(NDI_ERROR_DETAILS_NAME)
+            .field(NDI_ERROR_REASON_FIELD, NDI_RECEIVE_TIMEOUT_REASON)
+            .build();
+        let error = glib::Error::new(gst::CoreError::Negotiation, "negotiation failed");
+        let message = gst::message::Error::builder_from_error(error)
+            .details(details)
+            .build();
+
+        assert_eq!(
+            classify_message(&message, None, false),
+            ErrorClassification {
+                code: ErrorCode::NdiReceiveTimeout,
+                retryable: true,
+            }
+        );
+    }
+
+    #[test]
+    fn hls_negotiation_failures_are_retryable_but_generic_negotiation_is_not() {
+        let error = glib::Error::new(gst::CoreError::Negotiation, "negotiation failed");
+        let message = gst::message::Error::builder_from_error(error).build();
+        let hls_endpoint = EndpointDescriptor {
+            bin_name: "source_hls".to_string(),
+            endpoint_id: "hls-source".to_string(),
+            direction: EndpointDirection::Source,
+            transport: Transport::Hls,
+        };
+        let rtmp_endpoint = EndpointDescriptor {
+            bin_name: "source_rtmp".to_string(),
+            endpoint_id: "rtmp-source".to_string(),
+            direction: EndpointDirection::Source,
+            transport: Transport::Rtmp,
+        };
+
+        assert_eq!(
+            classify_message(&message, Some(&hls_endpoint), false),
+            ErrorClassification {
+                code: ErrorCode::NegotiationFailed,
+                retryable: true,
+            }
+        );
+        assert_eq!(
+            classify_message(&message, Some(&rtmp_endpoint), false),
+            ErrorClassification {
+                code: ErrorCode::NegotiationFailed,
+                retryable: false,
+            }
+        );
+        assert_eq!(
+            classify_message(&message, None, false),
+            ErrorClassification {
+                code: ErrorCode::NegotiationFailed,
+                retryable: false,
+            }
+        );
     }
 
     #[test]

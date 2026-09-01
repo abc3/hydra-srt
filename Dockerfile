@@ -5,9 +5,9 @@ ARG DEBIAN_VERSION=trixie-20260610-slim
 ARG NODE_MAJOR=24
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
-ARG YT_DLP_VERSION=2025.08.22
-ARG YT_DLP_SHA256_AMD64=982ee32945ace9b14cce975a1bb83d41e16e8e3056acfc65605c36afa006c176
-ARG YT_DLP_SHA256_ARM64=84ee8c06f17d9fbedcebb5953fa56aeae380b9f7bd71d441f72cccbd8ca31399
+ARG YT_DLP_VERSION=2026.08.19
+ARG YT_DLP_SHA256_AMD64=58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a
+ARG YT_DLP_SHA256_ARM64=b16e4dab368a816cd05d477d698a605a6ae87ccee1c8ffd38fa21d7254141fcc
 
 FROM ${BUILDER_IMAGE} AS builder
 
@@ -118,6 +118,7 @@ RUN apt-get update -y \
     curl \
     ffmpeg \
     ca-certificates \
+    python3 \
     glib-networking \
     libcjson1 \
     libsrt1.5-openssl \
@@ -133,7 +134,7 @@ RUN apt-get update -y \
     && gst-launch-1.0 --version 2>&1 | tee /tmp/gst-version.txt \
     && grep -E '1\.26\.' /tmp/gst-version.txt
 
-# Keep the extractor reproducible, while allowing YT_DLP_PATH to point at an operator-managed update.
+# keep the extractor reproducible while allowing operator-managed updates
 RUN set -eux; \
     case "${TARGETARCH}" in \
     amd64) asset="yt-dlp_linux"; checksum="${YT_DLP_SHA256_AMD64}" ;; \
@@ -145,6 +146,13 @@ RUN set -eux; \
       --output /usr/local/bin/yt-dlp; \
     echo "${checksum}  /usr/local/bin/yt-dlp" | sha256sum --check --status; \
     chmod 0755 /usr/local/bin/yt-dlp
+
+# disable cache writes because the app may have no writable home
+RUN printf '%s\n' '--no-cache-dir' > /etc/yt-dlp.conf \
+    && python3 --version \
+    && yt-dlp --version \
+    && test "$(yt-dlp --version)" = "${YT_DLP_VERSION}" \
+    && test -r /etc/ssl/certs/ca-certificates.crt
 
 # Set the locale
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen

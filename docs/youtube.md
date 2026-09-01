@@ -4,7 +4,7 @@ HydraSRT can resolve a YouTube watch URL with yt-dlp and ingest the resulting HL
 playlist. The stream then uses the normal HydraSRT MPEG-TS route path and can fan out
 to SRT, UDP, RTMP, or NDI outputs.
 
-YouTube support is disabled unless `YOUTUBE_ENABLED=true` is set. Configure a source
+YouTube support is on by default and can be turned off with `YOUTUBE_ENABLED=false`. Configure a source
 with schema `YOUTUBE` through the API or route editor, then enter a YouTube watch URL,
 an optional quality selection, and an optional end action. Version 1 supports the
 `stop` end action.
@@ -21,10 +21,19 @@ successfully resolve a source while producing a playlist that the media server r
 the route then appears to have resolved but does not play. Keeping yt-dlp current is an
 operational requirement.
 
-The container ships a checksum-verified pinned yt-dlp binary. Update that pin when
-YouTube extraction changes, or set `YT_DLP_PATH` to a newer operator-managed executable
-without waiting for a HydraSRT release. The executable must accept the yt-dlp command
-line used by HydraSRT.
+The container ships the current stable yt-dlp release as a checksum-verified pinned
+binary. The Docker build checks the downloaded version, Python runtime, and CA bundle;
+there is no first-run download or interactive setup. The standalone binary includes its
+Python runtime, and the image also installs system Python and `ca-certificates` so TLS
+prerequisites are present and visible during the build.
+
+The image disables yt-dlp's cache in `/etc/yt-dlp.conf`, so resolution does not depend on
+a writable home directory. Update `YT_DLP_VERSION` and both architecture checksums in the
+Dockerfile as part of image maintenance when YouTube extraction changes. The explicit pin
+prevents silent drift, while a checksum or download failure makes an outdated pin a build
+failure instead of a runtime surprise. Operators may set `YT_DLP_PATH` to a newer
+operator-managed executable without waiting for a HydraSRT release; it must accept the
+yt-dlp command line used by HydraSRT.
 
 The resolver pins the `mweb` player client, with `android` as a fallback. This is
 load-bearing: as of August 19, 2026, those clients provide a muxed audio/video HLS

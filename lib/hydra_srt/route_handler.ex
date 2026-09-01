@@ -4,6 +4,8 @@ defmodule HydraSrt.RouteHandler do
   require Logger
   @behaviour :gen_statem
 
+  @youtube_refresh_lead_seconds div(:timer.minutes(10), 1_000)
+
   # Operator stops shut down the handler through its supervisor. A live port
   # exit therefore always means process loss and must use the retry path.
   @normal_port_exit_reasons []
@@ -671,7 +673,16 @@ defmodule HydraSrt.RouteHandler do
     if is_boolean(live) and is_map(media_info) do
       observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
       media_info = add_refresh_times(media_info, media, observed_at)
-      persist_youtube_media_info(data.id, endpoint_id, live, media_info, observed_at)
+
+      persist_youtube_media_info(
+        data.id,
+        endpoint_id,
+        live,
+        media_info,
+        observed_at,
+        :announced
+      )
+
       %{data | route: put_source_live_mode(data.route, endpoint_id, live)}
     else
       data
@@ -1808,7 +1819,21 @@ defmodule HydraSrt.RouteHandler do
       media_info = payload["media_info"]
       observed_at = observed_datetime(payload["observed_at_ms"])
 
-      persist_youtube_media_info(data.id, endpoint_id, payload["live"], media_info, observed_at)
+      merged_media_info =
+        persist_youtube_media_info(
+          data.id,
+          endpoint_id,
+          payload["live"],
+          media_info,
+          observed_at,
+          :observed
+        )
+
+      media_info =
+        case merged_media_info do
+          {:ok, value} -> value
+          :not_found -> media_info
+        end
 
       enriched_payload =
         payload
@@ -1839,6 +1864,7 @@ defmodule HydraSrt.RouteHandler do
     media_info = payload["media_info"]
 
     endpoint_id == data.active_source_id and
+      youtube_source?(data.route, endpoint_id) and
       payload["transport"] == "hls" and
       is_binary(endpoint_id) and is_map(media_info) and is_boolean(payload["live"])
   end
@@ -1857,20 +1883,97 @@ defmodule HydraSrt.RouteHandler do
   def persist_youtube_media_info(route_id, endpoint_id, live, media_info, observed_at)
       when is_binary(route_id) and is_binary(endpoint_id) and is_boolean(live) and
              is_map(media_info) and is_struct(observed_at, DateTime) do
-    from(e in Endpoint,
-      where: e.route_id == ^route_id and e.id == ^endpoint_id and e.schema == "YOUTUBE"
-    )
-    |> HydraSrt.Repo.update_all(
-      set: [
-        youtube_live_mode: live,
-        youtube_media_info: media_info,
-        youtube_info_updated_at: observed_at,
-        updated_at: DateTime.utc_now(:microsecond)
-      ]
-    )
+    _ =
+      persist_youtube_media_info(
+        route_id,
+        endpoint_id,
+        live,
+        media_info,
+        observed_at,
+        :announced
+      )
 
     :ok
   end
+
+  @spec persist_youtube_media_info(
+          String.t(),
+          String.t(),
+          boolean(),
+          map(),
+          DateTime.t(),
+          :announced | :observed
+        ) :: {:ok, json_map()} | :not_found
+  def persist_youtube_media_info(route_id, endpoint_id, live, media_info, observed_at, producer)
+      when is_binary(route_id) and is_binary(endpoint_id) and is_boolean(live) and
+             is_map(media_info) and is_struct(observed_at, DateTime) and
+             producer in [:announced, :observed] do
+    query =
+      from(e in Endpoint,
+        where: e.route_id == ^route_id and e.id == ^endpoint_id and e.schema == "YOUTUBE"
+      )
+
+    case HydraSrt.Repo.one(query) do
+      nil ->
+        :not_found
+
+      endpoint ->
+        current_media_info = endpoint.youtube_media_info || %{}
+        merged_media_info = merge_youtube_media_info(current_media_info, media_info, producer)
+
+        HydraSrt.Repo.update_all(
+          query,
+          set: [
+            youtube_live_mode: live,
+            youtube_media_info: merged_media_info,
+            youtube_info_updated_at: observed_at,
+            updated_at: DateTime.utc_now(:microsecond)
+          ]
+        )
+
+        {:ok, merged_media_info}
+    end
+  end
+
+  @spec merge_youtube_media_info(json_map(), json_map(), :announced | :observed) :: json_map()
+  def merge_youtube_media_info(existing, incoming, :announced)
+      when is_map(existing) and is_map(incoming) do
+    merged = Map.merge(existing, Map.drop(incoming, ["video", "audio"]))
+
+    Enum.reduce(["video", "audio"], merged, fn lane, acc ->
+      case incoming[lane] do
+        value when is_map(value) and map_size(value) > 0 -> Map.put(acc, lane, value)
+        _ -> acc
+      end
+    end)
+  end
+
+  def merge_youtube_media_info(existing, incoming, :observed)
+      when is_map(existing) and is_map(incoming) do
+    Enum.reduce(["video", "audio"], existing, fn lane, acc ->
+      case incoming[lane] do
+        value when is_map(value) ->
+          existing_lane = existing[lane]
+
+          value =
+            if is_map(existing_lane) and is_number(existing_lane["declared_bitrate_kbps"]) do
+              Map.put(value, "declared_bitrate_kbps", existing_lane["declared_bitrate_kbps"])
+            else
+              value
+            end
+
+          Map.put(acc, lane, value)
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  def merge_youtube_media_info(_existing, incoming, _producer) when is_map(incoming),
+    do: incoming
+
+  def merge_youtube_media_info(_existing, _incoming, _producer), do: %{}
 
   @spec put_source_live_mode(json_map(), String.t(), boolean()) :: json_map()
   def put_source_live_mode(route, endpoint_id, live)
@@ -2777,7 +2880,7 @@ defmodule HydraSrt.RouteHandler do
   @spec youtube_uri_expires_at(String.t()) :: integer() | nil
   def youtube_uri_expires_at(uri) when is_binary(uri) do
     YoutubeCache.expires_at(uri) ||
-      case Regex.run(~r{/expire/(\d+)}, uri, capture: :all_but_first) do
+      case Regex.run(~r{(?:^|/)expire/(\d+)(?:/|$)}, uri, capture: :all_but_first) do
         [value] ->
           case Integer.parse(value) do
             {expires_at, ""} -> expires_at
@@ -2794,13 +2897,24 @@ defmodule HydraSrt.RouteHandler do
   @spec add_refresh_times(map(), map(), DateTime.t()) :: map()
   def add_refresh_times(media_info, media, observed_at)
       when is_map(media_info) and is_map(media) and is_struct(observed_at, DateTime) do
-    media_info = Map.put(media_info, "last_refresh_at", DateTime.to_iso8601(observed_at))
+    media_info =
+      media_info
+      |> Map.delete("next_refresh_at")
+      |> Map.put("last_refresh_at", DateTime.to_iso8601(observed_at))
 
     case youtube_uri_expires_at(resolved_media_value(media, :uri)) do
       expires_at when is_integer(expires_at) ->
-        next_refresh_at = DateTime.from_unix!(expires_at - :timer.minutes(10), :second)
+        case DateTime.from_unix(expires_at - @youtube_refresh_lead_seconds, :second) do
+          {:ok, next_refresh_at} ->
+            if DateTime.compare(next_refresh_at, observed_at) == :gt do
+              Map.put(media_info, "next_refresh_at", DateTime.to_iso8601(next_refresh_at))
+            else
+              media_info
+            end
 
-        Map.put(media_info, "next_refresh_at", DateTime.to_iso8601(next_refresh_at))
+          _ ->
+            media_info
+        end
 
       _ ->
         media_info

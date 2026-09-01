@@ -12,6 +12,7 @@ defmodule HydraSrtWeb.YoutubeController do
   import Kernel, except: [inspect: 2]
 
   alias HydraSrt.Youtube
+  alias HydraSrt.Youtube.FeaturePolicy
   alias HydraSrt.Youtube.Url
 
   @rate_limit 12
@@ -20,7 +21,8 @@ defmodule HydraSrtWeb.YoutubeController do
 
   @spec inspect(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def inspect(conn, params) do
-    with {:ok, canonical_url} <- canonical_url(params["url"]),
+    with :ok <- feature_enabled?(),
+         {:ok, canonical_url} <- canonical_url(params["url"]),
          :ok <- allow_inspect?(conn) do
       {canonical_url, inspect_options(canonical_url, params)}
       |> inspect_youtube()
@@ -35,7 +37,8 @@ defmodule HydraSrtWeb.YoutubeController do
 
   @spec refresh(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def refresh(conn, params) do
-    with {:ok, canonical_url} <- canonical_url(params["url"]),
+    with :ok <- feature_enabled?(),
+         {:ok, canonical_url} <- canonical_url(params["url"]),
          :ok <- allow_refresh?(conn) do
       options = refresh_options(params) |> Keyword.put(:delay_ms, 1)
       :ok = Youtube.invalidate(canonical_url)
@@ -58,6 +61,14 @@ defmodule HydraSrtWeb.YoutubeController do
   end
 
   def canonical_url(_url), do: {:error, :invalid_url}
+
+  @spec feature_enabled?() :: :ok | {:error, :youtube_disabled}
+  def feature_enabled? do
+    case FeaturePolicy.deny_reason(:enabled) do
+      nil -> :ok
+      _reason -> {:error, :youtube_disabled}
+    end
+  end
 
   @spec inspect_options(String.t(), map()) :: keyword()
   def inspect_options(_canonical_url, params) when is_map(params) do
@@ -186,6 +197,9 @@ defmodule HydraSrtWeb.YoutubeController do
   end
 
   @spec error_details(term()) :: {pos_integer(), String.t(), String.t()}
+  def error_details(:youtube_disabled),
+    do: {424, "YOUTUBE_DISABLED", "YouTube support is disabled on this node."}
+
   def error_details(:invalid_url), do: {422, "INVALID_URL", "Enter a valid YouTube watch URL."}
 
   def error_details(:unsupported_format),
