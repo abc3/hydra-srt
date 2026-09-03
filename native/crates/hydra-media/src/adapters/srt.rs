@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gio::prelude::InetSocketAddressExt;
 use gio::{InetSocketAddress, SocketAddress};
@@ -8,7 +9,7 @@ use glib::object::Cast;
 use glib::value::ToValue;
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use hydra_plan::{ErrorCode, SrtAccess, SrtDestination, SrtMode, SrtSource};
+use hydra_plan::{ErrorCode, SrtAccess, SrtDestination, SrtMode, SrtSource, SrtStreamIdMatch};
 use serde_json::json;
 
 use crate::adapters::element::set_property;
@@ -883,12 +884,268 @@ impl SrtAccessRules {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct SrtListenerPolicy {
+    access_rules: SrtAccessRules,
+    expected_stream_id: Option<String>,
+    stream_id_match: SrtStreamIdMatch,
+    max_callers: Option<u32>,
+    resource_config_valid: bool,
+}
+
+impl SrtListenerPolicy {
+    pub fn new(config: &SrtSource) -> Self {
+        let stream_id_match = config.streamid_match();
+        let configured_stream_id = config
+            .streamid()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let (expected_stream_id, resource_config_valid) = match configured_stream_id {
+            Some(value) if matches!(stream_id_match, SrtStreamIdMatch::Resource) => {
+                match parse_haivision_stream_id(value) {
+                    Ok(Some(resource)) => (Some(resource.to_owned()), true),
+                    Ok(None) | Err(()) => (Some(String::new()), false),
+                }
+            }
+            Some(value) => (Some(value.to_owned()), true),
+            None => (None, true),
+        };
+
+        Self {
+            access_rules: SrtAccessRules::from_access(config.access()),
+            expected_stream_id,
+            stream_id_match,
+            max_callers: config.max_callers(),
+            resource_config_valid,
+        }
+    }
+
+    pub fn evaluate(
+        &self,
+        ip: Option<IpAddr>,
+        stream_id: Option<&str>,
+        connected: u32,
+    ) -> SrtAccessDecision {
+        let ip_decision = self.access_rules.check_ip(ip);
+        if !ip_decision.allowed {
+            return ip_decision;
+        }
+
+        if let Some(expected) = self.expected_stream_id.as_deref() {
+            let Some(incoming) = stream_id.map(str::trim).filter(|value| !value.is_empty()) else {
+                return SrtAccessDecision {
+                    allowed: false,
+                    reason: "streamid_missing",
+                    ip: ip.map(|value| value.to_string()),
+                };
+            };
+
+            let incoming_format_valid =
+                !incoming.starts_with("#!::") || parse_haivision_stream_id(incoming).is_ok();
+            let matches = match self.stream_id_match {
+                SrtStreamIdMatch::Exact => {
+                    incoming_format_valid && self.resource_config_valid && incoming == expected
+                }
+                SrtStreamIdMatch::Resource => {
+                    self.resource_config_valid
+                        && incoming_format_valid
+                        && incoming.starts_with("#!::")
+                        && parse_haivision_stream_id(incoming)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|resource| resource == expected)
+                }
+                SrtStreamIdMatch::Prefix => {
+                    incoming_format_valid
+                        && self.resource_config_valid
+                        && incoming.starts_with(expected)
+                }
+            };
+            if !matches {
+                return SrtAccessDecision {
+                    allowed: false,
+                    reason: "streamid_mismatch",
+                    ip: ip.map(|value| value.to_string()),
+                };
+            }
+        }
+
+        if self.max_callers.is_some_and(|limit| connected >= limit) {
+            return SrtAccessDecision {
+                allowed: false,
+                reason: "max_callers_reached",
+                ip: ip.map(|value| value.to_string()),
+            };
+        }
+
+        ip_decision
+    }
+}
+
+fn parse_haivision_stream_id(value: &str) -> Result<Option<&str>, ()> {
+    let Some(fields) = value.strip_prefix("#!::") else {
+        return Err(());
+    };
+    if fields.is_empty() {
+        return Err(());
+    }
+    let mut requested = None;
+    for field in fields.split(',') {
+        let Some((key, field_value)) = field.split_once('=') else {
+            return Err(());
+        };
+        if key.is_empty() || field_value.is_empty() {
+            return Err(());
+        }
+        if key == "r" {
+            requested = Some(field_value);
+        }
+    }
+    Ok(requested)
+}
+
+// Prevents an incomplete handshake from holding capacity forever.
+const PENDING_CALLER_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Debug)]
+pub struct CallerEntry {
+    pub ip: IpAddr,
+    pub port: u16,
+    pub stream_id: Option<String>,
+    pub accepted_at: Instant,
+    pub active: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct SrtCallerRegistry {
+    callers: Mutex<HashMap<String, CallerEntry>>,
+}
+
+impl SrtCallerRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn connected(&self) -> u32 {
+        let mut callers = self
+            .callers
+            .lock()
+            .expect("SRT caller registry mutex poisoned");
+        callers.retain(|_, entry| {
+            entry.active || entry.accepted_at.elapsed() < PENDING_CALLER_TIMEOUT
+        });
+        callers.len() as u32
+    }
+
+    pub fn reserve(
+        &self,
+        policy: &SrtListenerPolicy,
+        address: String,
+        ip: IpAddr,
+        port: u16,
+        stream_id: Option<String>,
+    ) -> SrtAccessDecision {
+        let mut callers = self
+            .callers
+            .lock()
+            .expect("SRT caller registry mutex poisoned");
+        callers.retain(|_, entry| {
+            entry.active || entry.accepted_at.elapsed() < PENDING_CALLER_TIMEOUT
+        });
+        let decision = policy.evaluate(Some(ip), stream_id.as_deref(), callers.len() as u32);
+        if decision.allowed {
+            callers.insert(
+                address,
+                CallerEntry {
+                    ip,
+                    port,
+                    stream_id,
+                    accepted_at: Instant::now(),
+                    active: false,
+                },
+            );
+        }
+        decision
+    }
+
+    pub fn mark_active(
+        &self,
+        address: String,
+        ip: IpAddr,
+        port: u16,
+        stream_id: Option<String>,
+    ) -> bool {
+        let mut callers = self
+            .callers
+            .lock()
+            .expect("SRT caller registry mutex poisoned");
+        if let Some(entry) = callers.get_mut(&address) {
+            entry.active = true;
+            if entry.stream_id.is_none() {
+                entry.stream_id = stream_id;
+            }
+            return true;
+        }
+        callers.insert(
+            address,
+            CallerEntry {
+                ip,
+                port,
+                stream_id,
+                accepted_at: Instant::now(),
+                active: true,
+            },
+        );
+        false
+    }
+
+    pub fn remove(&self, address: &str) -> bool {
+        self.callers
+            .lock()
+            .expect("SRT caller registry mutex poisoned")
+            .remove(address)
+            .is_some()
+    }
+
+    pub fn stream_id(&self, address: &str) -> Option<String> {
+        self.callers
+            .lock()
+            .expect("SRT caller registry mutex poisoned")
+            .get(address)
+            .and_then(|entry| entry.stream_id.clone())
+    }
+}
+
 pub fn caller_ip(values: &[glib::Value]) -> Option<IpAddr> {
     values
         .get(1)
         .and_then(|value| value.get::<SocketAddress>().ok())
         .and_then(|address| address.downcast::<InetSocketAddress>().ok())
         .map(|inet| IpAddr::from(inet.address()))
+}
+
+pub fn caller_endpoint(values: &[glib::Value]) -> Option<(String, IpAddr, u16)> {
+    let address = values
+        .get(1)
+        .and_then(|value| value.get::<SocketAddress>().ok())
+        .and_then(|address| address.downcast::<InetSocketAddress>().ok())
+        .or_else(|| {
+            values
+                .get(2)
+                .and_then(|value| value.get::<SocketAddress>().ok())
+                .and_then(|address| address.downcast::<InetSocketAddress>().ok())
+        })?;
+    let ip = IpAddr::from(address.address());
+    let port = address.port();
+    Some((format!("{ip}:{port}"), ip, port))
+}
+
+pub fn caller_stream_id(values: &[glib::Value]) -> Option<String> {
+    values
+        .get(2)
+        .and_then(|value| value.get::<Option<String>>().ok())
+        .flatten()
+        .filter(|value| !value.is_empty())
 }
 
 /// Apply typed SRT source properties. Never sets `mode` or `streamid` on the element.
@@ -940,21 +1197,45 @@ pub fn configure_source(
     source: &gst::Element,
     config: &SrtSource,
     writer: Arc<Mutex<Box<dyn StatsWriter>>>,
-) {
+) -> Option<Arc<SrtCallerRegistry>> {
     let access_rules = SrtAccessRules::from_access(config.access());
+    let listener_policy =
+        matches!(config.mode(), SrtMode::Listener).then(|| SrtListenerPolicy::new(config));
+    let registry = listener_policy
+        .as_ref()
+        .map(|_| Arc::new(SrtCallerRegistry::new()));
     let has_stream_id = config.streamid().is_some_and(|value| !value.is_empty());
     let authentication_requested = config.authentication().unwrap_or(false);
     source.set_property(
         "authentication",
-        access_rules.enabled() || has_stream_id || authentication_requested,
+        access_rules.enabled()
+            || has_stream_id
+            || config.max_callers().is_some()
+            || authentication_requested,
     );
+    let connecting_registry = registry.clone();
+    let connecting_policy = listener_policy.clone();
+    let connecting_writer = writer.clone();
     source.connect("caller-connecting", false, move |values| {
-        let stream_id = values
-            .get(2)
-            .and_then(|value| value.get::<Option<String>>().ok())
-            .flatten();
-        let decision = access_rules.check_ip(caller_ip(values));
-        if let Ok(mut guard) = writer.lock() {
+        let stream_id = caller_stream_id(values);
+        let decision = match (connecting_registry.as_ref(), connecting_policy.as_ref()) {
+            (Some(registry), Some(policy)) => match caller_endpoint(values) {
+                Some((address, ip, port)) => {
+                    registry.reserve(policy, address, ip, port, stream_id.clone())
+                }
+                // A listener enforces its rules per peer address, and it tracks
+                // capacity by that address. With no address there is nothing to
+                // enforce against, so the caller is refused instead of slipping
+                // past the stream id and capacity checks on the IP rules alone.
+                None => SrtAccessDecision {
+                    allowed: false,
+                    reason: "invalid_address",
+                    ip: None,
+                },
+            },
+            _ => access_rules.check_ip(caller_ip(values)),
+        };
+        if let Ok(mut guard) = connecting_writer.lock() {
             let _ = guard.send_message(
                 &json!({
                     "event":"srt_access",
@@ -973,6 +1254,95 @@ pub fn configure_source(
         }
         Some((decision.allowed).to_value())
     });
+
+    if let Some(registry) = registry.as_ref() {
+        let added_registry = registry.clone();
+        let added_writer = writer.clone();
+        source.connect("caller-added", false, move |values| {
+            if let Some((address, ip, port)) = caller_endpoint(values) {
+                let stream_id = caller_stream_id(values);
+                if !added_registry.mark_active(address.clone(), ip, port, stream_id.clone()) {
+                    emit_caller_warning(&format!(
+                        "SRT caller-added arrived without a pending reservation for {address}"
+                    ));
+                }
+                let stream_id = added_registry.stream_id(&address);
+                emit_caller_added(
+                    &added_writer,
+                    &added_registry,
+                    &address,
+                    ip,
+                    port,
+                    stream_id,
+                );
+            } else {
+                emit_caller_warning("SRT caller-added signal had no address");
+            }
+            None
+        });
+
+        let removed_registry = registry.clone();
+        let removed_writer = writer.clone();
+        source.connect("caller-removed", false, move |values| {
+            if let Some((address, ip, port)) = caller_endpoint(values) {
+                removed_registry.remove(&address);
+                emit_caller_removed(&removed_writer, &removed_registry, &address, ip, port);
+            } else {
+                emit_caller_warning("SRT caller-removed signal had no address");
+            }
+            None
+        });
+    }
+    registry
+}
+
+// The route identity needed for a pipeline_log event is only available once the
+// graph starts, so these anomalies go to stderr like the other adapter-level ones.
+fn emit_caller_warning(detail: &str) {
+    eprintln!("{detail}");
+}
+
+fn emit_caller_added(
+    writer: &Arc<Mutex<Box<dyn StatsWriter>>>,
+    registry: &SrtCallerRegistry,
+    address: &str,
+    ip: IpAddr,
+    port: u16,
+    stream_id: Option<String>,
+) {
+    let mut event = serde_json::Map::new();
+    event.insert("event".into(), json!("srt_caller_added"));
+    event.insert("address".into(), json!(address));
+    event.insert("ip".into(), json!(ip.to_string()));
+    event.insert("port".into(), json!(port));
+    if let Some(stream_id) = stream_id {
+        event.insert("stream_id".into(), json!(stream_id));
+    }
+    event.insert("connected_callers".into(), json!(registry.connected()));
+    if let Ok(mut guard) = writer.lock() {
+        let _ = guard.send_message(&serde_json::Value::Object(event).to_string());
+    }
+}
+
+fn emit_caller_removed(
+    writer: &Arc<Mutex<Box<dyn StatsWriter>>>,
+    registry: &SrtCallerRegistry,
+    address: &str,
+    ip: IpAddr,
+    port: u16,
+) {
+    if let Ok(mut guard) = writer.lock() {
+        let _ = guard.send_message(
+            &json!({
+                "event": "srt_caller_removed",
+                "address": address,
+                "ip": ip.to_string(),
+                "port": port,
+                "connected_callers": registry.connected(),
+            })
+            .to_string(),
+        );
+    }
 }
 
 pub fn configure_sink(element: &gst::Element) {
@@ -1046,7 +1416,7 @@ fn set_pbkeylen(element: &gst::Element, value: i32) -> Result<(), (ErrorCode, St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hydra_plan::{Cidr, HostAddress, Pbkeylen, Port, SrtMode, SrtUri};
+    use hydra_plan::{Cidr, HostAddress, Pbkeylen, Port, SrtMode, SrtStreamIdMatch, SrtUri};
 
     fn rules(
         limit_access: bool,
@@ -1142,6 +1512,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         );
         apply_source(&element, &config).expect("srtsrc accepts the typed source config");
         let value = element.property_value("pbkeylen");
@@ -1175,8 +1547,190 @@ mod tests {
             None, // localport
             None, // authentication
             None, // access
+            None, // max_callers
+            None, // streamid_match
             None, // program_number
         )
+    }
+
+    fn policy_source_config(
+        streamid: Option<&str>,
+        streamid_match: Option<SrtStreamIdMatch>,
+        max_callers: Option<u32>,
+        access: Option<SrtAccess>,
+    ) -> SrtSource {
+        SrtSource::new(
+            SrtUri::new("srt://127.0.0.1:4201").expect("valid SRT URI"),
+            SrtMode::Listener,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            streamid.map(str::to_owned),
+            None,
+            None,
+            None,
+            access,
+            max_callers,
+            streamid_match,
+            None,
+        )
+    }
+
+    fn assert_policy_decision(
+        config: SrtSource,
+        ip: Option<&str>,
+        stream_id: Option<&str>,
+        connected: u32,
+        allowed: bool,
+        reason: &str,
+    ) {
+        let ip = ip.map(|value| value.parse().expect("valid IP"));
+        let decision = SrtListenerPolicy::new(&config).evaluate(ip, stream_id, connected);
+        assert_eq!(decision.allowed, allowed);
+        assert_eq!(decision.reason, reason);
+    }
+
+    #[test]
+    fn listener_policy_exhausts_stream_id_modes_and_capacity_boundaries() {
+        for mode in [SrtStreamIdMatch::Exact, SrtStreamIdMatch::Prefix] {
+            let config = policy_source_config(Some("studio-a"), Some(mode), Some(2), None);
+            assert_policy_decision(
+                config.clone(),
+                Some("192.0.2.1"),
+                None,
+                0,
+                false,
+                "streamid_missing",
+            );
+            assert_policy_decision(
+                config.clone(),
+                Some("192.0.2.1"),
+                Some("wrong"),
+                0,
+                false,
+                "streamid_mismatch",
+            );
+            assert_policy_decision(
+                config.clone(),
+                Some("192.0.2.1"),
+                Some("studio-a"),
+                1,
+                true,
+                "limit_access_disabled",
+            );
+            assert_policy_decision(
+                config.clone(),
+                Some("192.0.2.1"),
+                Some("studio-a-extra"),
+                1,
+                mode == SrtStreamIdMatch::Prefix,
+                if mode == SrtStreamIdMatch::Prefix {
+                    "limit_access_disabled"
+                } else {
+                    "streamid_mismatch"
+                },
+            );
+            assert_policy_decision(
+                config,
+                Some("192.0.2.1"),
+                Some("studio-a"),
+                2,
+                false,
+                "max_callers_reached",
+            );
+        }
+
+        let config = policy_source_config(
+            Some("#!::u=user,r=studio-a,m=publish"),
+            Some(SrtStreamIdMatch::Resource),
+            Some(2),
+            None,
+        );
+        assert_policy_decision(
+            config.clone(),
+            Some("2001:db8::1"),
+            Some("#!::r=studio-a,m=publish"),
+            1,
+            true,
+            "limit_access_disabled",
+        );
+        assert_policy_decision(
+            config.clone(),
+            Some("2001:db8::1"),
+            Some("studio-a"),
+            1,
+            false,
+            "streamid_mismatch",
+        );
+        assert_policy_decision(
+            config.clone(),
+            Some("2001:db8::1"),
+            Some("#!::broken"),
+            1,
+            false,
+            "streamid_mismatch",
+        );
+        assert_policy_decision(
+            config,
+            Some("2001:db8::1"),
+            Some("#!::r=studio-a"),
+            2,
+            false,
+            "max_callers_reached",
+        );
+    }
+
+    #[test]
+    fn listener_policy_applies_ip_rules_before_stream_and_capacity_rules() {
+        let access = SrtAccess::new(
+            true,
+            vec![Cidr::new("2001:db8::/32").expect("valid CIDR")],
+            vec![Cidr::new("2001:db8::2").expect("valid CIDR")],
+        );
+        let config = policy_source_config(Some("studio-a"), None, Some(1), Some(access));
+        assert_policy_decision(
+            config.clone(),
+            Some("2001:db8::2"),
+            Some("wrong"),
+            1,
+            false,
+            "denied_list",
+        );
+        assert_policy_decision(
+            config.clone(),
+            Some("192.0.2.1"),
+            Some("studio-a"),
+            0,
+            false,
+            "not_in_allowed_list",
+        );
+        assert_policy_decision(config, None, Some("studio-a"), 0, false, "invalid_address");
+    }
+
+    #[test]
+    fn caller_registry_reserves_pending_callers_for_capacity() {
+        let config = policy_source_config(None, None, Some(1), None);
+        let policy = SrtListenerPolicy::new(&config);
+        let registry = SrtCallerRegistry::new();
+        let ip = "192.0.2.1".parse().expect("valid IP");
+        let first = registry.reserve(&policy, "192.0.2.1:4000".to_string(), ip, 4000, None);
+        assert!(first.allowed);
+        assert_eq!(registry.connected(), 1);
+        let second = registry.reserve(
+            &policy,
+            "192.0.2.2:4001".to_string(),
+            "192.0.2.2".parse().expect("valid IP"),
+            4001,
+            None,
+        );
+        assert!(!second.allowed);
+        assert_eq!(second.reason, "max_callers_reached");
+        assert!(registry.mark_active("192.0.2.1:4000".to_string(), ip, 4000, None));
+        assert!(registry.remove("192.0.2.1:4000"));
+        assert_eq!(registry.connected(), 0);
     }
 
     #[test]
@@ -1763,6 +2317,160 @@ mod tests {
         );
 
         (listener, sender, sink)
+    }
+
+    fn configured_listener(
+        port: u16,
+        streamid: Option<&str>,
+        max_callers: Option<u32>,
+    ) -> (
+        gst::Pipeline,
+        Arc<Mutex<Vec<String>>>,
+        Arc<std::sync::atomic::AtomicU32>,
+    ) {
+        let _ = gst::init();
+        let listener = gst::parse::launch(&format!(
+            "srtsrc name=src uri=srt://0.0.0.0:{port}?mode=listener ! fakesink name=fsink sync=false"
+        ))
+        .expect("listener pipeline should parse")
+        .downcast::<gst::Pipeline>()
+        .expect("parsed element is a pipeline");
+        let source = listener.by_name("src").expect("source element present");
+        let config = SrtSource::new(
+            SrtUri::new(format!("srt://0.0.0.0:{port}?mode=listener")).expect("valid URI"),
+            SrtMode::Listener,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            streamid.map(str::to_owned),
+            None,
+            None,
+            None,
+            None,
+            max_callers,
+            streamid.map(|_| SrtStreamIdMatch::Exact),
+            None,
+        );
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let writer: Arc<Mutex<Box<dyn StatsWriter>>> =
+            Arc::new(Mutex::new(Box::new(MemoryWriter(messages.clone()))));
+        configure_source(&source, &config, writer);
+        source.set_property("keep-listening", true);
+        let seen = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let seen_probe = seen.clone();
+        listener
+            .by_name("fsink")
+            .expect("fakesink present")
+            .static_pad("sink")
+            .expect("fakesink sink pad")
+            .add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
+                seen_probe.fetch_add(1, Ordering::SeqCst);
+                gst::PadProbeReturn::Ok
+            });
+        listener
+            .set_state(gst::State::Playing)
+            .expect("listener reaches playing");
+        std::thread::sleep(Duration::from_millis(200));
+        (listener, messages, seen)
+    }
+
+    fn sender_pipeline(port: u16, streamid: Option<&str>) -> gst::Pipeline {
+        let sender = gst::parse::launch(&format!(
+            "videotestsrc is-live=true ! srtsink name=sink uri=srt://127.0.0.1:{port}?mode=caller wait-for-connection=true"
+        ))
+        .expect("sender pipeline should parse")
+        .downcast::<gst::Pipeline>()
+        .expect("parsed element is a pipeline");
+        if let Some(streamid) = streamid {
+            sender
+                .by_name("sink")
+                .expect("sender sink present")
+                .set_property("streamid", streamid);
+        }
+        sender
+    }
+
+    fn has_access_reason(messages: &Mutex<Vec<String>>, reason: &str) -> bool {
+        messages
+            .lock()
+            .expect("messages lock")
+            .iter()
+            .filter_map(|message| serde_json::from_str::<serde_json::Value>(message).ok())
+            .any(|message| message["event"] == "srt_access" && message["reason"] == reason)
+    }
+
+    #[test]
+    fn listener_max_callers_rejects_second_caller_while_first_streams() {
+        let port = 14806;
+        let (listener, messages, seen) = configured_listener(port, None, Some(1));
+        let first = sender_pipeline(port, None);
+        first
+            .set_state(gst::State::Playing)
+            .expect("first sender reaches playing");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while seen.load(Ordering::SeqCst) < 5 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(seen.load(Ordering::SeqCst) >= 5, "first caller must stream");
+
+        let second = sender_pipeline(port, None);
+        second
+            .set_state(gst::State::Playing)
+            .expect("second sender reaches playing");
+        let reject_deadline = Instant::now() + Duration::from_secs(5);
+        while !has_access_reason(&messages, "max_callers_reached")
+            && Instant::now() < reject_deadline
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(has_access_reason(&messages, "max_callers_reached"));
+        let added = events_named(&messages, "srt_caller_added");
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0]["connected_callers"], 1);
+        assert!(added[0].get("stream_id").is_none());
+        let before = seen.load(Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            seen.load(Ordering::SeqCst) > before,
+            "first caller must keep streaming"
+        );
+        second
+            .set_state(gst::State::Null)
+            .expect("second sender stops");
+        first
+            .set_state(gst::State::Null)
+            .expect("first sender stops");
+        listener
+            .set_state(gst::State::Null)
+            .expect("listener stops");
+    }
+
+    #[test]
+    fn listener_rejects_a_wrong_streamid() {
+        let port = 14807;
+        let (listener, messages, seen) = configured_listener(port, Some("studio-a"), None);
+        let sender = sender_pipeline(port, Some("wrong"));
+        sender
+            .set_state(gst::State::Playing)
+            .expect("sender reaches playing");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !has_access_reason(&messages, "streamid_mismatch") && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(has_access_reason(&messages, "streamid_mismatch"));
+        assert!(events_named(&messages, "srt_caller_added").is_empty());
+        assert_eq!(
+            seen.load(Ordering::SeqCst),
+            0,
+            "wrong streamid must not stream"
+        );
+        sender.set_state(gst::State::Null).expect("sender stops");
+        listener
+            .set_state(gst::State::Null)
+            .expect("listener stops");
     }
 
     #[test]

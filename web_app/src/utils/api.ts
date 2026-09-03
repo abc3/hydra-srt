@@ -4,6 +4,7 @@
 import { authFetch } from './auth';
 import { API_BASE_URL } from './constants';
 import type { YoutubeInspectResult } from '../types/youtube';
+import type { SrtCallerBanResponse, SrtCallersResponse } from '../types/routes';
 
 type JsonPrimitive = string | number | boolean;
 type QueryValue = JsonPrimitive | null | undefined;
@@ -239,6 +240,15 @@ export const routesApi = {
   },
 
   getEndpointHealth: async (id: string) => requestJson(`/api/routes/${encodeURIComponent(id)}/endpoint-health`, {}, 'Failed to load endpoint health'),
+
+  getSrtCallers: async (id: string) =>
+    requestJson<SrtCallersResponse>(`/api/routes/${encodeURIComponent(id)}/srt/callers`, {}, 'Failed to load SRT callers'),
+
+  banSrtCaller: async (id: string, ip: string) =>
+    requestJson<SrtCallerBanResponse>(`/api/routes/${encodeURIComponent(id)}/srt/callers/ban`, {
+      method: 'POST',
+      body: JSON.stringify({ ip }),
+    }, 'Failed to ban SRT caller'),
 
   getStatusesAnalytics: async (params: QueryParams = {}) => {
     const querySuffix = buildQuerySuffix(params);

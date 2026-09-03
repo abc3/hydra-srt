@@ -44,7 +44,9 @@ defmodule HydraSrt.Mcp.InputSchema do
     {"location", :string, "RTMP location"},
     {"allowed_list", :string_array, "Allowed IP access list (CIDR entries)"},
     {"denied_list", :string_array, "Denied IP access list (CIDR entries)"},
-    {"limit_access", :boolean, "Limit IP access"}
+    {"limit_access", :boolean, "Limit IP access"},
+    {"max_callers", :integer, "Maximum SRT listener callers"},
+    {"streamid_match_mode", :string, "SRT listener Stream ID matching mode"}
   ]
 
   @ndi_source_enum_fields [

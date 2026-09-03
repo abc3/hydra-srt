@@ -4,6 +4,7 @@ import { HomeOutlined, DownloadOutlined, UploadOutlined, ExclamationCircleOutlin
 import { backupApi, tagsApi, signalGenerationApi, notificationsApi } from '../utils/api';
 import type { SignalTransport } from '../utils/api';
 import McpTokensTab from './settings/McpTokensTab';
+import CallerLabelsTab from './settings/CallerLabelsTab';
 import { ROUTES } from '../utils/constants';
 import { useInit } from '../context/InitContext';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -25,6 +26,7 @@ const Settings = () => {
   const tabPathByKey: Record<string, string> = {
     about: 'about',
     'route-tags': 'route-tags',
+    'caller-labels': 'caller-labels',
     tokens: 'tokens',
     notifications: 'notifications',
     backup: 'backup',
@@ -939,6 +941,11 @@ const Settings = () => {
       key: 'route-tags',
       label: 'Route tags',
       children: <RouteTagsTabContent />,
+    },
+    {
+      key: 'caller-labels',
+      label: 'Caller labels',
+      children: <CallerLabelsTab />,
     },
     {
       key: 'tokens',

@@ -1,0 +1,24 @@
+{
+  "route_id": "route-invalid-zero-max",
+  "config_revision": "revision-invalid-zero-max",
+  "process_instance_id": "process-invalid-zero-max",
+  "source": {
+    "id": "source",
+    "kind": "srt",
+    "srt": {
+      "uri": "srt://127.0.0.1:9000?mode=listener",
+      "mode": "listener",
+      "max_callers": 0
+    }
+  },
+  "destinations": [
+    {
+      "id": "destination",
+      "kind": "udp",
+      "udp": {
+        "address": "127.0.0.1",
+        "port": 5000
+      }
+    }
+  ]
+}

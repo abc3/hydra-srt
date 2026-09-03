@@ -46,6 +46,8 @@ defmodule HydraSrt.RouteHandlerTest do
         last_manual_source_id: nil,
         process_instance_id: nil,
         endpoint_health: %{},
+        srt_callers: %{},
+        srt_unknown_caller_addresses: MapSet.new(),
         route_terminal: nil,
         source_loss_since_ms: nil,
         source_loss_signal: nil,
@@ -280,7 +282,7 @@ defmodule HydraSrt.RouteHandlerTest do
     refute URI.decode_query(URI.parse(uri).query) |> Map.has_key?("streamid")
   end
 
-  test "source_from_record does not send preserved streamid to a listener pipeline" do
+  test "source_from_record sends listener streamid controls to the pipeline" do
     record = %{
       "schema" => "SRT",
       "mode" => "listener",
@@ -290,8 +292,38 @@ defmodule HydraSrt.RouteHandlerTest do
     }
 
     assert {:ok, source} = RouteHandler.source_from_record(record)
-    refute Map.has_key?(source["srt"], "streamid")
+    assert source["srt"]["streamid"] == "#!::r=preserved"
+    assert source["srt"]["streamid_match"] == "exact"
     refute URI.decode_query(URI.parse(source["srt"]["uri"]).query) |> Map.has_key?("streamid")
+  end
+
+  test "listener source payload carries max callers and defaults match mode" do
+    payload =
+      RouteHandler.srt_source_payload(
+        %{"mode" => "listener", "streamid" => "studio-a", "max_callers" => 2},
+        "srt://0.0.0.0:1234?mode=listener"
+      )
+
+    assert payload["streamid"] == "studio-a"
+    assert payload["streamid_match"] == "exact"
+    assert payload["max_callers"] == 2
+  end
+
+  test "listener source payload omits unset controls and destinations never receive them" do
+    listener = RouteHandler.srt_source_payload(%{"mode" => "listener"}, "srt://0.0.0.0:1234")
+
+    destination =
+      RouteHandler.srt_destination_payload(
+        %{"mode" => "listener", "streamid" => "ignored", "max_callers" => 2},
+        "srt://0.0.0.0:1234"
+      )
+
+    refute Map.has_key?(listener, "streamid")
+    refute Map.has_key?(listener, "streamid_match")
+    refute Map.has_key?(listener, "max_callers")
+    refute Map.has_key?(destination, "streamid")
+    refute Map.has_key?(destination, "streamid_match")
+    refute Map.has_key?(destination, "max_callers")
   end
 
   test "source_from_record sends caller streamid through URI and typed payload" do
@@ -1875,6 +1907,86 @@ defmodule HydraSrt.RouteHandlerTest do
              RouteHandler.parse_native_json_line(
                ~s({"source":{"bytes_in_per_sec":123},"destinations":[]})
              )
+  end
+
+  test "parse_native_json_line recognizes SRT caller events" do
+    assert {:srt_caller_added, %{"address" => "203.0.113.5:41234"}} =
+             RouteHandler.parse_native_json_line(
+               ~s({"event":"srt_caller_added","address":"203.0.113.5:41234","ip":"203.0.113.5","port":41234})
+             )
+
+    assert {:srt_caller_removed, %{"port" => port}} =
+             RouteHandler.parse_native_json_line(
+               ~s({"event":"srt_caller_removed","address":"203.0.113.5:41234","ip":"203.0.113.5","port":41234})
+             )
+
+    assert port == 41_234
+  end
+
+  test "caller events update and validate the live registry" do
+    data = base_route_data()
+
+    data =
+      RouteHandler.apply_srt_caller_added(data, %{
+        "address" => "203.0.113.5:41234",
+        "ip" => "203.0.113.5",
+        "port" => 41_234,
+        "stream_id" => "studio-a"
+      })
+
+    assert data.srt_callers["203.0.113.5:41234"].stream_id == "studio-a"
+
+    malformed =
+      RouteHandler.apply_srt_caller_added(data, %{"ip" => "203.0.113.5", "port" => "bad"})
+
+    assert malformed.srt_callers == data.srt_callers
+
+    removed =
+      RouteHandler.apply_srt_caller_removed(data, %{
+        "address" => "203.0.113.5:41234",
+        "ip" => "203.0.113.5",
+        "port" => 41_234
+      })
+
+    refute Map.has_key?(removed.srt_callers, "203.0.113.5:41234")
+  end
+
+  test "stats enrichment adds duration and nils unknown registry values" do
+    :meck.new(HydraSrt.CallerLabels, [:passthrough])
+    :meck.expect(HydraSrt.CallerLabels, :label_for_ip, fn _ip -> nil end)
+    on_exit(fn -> :meck.unload() end)
+
+    connected_at = DateTime.add(DateTime.utc_now(), -12, :second)
+
+    data =
+      base_route_data(%{
+        srt_callers: %{
+          "203.0.113.5:41234" => %{
+            ip: "203.0.113.5",
+            port: 41_234,
+            stream_id: "studio-a",
+            connected_at: connected_at
+          }
+        }
+      })
+
+    stats = %{
+      "callers" => [
+        %{"caller-address" => "203.0.113.5:41234", "rtt-ms" => 8},
+        %{"caller-address" => "198.51.100.7:5000", "rtt-ms" => 12}
+      ],
+      "source" => %{"bytes_in_per_sec" => 1}
+    }
+
+    {enriched, _next_data} = RouteHandler.enrich_srt_stats(data, stats)
+    [known, unknown] = enriched["callers"]
+    assert known["stream-id"] == "studio-a"
+    assert known["connected_at"] == DateTime.to_iso8601(connected_at)
+    assert known["duration_seconds"] >= 12
+    assert known["label"] == nil
+    assert unknown["connected_at"] == nil
+    assert unknown["duration_seconds"] == nil
+    assert unknown["label"] == nil
   end
 
   test "stats_events includes snapshot and extracts input and destination output bytes per second" do

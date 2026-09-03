@@ -82,4 +82,84 @@ defmodule HydraSrt.Api.EndpointTest do
     assert mapped["denied_list"] == ["192.0.2.10"]
     assert mapped["limit_access"] == true
   end
+
+  test "source changeset validates SRT listener controls" do
+    changeset =
+      Endpoint.source_changeset(%Endpoint{}, %{
+        "route_id" => Ecto.UUID.generate(),
+        "position" => 0,
+        "schema" => "SRT",
+        "mode" => "listener",
+        "streamid" => "studio-a",
+        "streamid_match_mode" => "resource",
+        "max_callers" => 2
+      })
+
+    assert changeset.valid?
+    assert Ecto.Changeset.get_field(changeset, :streamid_match_mode) == "resource"
+    assert Ecto.Changeset.get_field(changeset, :max_callers) == 2
+  end
+
+  test "source changeset rejects invalid listener control values" do
+    zero =
+      Endpoint.source_changeset(%Endpoint{}, %{
+        "route_id" => Ecto.UUID.generate(),
+        "position" => 0,
+        "schema" => "SRT",
+        "mode" => "listener",
+        "max_callers" => 0
+      })
+
+    refute zero.valid?
+    assert zero.errors[:max_callers]
+
+    without_streamid =
+      Endpoint.source_changeset(%Endpoint{}, %{
+        "route_id" => Ecto.UUID.generate(),
+        "position" => 0,
+        "schema" => "SRT",
+        "mode" => "listener",
+        "streamid_match_mode" => "prefix"
+      })
+
+    refute without_streamid.valid?
+    assert without_streamid.errors[:streamid_match_mode]
+  end
+
+  test "listener-only fields clear for other endpoint types" do
+    for attrs <- [
+          %{"schema" => "SRT", "mode" => "caller", "streamid" => "studio-a"},
+          %{"schema" => "UDP", "mode" => "listener"}
+        ] do
+      changeset =
+        Endpoint.source_changeset(
+          %Endpoint{},
+          Map.merge(
+            %{
+              "route_id" => Ecto.UUID.generate(),
+              "position" => 0,
+              "max_callers" => 2,
+              "streamid_match_mode" => "exact"
+            },
+            attrs
+          )
+        )
+
+      assert Ecto.Changeset.get_field(changeset, :max_callers) == nil
+      assert Ecto.Changeset.get_field(changeset, :streamid_match_mode) == nil
+    end
+
+    changeset =
+      Endpoint.destination_changeset(%Endpoint{}, %{
+        "route_id" => Ecto.UUID.generate(),
+        "position" => 0,
+        "schema" => "SRT",
+        "mode" => "caller",
+        "max_callers" => 2,
+        "streamid_match_mode" => "exact"
+      })
+
+    assert Ecto.Changeset.get_field(changeset, :max_callers) == nil
+    assert Ecto.Changeset.get_field(changeset, :streamid_match_mode) == nil
+  end
 end

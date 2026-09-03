@@ -10,7 +10,7 @@ pub use config::{
     HlsUri, HostAddress, InterfaceName, LatencyMs, LegacyKind, MaxQueueLength, MediaPolicy,
     NdiBandwidth, NdiColorFormat, NdiDestination, NdiSource, NdiTimestampMode, Pbkeylen,
     PollTimeoutMs, Port, ProgramNumber, RouteConfig, RtmpEndpoint, RtmpUri, SourceEndpoint,
-    SrtAccess, SrtDestination, SrtMode, SrtSource, SrtUri, UdpEndpoint,
+    SrtAccess, SrtDestination, SrtMode, SrtSource, SrtStreamIdMatch, SrtUri, UdpEndpoint,
 };
 pub use plan::{
     branch_tracks, plan, BranchPlan, GraphPlan, PlanError, QueueClass, SinkAdapterPlan,

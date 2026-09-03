@@ -740,6 +740,24 @@ pub enum SrtMode {
     Rendezvous,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SrtStreamIdMatch {
+    Exact,
+    Resource,
+    Prefix,
+}
+
+impl SrtStreamIdMatch {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Resource => "resource",
+            Self::Prefix => "prefix",
+        }
+    }
+}
+
 impl SrtMode {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -826,7 +844,7 @@ impl SrtAccess {
 /// SRT carries the peer host/port in `uri` and expresses bind selection through
 /// `localaddress`/`localport`; the udp-only `address`/`port`/`bind_address`/
 /// `multicast_iface` fields have no SRT counterpart and fail closed here.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SrtSource {
     uri: SrtUri,
@@ -844,7 +862,69 @@ pub struct SrtSource {
     authentication: Option<bool>,
     access: Option<SrtAccess>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    max_callers: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    streamid_match: Option<SrtStreamIdMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     program_number: Option<ProgramNumber>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SrtSourceFields {
+    uri: SrtUri,
+    mode: SrtMode,
+    latency: Option<LatencyMs>,
+    auto_reconnect: Option<bool>,
+    keep_listening: Option<bool>,
+    poll_timeout: Option<PollTimeoutMs>,
+    passphrase: Option<String>,
+    pbkeylen: Option<Pbkeylen>,
+    streamid: Option<String>,
+    localaddress: Option<HostAddress>,
+    localport: Option<Port>,
+    authentication: Option<bool>,
+    access: Option<SrtAccess>,
+    max_callers: Option<u32>,
+    streamid_match: Option<SrtStreamIdMatch>,
+    program_number: Option<ProgramNumber>,
+}
+
+impl<'de> Deserialize<'de> for SrtSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let fields = SrtSourceFields::deserialize(deserializer)?;
+        if fields.max_callers == Some(0) {
+            return Err(serde::de::Error::custom(
+                "max_callers must be at least 1 when set",
+            ));
+        }
+        if fields.streamid_match.is_some() && fields.streamid.as_deref().is_none_or(str::is_empty) {
+            return Err(serde::de::Error::custom(
+                "streamid_match requires a non-empty streamid",
+            ));
+        }
+        Ok(Self {
+            uri: fields.uri,
+            mode: fields.mode,
+            latency: fields.latency,
+            auto_reconnect: fields.auto_reconnect,
+            keep_listening: fields.keep_listening,
+            poll_timeout: fields.poll_timeout,
+            passphrase: fields.passphrase,
+            pbkeylen: fields.pbkeylen,
+            streamid: fields.streamid,
+            localaddress: fields.localaddress,
+            localport: fields.localport,
+            authentication: fields.authentication,
+            access: fields.access,
+            max_callers: fields.max_callers,
+            streamid_match: fields.streamid_match,
+            program_number: fields.program_number,
+        })
+    }
 }
 
 /// SRT destination payload. Unknown `access` field fails closed via deny_unknown_fields.
@@ -935,6 +1015,8 @@ impl SrtSource {
         localport: Option<Port>,
         authentication: Option<bool>,
         access: Option<SrtAccess>,
+        max_callers: Option<u32>,
+        streamid_match: Option<SrtStreamIdMatch>,
         program_number: Option<ProgramNumber>,
     ) -> Self {
         Self {
@@ -951,7 +1033,20 @@ impl SrtSource {
             localport,
             authentication,
             access,
+            max_callers,
+            streamid_match,
             program_number,
+        }
+    }
+
+    pub const fn max_callers(&self) -> Option<u32> {
+        self.max_callers
+    }
+
+    pub const fn streamid_match(&self) -> SrtStreamIdMatch {
+        match self.streamid_match {
+            Some(mode) => mode,
+            None => SrtStreamIdMatch::Exact,
         }
     }
 }
@@ -1408,7 +1503,7 @@ fn is_loopback_host(authority: &str) -> bool {
 mod tests {
     use super::{
         parse, ConfigError, HlsEndAction, HlsUri, HostAddress, NdiBandwidth, NdiColorFormat,
-        NdiTimestampMode, Pbkeylen, Port, ProgramNumber, SrtMode, SrtUri,
+        NdiTimestampMode, Pbkeylen, Port, ProgramNumber, SrtMode, SrtStreamIdMatch, SrtUri,
     };
     use crate::{plan, ErrorCode};
 
@@ -1417,6 +1512,7 @@ mod tests {
         include_str!("../tests/fixtures/valid_ndi_two_destinations.json"),
         include_str!("../tests/fixtures/valid_ndi_audio_only.json"),
         include_str!("../tests/fixtures/valid_legacy_srt_to_srt_udp.json"),
+        include_str!("../tests/fixtures/valid_srt_listener_controls.json"),
     ];
 
     const INVALID_PARSE_FIXTURES: &[&str] = &[
@@ -1433,6 +1529,9 @@ mod tests {
         include_str!("../tests/fixtures/invalid_bad_srt_mode.json"),
         include_str!("../tests/fixtures/invalid_unknown_srt_field.json"),
         include_str!("../tests/fixtures/invalid_srt_udp_only_field.json"),
+        include_str!("../tests/fixtures/invalid_srt_destination_listener_controls.json"),
+        include_str!("../tests/fixtures/invalid_srt_zero_max_callers.json"),
+        include_str!("../tests/fixtures/invalid_srt_match_without_streamid.json"),
         include_str!("../tests/fixtures/invalid_null_endpoint_name.json"),
     ];
 
@@ -1442,6 +1541,19 @@ mod tests {
             let config = parse(fixture).unwrap();
             plan(&config).unwrap();
         }
+    }
+
+    #[test]
+    fn srt_listener_controls_parse_with_effective_values() {
+        let config = parse(include_str!(
+            "../tests/fixtures/valid_srt_listener_controls.json"
+        ))
+        .expect("valid listener controls fixture");
+        let super::SourceEndpoint::Srt { srt, .. } = config.source else {
+            panic!("expected SRT source");
+        };
+        assert_eq!(srt.max_callers(), Some(2));
+        assert_eq!(srt.streamid_match(), SrtStreamIdMatch::Exact);
     }
 
     #[test]

@@ -1730,6 +1730,7 @@ const RouteItem = () => {
               label: 'SRT Health',
               children: (
                 <SrtHealthTab
+                  routeId={id as string}
                   sources={routeData?.sources || []}
                   destinations={routeData?.destinations || []}
                   activeSourceId={routeData?.active_source_id}
