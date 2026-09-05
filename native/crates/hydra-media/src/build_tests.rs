@@ -124,6 +124,8 @@ fn minimal_srt_source(uri: &str, mode: SrtMode) -> SrtSource {
         None,
         None,
         None,
+        None,
+        None,
     )
 }
 fn minimal_srt_dest(uri: &str, mode: SrtMode) -> SrtDestination {
@@ -177,6 +179,8 @@ fn selected_srt_source() -> SrtSource {
         None,
         Some(HostAddress::new("127.0.0.1").unwrap()),
         Some(Port::new(4201).unwrap()),
+        None,
+        None,
         None,
         None,
         Some(ProgramNumber::new(12).unwrap()),
@@ -236,6 +240,8 @@ fn listener_srt_source() -> SrtSource {
         None,
         Some(HostAddress::new("127.0.0.1").unwrap()),
         Some(Port::new(4201).unwrap()),
+        None,
+        None,
         None,
         None,
         None,
@@ -445,7 +451,7 @@ fn hls_dynamic_parsed_pad_links_through_the_pacer() {
 
     assert!(source_pad.is_linked());
     let pacer = bin.by_name("hls_pacer_hls_parsebin_src");
-    assert_eq!(pacer.expect("HLS pacer").property::<bool>("sync"), true);
+    assert!(pacer.expect("HLS pacer").property::<bool>("sync"));
     assert_eq!(
         bin.by_name("hls_queue_hls_parsebin_src")
             .expect("HLS pacing queue")
@@ -611,6 +617,8 @@ fn legacy_srtsrc_preserves_explicit_authentication() {
         Some(true),
         None,
         None,
+        None,
+        None,
     );
     let built = build(srtsrc_plan(source), writer()).expect("current SRT route builds");
     assert!(built.core.runtime.source.property::<bool>("authentication"));
@@ -704,6 +712,8 @@ fn legacy_srtsrc_enables_authentication_for_access_hooks() {
             vec![],
             vec![Cidr::new("127.0.0.1").unwrap()],
         )),
+        None,
+        None,
         None,
     );
     let built = build(srtsrc_plan(source), writer()).expect("current SRT access route builds");

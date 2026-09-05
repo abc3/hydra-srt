@@ -1,0 +1,25 @@
+{
+  "route_id": "route-invalid-destination-controls",
+  "config_revision": "revision-invalid-destination-controls",
+  "process_instance_id": "process-invalid-destination-controls",
+  "source": {
+    "id": "source",
+    "kind": "srt",
+    "srt": {
+      "uri": "srt://127.0.0.1:9000?mode=listener",
+      "mode": "listener"
+    }
+  },
+  "destinations": [
+    {
+      "id": "destination",
+      "kind": "srt",
+      "srt": {
+        "uri": "srt://127.0.0.1:9001?mode=caller",
+        "mode": "caller",
+        "max_callers": 2,
+        "streamid_match": "exact"
+      }
+    }
+  ]
+}

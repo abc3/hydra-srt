@@ -22,6 +22,12 @@ export type RouteEndpoint = Record<string, unknown> & NdiEndpointFields & Youtub
   bind_address_option?: string;
   path?: string;
   location?: string;
+  limit_access?: boolean;
+  allowed_list?: string[];
+  denied_list?: string[];
+  max_callers?: number | null;
+  streamid_match_mode?: 'exact' | 'resource' | 'prefix' | string | null;
+  streamid?: string;
 };
 
 export type RouteEndpointHealthMap = Record<string, NdiEndpointHealthRecord>;
@@ -131,6 +137,56 @@ export type SrtHealthPoint = {
   retransmitted_packets_per_sec?: number | null;
   dropped_packets_per_sec?: number | null;
   nack_packets_per_sec?: number | null;
+};
+
+export type SrtCallerStats = {
+  'caller-address': string;
+  'stream-id'?: string;
+  'rtt-ms'?: number | null;
+  'receive-rate-mbps'?: number | null;
+  'bandwidth-mbps'?: number | null;
+  'negotiated-latency-ms'?: number | null;
+  'packets-received'?: number | null;
+  'packets-received-lost'?: number | null;
+  'packets-received-retransmitted'?: number | null;
+  'packets-received-dropped'?: number | null;
+  'packet-loss-percent'?: number | null;
+  'retransmitted-packets-per-sec'?: number | null;
+  'dropped-packets-per-sec'?: number | null;
+  'nack-packets-per-sec'?: number | null;
+  connected_at?: string | null;
+  duration_seconds?: number | null;
+  label?: string | null;
+};
+
+export type SrtCallersResponse = {
+  data?: SrtCallerStats[];
+  meta?: {
+    connected_callers?: number;
+  };
+};
+
+export type SrtCallerBanResponse = {
+  data?: {
+    endpoint_id?: string;
+    limit_access?: boolean;
+    denied_list?: string[];
+  };
+};
+
+export type CallerLabel = {
+  id: string;
+  address: string;
+  label: string;
+  note?: string | null;
+  inserted_at?: string;
+  updated_at?: string;
+};
+
+export type CallerLabelInput = {
+  address: string;
+  label: string;
+  note?: string | null;
 };
 
 export type AnalyticsMeta = Record<string, unknown> | null;

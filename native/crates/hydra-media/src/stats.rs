@@ -21,10 +21,12 @@ pub fn start_stats_loop(runtime: &PipelineRuntime, writer: Arc<Mutex<Box<dyn Sta
     let source_bytes_last_interval = runtime.source_bytes_last_interval.clone();
     let source_bytes_per_sec = runtime.source_bytes_per_sec.clone();
     let dest_metrics = runtime.dest_metrics.clone();
+    let srt_callers = runtime.srt_callers.clone();
 
     thread::spawn(move || {
         let mut source_srt_previous = None;
         let mut destination_srt_previous: HashMap<String, HashMap<String, u64>> = HashMap::new();
+        let mut caller_srt_previous: HashMap<String, HashMap<String, u64>> = HashMap::new();
 
         while running.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_secs(1));
@@ -50,6 +52,7 @@ pub fn start_stats_loop(runtime: &PipelineRuntime, writer: Arc<Mutex<Box<dyn Sta
                 .as_ref()
                 .and_then(extract_callers_from_stats)
                 .unwrap_or_default();
+            let callers = enrich_callers(callers, srt_callers.as_ref(), &mut caller_srt_previous);
             root.insert(
                 "connected-callers".into(),
                 Value::Number((callers.len() as u64).into()),
@@ -388,6 +391,40 @@ fn extract_callers_from_stats(stats: &gst::Structure) -> Option<Vec<Value>> {
     Some(out)
 }
 
+fn enrich_callers(
+    mut callers: Vec<Value>,
+    registry: Option<&Arc<crate::adapters::srt::SrtCallerRegistry>>,
+    previous: &mut HashMap<String, HashMap<String, u64>>,
+) -> Vec<Value> {
+    let mut current_addresses = HashSet::new();
+    for caller in &mut callers {
+        let Some(object) = caller.as_object_mut() else {
+            continue;
+        };
+        object.remove("stream-id");
+        let Some(address) = object
+            .get("caller-address")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        current_addresses.insert(address.clone());
+        if let Some(registry) = registry {
+            if let Some(stream_id) = registry.stream_id(&address) {
+                object.insert("stream-id".into(), Value::String(stream_id));
+            }
+        }
+        let mut caller_previous = previous.remove(&address);
+        add_interval_metrics(caller, SrtDirection::Receive, &mut caller_previous);
+        if let Some(caller_previous) = caller_previous {
+            previous.insert(address, caller_previous);
+        }
+    }
+    previous.retain(|address, _| current_addresses.contains(address));
+    callers
+}
+
 fn structure_to_json(structure: &gst::Structure) -> Value {
     let mut obj = Map::new();
 
@@ -439,8 +476,10 @@ fn structure_to_json(structure: &gst::Structure) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        add_interval_metrics, aggregate_caller_stats, prune_destination_srt_previous, SrtDirection,
+        add_interval_metrics, aggregate_caller_stats, enrich_callers,
+        prune_destination_srt_previous, SrtDirection,
     };
+    use crate::adapters::srt::SrtCallerRegistry;
     use serde_json::json;
     use std::collections::{HashMap, HashSet};
 
@@ -563,5 +602,79 @@ mod tests {
 
         assert!(previous.contains_key("dest-1"));
         assert!(!previous.contains_key("removed"));
+    }
+
+    #[test]
+    fn caller_interval_metrics_are_independent_and_stream_ids_are_enriched() {
+        let registry = std::sync::Arc::new(SrtCallerRegistry::new());
+        let first_ip = "192.0.2.1".parse().expect("valid IP");
+        let second_ip = "192.0.2.2".parse().expect("valid IP");
+        registry.mark_active(
+            "192.0.2.1:4000".to_string(),
+            first_ip,
+            4000,
+            Some("studio-a".to_string()),
+        );
+        registry.mark_active(
+            "192.0.2.2:4001".to_string(),
+            second_ip,
+            4001,
+            Some("studio-b".to_string()),
+        );
+        let mut previous = HashMap::new();
+        let first = enrich_callers(
+            vec![
+                json!({"caller-address":"192.0.2.1:4000","packets-received":100,"packets-received-lost":10}),
+                json!({"caller-address":"192.0.2.2:4001","packets-received":200,"packets-received-lost":20}),
+            ],
+            Some(&registry),
+            &mut previous,
+        );
+        assert!(first[0]["packet-loss-percent"].is_null());
+        assert!(first[1]["packet-loss-percent"].is_null());
+        assert_eq!(first[0]["stream-id"], json!("studio-a"));
+        assert_eq!(first[1]["stream-id"], json!("studio-b"));
+
+        let second = enrich_callers(
+            vec![
+                json!({"caller-address":"192.0.2.1:4000","packets-received":190,"packets-received-lost":20}),
+                json!({"caller-address":"192.0.2.2:4001","packets-received":290,"packets-received-lost":30}),
+            ],
+            Some(&registry),
+            &mut previous,
+        );
+        assert_eq!(second[0]["packet-loss-percent"], json!(10.0));
+        assert_eq!(second[1]["packet-loss-percent"], json!(10.0));
+    }
+
+    #[test]
+    fn caller_previous_state_is_pruned_when_an_address_disappears() {
+        let registry = std::sync::Arc::new(SrtCallerRegistry::new());
+        let first_ip = "192.0.2.1".parse().expect("valid IP");
+        let second_ip = "192.0.2.2".parse().expect("valid IP");
+        registry.mark_active("192.0.2.1:4000".to_string(), first_ip, 4000, None);
+        registry.mark_active("192.0.2.2:4001".to_string(), second_ip, 4001, None);
+        let mut previous = HashMap::new();
+        enrich_callers(
+            vec![
+                json!({"caller-address":"192.0.2.1:4000","packets-received":100}),
+                json!({"caller-address":"192.0.2.2:4001","packets-received":100}),
+            ],
+            Some(&registry),
+            &mut previous,
+        );
+        enrich_callers(
+            vec![json!({"caller-address":"192.0.2.1:4000","packets-received":110})],
+            Some(&registry),
+            &mut previous,
+        );
+        assert!(!previous.contains_key("192.0.2.2:4001"));
+        let returning = enrich_callers(
+            vec![json!({"caller-address":"192.0.2.2:4001","packets-received":10})],
+            Some(&registry),
+            &mut previous,
+        );
+        assert!(returning[0]["retransmitted-packets-per-sec"].is_null());
+        assert!(returning[0]["packet-loss-percent"].is_null());
     }
 }

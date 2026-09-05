@@ -34,6 +34,7 @@ defmodule HydraSrt.RouteHandler do
   @retry_budget_reset_after_healthy_ms @retry_ceiling_ms
 
   alias HydraSrt.Api.Endpoint
+  alias HydraSrt.CallerLabels
   alias HydraSrt.Db
   alias HydraSrt.Helpers
   alias HydraSrt.LogSanitizer
@@ -70,6 +71,12 @@ defmodule HydraSrt.RouteHandler do
 
   @type endpoint_health_payload :: json_map()
   @type route_terminal_payload :: json_map()
+  @type srt_caller :: %{
+          required(:ip) => String.t(),
+          required(:port) => non_neg_integer(),
+          required(:stream_id) => String.t() | nil,
+          required(:connected_at) => DateTime.t()
+        }
 
   @type data_t :: %{
           required(:id) => String.t(),
@@ -81,6 +88,8 @@ defmodule HydraSrt.RouteHandler do
           required(:last_manual_source_id) => String.t() | nil,
           required(:process_instance_id) => String.t() | nil,
           required(:endpoint_health) => %{optional(String.t()) => endpoint_health_payload()},
+          required(:srt_callers) => %{optional(String.t()) => srt_caller()},
+          required(:srt_unknown_caller_addresses) => MapSet.t(),
           required(:route_terminal) => route_terminal_t() | nil,
           required(:source_loss_since_ms) => integer() | nil,
           required(:source_loss_signal) => source_loss_signal() | nil,
@@ -111,6 +120,8 @@ defmodule HydraSrt.RouteHandler do
           | {:srt_access, json_map()}
           | {:pipeline_log, json_map()}
           | {:endpoint_health, endpoint_health_payload()}
+          | {:srt_caller_added, json_map()}
+          | {:srt_caller_removed, json_map()}
           | {:media_info, json_map()}
           | {:route_terminal, route_terminal_payload()}
           | {:stats, json_map()}
@@ -153,6 +164,19 @@ defmodule HydraSrt.RouteHandler do
   def get_endpoint_health(pid, timeout) when is_pid(pid) do
     try do
       :gen_statem.call(pid, :get_endpoint_health, timeout)
+    catch
+      :exit, reason -> {:error, reason}
+    end
+  end
+
+  @spec get_srt_callers(pid()) :: {:ok, [json_map()]} | {:error, term()}
+  def get_srt_callers(pid) when is_pid(pid),
+    do: get_srt_callers(pid, @endpoint_health_call_timeout_ms)
+
+  @spec get_srt_callers(pid(), timeout()) :: {:ok, [json_map()]} | {:error, term()}
+  def get_srt_callers(pid, timeout) when is_pid(pid) do
+    try do
+      :gen_statem.call(pid, :get_srt_callers, timeout)
     catch
       :exit, reason -> {:error, reason}
     end
@@ -214,6 +238,8 @@ defmodule HydraSrt.RouteHandler do
       last_manual_source_id: nil,
       process_instance_id: nil,
       endpoint_health: %{},
+      srt_callers: %{},
+      srt_unknown_caller_addresses: MapSet.new(),
       route_terminal: nil,
       # Soft source-loss window (merged triggers B+C): one debounce clock.
       source_loss_since_ms: nil,
@@ -265,7 +291,10 @@ defmodule HydraSrt.RouteHandler do
             if is_port(resolved_data.port) do
               close_existing_port(resolved_data.port)
               kill_stale_pipeline_processes(resolved_data.id, "youtube_refresh")
-              %{resolved_data | port: nil}
+
+              resolved_data
+              |> Map.put(:port, nil)
+              |> reset_srt_runtime()
             else
               resolved_data
             end
@@ -372,7 +401,12 @@ defmodule HydraSrt.RouteHandler do
     log_fun = if status == 0, do: &Logger.info/1, else: &Logger.error/1
     log_fun.("RouteHandler: native pipeline exited with status #{status}")
 
-    next_data = maybe_schedule_hard_retry_after_process_loss(%{data | port: nil})
+    next_data =
+      data
+      |> Map.put(:port, nil)
+      |> reset_srt_runtime()
+      |> maybe_schedule_hard_retry_after_process_loss()
+
     {:keep_state, next_data}
   end
 
@@ -390,7 +424,12 @@ defmodule HydraSrt.RouteHandler do
     if Enum.member?(@normal_port_exit_reasons, reason) do
       {:stop, :normal, %{data | shutdown_reason: {:port_exit, reason}}}
     else
-      next_data = maybe_schedule_hard_retry_after_process_loss(%{data | port: nil})
+      next_data =
+        data
+        |> Map.put(:port, nil)
+        |> reset_srt_runtime()
+        |> maybe_schedule_hard_retry_after_process_loss()
+
       {:keep_state, next_data}
     end
   end
@@ -426,6 +465,10 @@ defmodule HydraSrt.RouteHandler do
 
   def handle_event({:call, from}, :get_endpoint_health, _state, data) do
     {:keep_state, data, [{:reply, from, {:ok, endpoint_health_identity(data)}}]}
+  end
+
+  def handle_event({:call, from}, :get_srt_callers, _state, data) do
+    {:keep_state, data, [{:reply, from, {:ok, srt_caller_snapshot(data)}}]}
   end
 
   def handle_event({:call, from}, {:switch_source, source_id, reason}, _state, data)
@@ -511,6 +554,8 @@ defmodule HydraSrt.RouteHandler do
            | port: port,
              process_instance_id: process_instance_id,
              endpoint_health: %{},
+             srt_callers: %{},
+             srt_unknown_caller_addresses: MapSet.new(),
              route_terminal: nil,
              source_loss_since_ms: nil,
              source_loss_signal: nil,
@@ -979,18 +1024,31 @@ defmodule HydraSrt.RouteHandler do
 
       {:stats, stats} ->
         # Logger.info("RouteHandler: pipeline stats: #{json}")
-        publish_stats(data.id, stats, %{
-          active_source_id: data.active_source_id,
-          active_source_position: active_source_position(data.route, data.active_source_id)
-        })
+        {enriched_stats, next_data} = enrich_srt_stats(data, stats)
 
-        data
+        publish_stats(
+          data.id,
+          enriched_stats,
+          stats,
+          %{
+            active_source_id: data.active_source_id,
+            active_source_position: active_source_position(data.route, data.active_source_id)
+          }
+        )
+
+        next_data
         |> maybe_handle_zero_bitrate(stats)
         |> maybe_probe_primary_recovery()
 
       {:srt_access, access_event} ->
         publish_srt_access_log(data.id, access_event)
         data
+
+      {:srt_caller_added, caller_event} ->
+        apply_srt_caller_added(data, caller_event)
+
+      {:srt_caller_removed, caller_event} ->
+        apply_srt_caller_removed(data, caller_event)
 
       {:pipeline_log, log} ->
         publish_native_pipeline_log(data, log)
@@ -1033,6 +1091,150 @@ defmodule HydraSrt.RouteHandler do
     end
 
     data
+  end
+
+  @spec reset_srt_runtime(data_t()) :: data_t()
+  def reset_srt_runtime(data) when is_map(data) do
+    data
+    |> Map.put(:srt_callers, %{})
+    |> Map.put(:srt_unknown_caller_addresses, MapSet.new())
+  end
+
+  @spec apply_srt_caller_added(data_t(), json_map()) :: data_t()
+  def apply_srt_caller_added(data, payload) when is_map(data) and is_map(payload) do
+    case valid_srt_caller_event(payload) do
+      {:ok, address, ip, port, stream_id} ->
+        caller = %{ip: ip, port: port, stream_id: stream_id, connected_at: DateTime.utc_now()}
+        publish_srt_access_log(data.id, caller_access_event(ip, stream_id, "connected"))
+        Map.put(data, :srt_callers, Map.put(Map.get(data, :srt_callers, %{}), address, caller))
+
+      :error ->
+        Logger.error("RouteHandler: malformed srt_caller_added payload=#{inspect(payload)}")
+        data
+    end
+  end
+
+  @spec apply_srt_caller_removed(data_t(), json_map()) :: data_t()
+  def apply_srt_caller_removed(data, payload) when is_map(data) and is_map(payload) do
+    case valid_srt_caller_event(payload) do
+      {:ok, address, ip, _port, stream_id} ->
+        publish_srt_access_log(data.id, caller_access_event(ip, stream_id, "disconnected"))
+        Map.put(data, :srt_callers, Map.delete(Map.get(data, :srt_callers, %{}), address))
+
+      :error ->
+        Logger.error("RouteHandler: malformed srt_caller_removed payload=#{inspect(payload)}")
+        data
+    end
+  end
+
+  @spec valid_srt_caller_event(json_map()) ::
+          {:ok, String.t(), String.t(), non_neg_integer(), String.t() | nil} | :error
+  def valid_srt_caller_event(payload) when is_map(payload) do
+    address = payload["address"]
+    ip = payload["ip"]
+    port = payload["port"]
+
+    with true <- is_binary(address) and address != "",
+         true <-
+           is_binary(ip) and CallerLabels.valid_address?(ip) and not String.contains?(ip, "/"),
+         true <- is_integer(port) and port >= 0 and port <= 65_535,
+         {:ok, stream_id} <- valid_stream_id(payload["stream_id"]) do
+      {:ok, address, ip, port, stream_id}
+    else
+      _ -> :error
+    end
+  end
+
+  @spec valid_stream_id(term()) :: {:ok, String.t() | nil} | :error
+  def valid_stream_id(nil), do: {:ok, nil}
+  def valid_stream_id(value) when is_binary(value) and value != "", do: {:ok, value}
+  def valid_stream_id(_value), do: :error
+
+  @spec caller_access_event(String.t(), String.t() | nil, String.t()) :: json_map()
+  def caller_access_event(ip, stream_id, reason) when is_binary(ip) and is_binary(reason) do
+    %{"ip" => ip, "allowed" => true, "reason" => reason}
+    |> then(fn event ->
+      if is_binary(stream_id), do: Map.put(event, "stream_id", stream_id), else: event
+    end)
+  end
+
+  @spec enrich_srt_stats(data_t(), json_map()) :: {json_map(), data_t()}
+  def enrich_srt_stats(data, stats) when is_map(data) and is_map(stats) do
+    case stats["callers"] do
+      callers when is_list(callers) ->
+        {enriched, unknown} =
+          Enum.map_reduce(
+            callers,
+            Map.get(data, :srt_unknown_caller_addresses, MapSet.new()),
+            fn caller, seen ->
+              enrich_srt_caller(caller, Map.get(data, :srt_callers, %{}), seen)
+            end
+          )
+
+        {Map.put(stats, "callers", enriched),
+         Map.put(data, :srt_unknown_caller_addresses, unknown)}
+
+      _ ->
+        {stats, data}
+    end
+  end
+
+  @spec enrich_srt_caller(term(), %{optional(String.t()) => srt_caller()}, MapSet.t()) ::
+          {term(), MapSet.t()}
+  def enrich_srt_caller(caller, registry, seen) when is_map(caller) do
+    address = caller["caller-address"]
+
+    case registry[address] do
+      %{ip: ip, connected_at: connected_at, stream_id: stream_id} ->
+        enriched =
+          caller
+          |> maybe_put_stream_id(stream_id)
+          |> Map.put("connected_at", DateTime.to_iso8601(connected_at))
+          |> Map.put(
+            "duration_seconds",
+            max(DateTime.diff(DateTime.utc_now(), connected_at, :second), 0)
+          )
+          |> Map.put("label", CallerLabels.label_for_ip(ip))
+
+        {enriched, seen}
+
+      _ ->
+        unless MapSet.member?(seen, address) do
+          Logger.debug(
+            "RouteHandler: stats caller has no registry match address=#{inspect(address)}"
+          )
+        end
+
+        {caller
+         |> Map.put("connected_at", nil)
+         |> Map.put("duration_seconds", nil)
+         |> Map.put("label", nil), MapSet.put(seen, address)}
+    end
+  end
+
+  def enrich_srt_caller(caller, _registry, seen), do: {caller, seen}
+
+  @spec maybe_put_stream_id(map(), String.t() | nil) :: map()
+  def maybe_put_stream_id(caller, stream_id) when is_map(caller) and is_binary(stream_id),
+    do: Map.put(caller, "stream-id", stream_id)
+
+  def maybe_put_stream_id(caller, nil) when is_map(caller), do: Map.delete(caller, "stream-id")
+
+  @spec srt_caller_snapshot(data_t()) :: [json_map()]
+  def srt_caller_snapshot(data) when is_map(data) do
+    Map.get(data, :srt_callers, %{})
+    |> Enum.map(fn {address,
+                    %{ip: ip, port: port, stream_id: stream_id, connected_at: connected_at}} ->
+      %{
+        "address" => address,
+        "ip" => ip,
+        "port" => port,
+        "stream_id" => stream_id,
+        "connected_at" => DateTime.to_iso8601(connected_at),
+        "duration_seconds" => max(DateTime.diff(DateTime.utc_now(), connected_at, :second), 0),
+        "label" => CallerLabels.label_for_ip(ip)
+      }
+    end)
   end
 
   @spec maybe_handle_zero_bitrate(data_t(), json_map()) :: data_t()
@@ -1258,7 +1460,11 @@ defmodule HydraSrt.RouteHandler do
 
         {:ready, next_data} ->
           persist_reason = switch_reason_for_persist(route, source_id, reason, next_data)
-          next_data = maybe_mark_restarting_before_switch(next_data, reason)
+
+          next_data =
+            next_data
+            |> maybe_mark_restarting_before_switch(reason)
+            |> reset_srt_runtime()
 
           with :ok <- close_existing_port(next_data.port) do
             case open_and_initialize_native_pipeline(route, route_id, source_id) do
@@ -1281,6 +1487,8 @@ defmodule HydraSrt.RouteHandler do
                          port: port,
                          process_instance_id: process_instance_id,
                          endpoint_health: %{},
+                         srt_callers: %{},
+                         srt_unknown_caller_addresses: MapSet.new(),
                          route_terminal: nil,
                          active_source_id: source_id,
                          last_manual_source_id: last_manual_source_id,
@@ -1591,6 +1799,8 @@ defmodule HydraSrt.RouteHandler do
 
     _ = HydraSrt.mark_route_failed(data.id)
 
+    data = reset_srt_runtime(data)
+
     %{
       data
       | recovery_blocked?: true,
@@ -1644,6 +1854,8 @@ defmodule HydraSrt.RouteHandler do
           port: port,
           process_instance_id: process_instance_id,
           endpoint_health: %{},
+          srt_callers: %{},
+          srt_unknown_caller_addresses: MapSet.new(),
           route_terminal: nil,
           active_source_id: source_id,
           source_loss_since_ms: nil,
@@ -1751,6 +1963,12 @@ defmodule HydraSrt.RouteHandler do
 
       {:ok, %{"event" => "srt_access"} = payload} ->
         {:srt_access, payload}
+
+      {:ok, %{"event" => "srt_caller_added"} = payload} ->
+        {:srt_caller_added, payload}
+
+      {:ok, %{"event" => "srt_caller_removed"} = payload} ->
+        {:srt_caller_removed, payload}
 
       {:ok, %{"event" => "pipeline_log"} = payload} ->
         {:pipeline_log, payload}
@@ -2059,6 +2277,8 @@ defmodule HydraSrt.RouteHandler do
 
     _ = HydraSrt.mark_route_completed(data.id)
 
+    data = reset_srt_runtime(data)
+
     %{
       data
       | route_terminal: terminal,
@@ -2158,13 +2378,20 @@ defmodule HydraSrt.RouteHandler do
 
   @doc false
   def publish_stats(route_id, %{} = stats, metadata \\ %{}) when is_binary(route_id) do
-    stats
+    publish_stats(route_id, stats, stats, metadata)
+  end
+
+  @doc false
+  @spec publish_stats(String.t(), json_map(), json_map(), map()) :: :ok
+  def publish_stats(route_id, %{} = broadcast_stats, %{} = collector_stats, metadata)
+      when is_binary(route_id) and is_map(metadata) do
+    broadcast_stats
     |> stats_events(route_id)
     |> Enum.each(fn event ->
       Phoenix.PubSub.broadcast(HydraSrt.PubSub, "stats", {:stats, event})
     end)
 
-    HydraSrt.Stats.Collector.ingest(route_id, stats, metadata)
+    HydraSrt.Stats.Collector.ingest(route_id, collector_stats, metadata)
 
     :ok
   end
@@ -2770,7 +2997,7 @@ defmodule HydraSrt.RouteHandler do
 
   @spec source_from_record(json_map(), json_map()) :: {:ok, typed_endpoint()} | {:error, term()}
   def source_from_record(%{"schema" => "SRT"} = source, _route) do
-    opts = endpoint_options_from_record(source)
+    opts = endpoint_options_from_record(source, true)
 
     with false <- map_size(opts) == 0,
          {:ok, resolved_opts} <- resolve_interface_options(opts) do
@@ -3082,9 +3309,10 @@ defmodule HydraSrt.RouteHandler do
   def srt_payload(opts, uri, source?)
       when is_map(opts) and is_binary(uri) and is_boolean(source?) do
     mode = Map.get(opts, "mode")
+    listener_source? = source? and mode == "listener"
 
     streamid =
-      if mode in ["caller", "rendezvous"] do
+      if listener_source? or mode in ["caller", "rendezvous"] do
         case Map.get(opts, "streamid") do
           value when is_binary(value) and value != "" -> value
           _ -> nil
@@ -3092,6 +3320,15 @@ defmodule HydraSrt.RouteHandler do
       else
         nil
       end
+
+    streamid_match =
+      if listener_source? and is_binary(streamid) do
+        Map.get(opts, "streamid_match", "exact")
+      else
+        nil
+      end
+
+    max_callers = if listener_source?, do: Map.get(opts, "max_callers"), else: nil
 
     access =
       if source? and Map.get(opts, "hydra_limit_access") == true do
@@ -3119,6 +3356,8 @@ defmodule HydraSrt.RouteHandler do
       "passphrase" => Map.get(opts, "passphrase"),
       "pbkeylen" => Map.get(opts, "pbkeylen"),
       "streamid" => streamid,
+      "streamid_match" => streamid_match,
+      "max_callers" => max_callers,
       "localaddress" => localaddress,
       "localport" => localport,
       "authentication" => Map.get(opts, "authentication"),
@@ -3282,6 +3521,13 @@ defmodule HydraSrt.RouteHandler do
   def drop_srt_uri_options(opts), do: Map.delete(opts, "streamid")
 
   defp endpoint_options_from_record(record) when is_map(record) do
+    endpoint_options_from_record(record, false)
+  end
+
+  defp endpoint_options_from_record(record, source?)
+       when is_map(record) and is_boolean(source?) do
+    listener_source? = source? and record["schema"] == "SRT" and record["mode"] == "listener"
+
     %{}
     |> put_opt(record, "mode")
     |> put_opt(record, "interface_sys_name")
@@ -3293,6 +3539,13 @@ defmodule HydraSrt.RouteHandler do
     |> put_opt(record, "latency")
     |> put_opt(record, "authentication")
     |> put_opt(record, "streamid")
+    |> maybe_put_srt_listener_opt(
+      record,
+      listener_source?,
+      "streamid_match",
+      "streamid_match_mode"
+    )
+    |> maybe_put_srt_listener_opt(record, listener_source?, "max_callers", "max_callers")
     |> put_opt(record, "passphrase")
     |> put_opt(record, "pbkeylen")
     |> put_opt(record, "poll-timeout", "poll_timeout")
@@ -3309,6 +3562,13 @@ defmodule HydraSrt.RouteHandler do
     |> put_opt(record, "mtu")
     |> put_srt_access_opts(record)
   end
+
+  @spec maybe_put_srt_listener_opt(json_map(), json_map(), boolean(), String.t(), String.t()) ::
+          json_map()
+  def maybe_put_srt_listener_opt(opts, record, true, key, source_key),
+    do: put_opt(opts, record, key, source_key)
+
+  def maybe_put_srt_listener_opt(opts, _record, false, _key, _source_key), do: opts
 
   defp put_opt(opts, record, key), do: put_opt(opts, record, key, key)
 

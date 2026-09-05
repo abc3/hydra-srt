@@ -57,6 +57,8 @@ defmodule HydraSrtWeb.Router do
     get "/routes/:route_id/stop", RouteController, :stop
     get "/routes/:route_id/restart", RouteController, :restart
     get "/routes/:route_id/endpoint-health", RouteController, :endpoint_health
+    get "/routes/:route_id/srt/callers", SrtCallerController, :index
+    post "/routes/:route_id/srt/callers/ban", SrtCallerController, :ban
     post "/routes/:id/switch-source", RouteController, :switch_source
     get "/routes/:route_id/destinations", DestinationController, :index
     post "/routes/:route_id/destinations", DestinationController, :create
@@ -71,6 +73,10 @@ defmodule HydraSrtWeb.Router do
     post "/routes/:route_id/sources-reorder", SourceController, :reorder
     post "/routes/:route_id/sources/reorder", SourceController, :reorder
     post "/routes/:route_id/sources/:id/test", SourceController, :test
+    get "/caller-labels", CallerLabelController, :index
+    post "/caller-labels", CallerLabelController, :create
+    patch "/caller-labels/:id", CallerLabelController, :update
+    delete "/caller-labels/:id", CallerLabelController, :delete
     get "/interfaces/system", InterfaceController, :system
     get "/interfaces/system/raw", InterfaceController, :system_raw
     resources "/interfaces", InterfaceController, except: [:new, :edit]

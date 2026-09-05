@@ -202,6 +202,7 @@ pub fn build(
         processing_pending: source_result.processing_pending,
         dest_metrics,
         running: Arc::new(AtomicBool::new(true)),
+        srt_callers: source_result.srt_callers,
     };
 
     Ok(BuiltGraph {
@@ -359,6 +360,7 @@ struct SourceBuild {
     output_pads: Vec<(MediaLane, gst::Pad)>,
     ndi_readiness: Option<ndi_source::NdiReadinessMonitor>,
     srt_source_health: Option<srt::SrtSourceHealthMonitor>,
+    srt_callers: Option<Arc<srt::SrtCallerRegistry>>,
     endpoint: EndpointDescriptor,
     source_bytes_total: Arc<AtomicU64>,
     processing_pending: Arc<AtomicBool>,
@@ -379,7 +381,7 @@ fn build_source_bin(
             let source = make_element(source_element_factory(LegacyKind::Srt), "source element")?;
             srt::apply_source(&source, config).map_err(adapter_error)?;
             maybe_do_timestamp(&source);
-            srt::configure_source(&source, config, writer);
+            let srt_callers = srt::configure_source(&source, config, writer);
             let source_health =
                 srt::build_source_health_monitor(&source, config.mode()).map_err(adapter_error)?;
             let mut built = finish_program_source(
@@ -390,6 +392,7 @@ fn build_source_bin(
                 lifecycle,
             )?;
             built.srt_source_health = source_health;
+            built.srt_callers = srt_callers;
             Ok(built)
         }
         SourceAdapterPlan::Udp { config, .. } => {
@@ -564,6 +567,7 @@ fn finish_source_with_output(
         output_pads: vec![(MediaLane::Program, bin_output_pad)],
         ndi_readiness: None,
         srt_source_health: None,
+        srt_callers: None,
         endpoint: EndpointDescriptor {
             bin_name,
             endpoint_id: plan.source.endpoint_id.clone(),
@@ -618,6 +622,7 @@ fn build_ndi_source_bin(
         output_pads,
         ndi_readiness: Some(built.readiness),
         srt_source_health: None,
+        srt_callers: None,
         endpoint: EndpointDescriptor {
             bin_name,
             endpoint_id: plan.source.endpoint_id.clone(),

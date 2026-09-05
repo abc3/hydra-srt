@@ -1114,6 +1114,7 @@ mod tests {
             processing_pending: Arc::new(AtomicBool::new(false)),
             dest_metrics: Arc::new(Mutex::new(Vec::new())),
             running: Arc::new(AtomicBool::new(false)),
+            srt_callers: None,
         };
         let eos_seen = Arc::new(AtomicBool::new(false));
         let _guard =
@@ -1221,6 +1222,7 @@ mod tests {
             processing_pending: Arc::new(AtomicBool::new(false)),
             dest_metrics: Arc::new(Mutex::new(Vec::new())),
             running: Arc::new(AtomicBool::new(false)),
+            srt_callers: None,
         };
         let eos_seen = Arc::new(AtomicBool::new(false));
         let endpoints = [EndpointDescriptor {

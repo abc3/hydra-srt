@@ -1,0 +1,33 @@
+{
+  "route_id": "route-srt-controls",
+  "config_revision": "revision-srt-controls",
+  "process_instance_id": "process-srt-controls",
+  "source": {
+    "id": "source",
+    "name": "Listener",
+    "kind": "srt",
+    "srt": {
+      "uri": "srt://0.0.0.0:9000?mode=listener",
+      "mode": "listener",
+      "streamid": "studio-a",
+      "streamid_match": "exact",
+      "max_callers": 2,
+      "access": {
+        "limit": true,
+        "allowed": ["10.0.0.0/8"],
+        "denied": ["203.0.113.5/32"]
+      }
+    }
+  },
+  "destinations": [
+    {
+      "id": "destination",
+      "name": "Output",
+      "kind": "udp",
+      "udp": {
+        "address": "127.0.0.1",
+        "port": 5000
+      }
+    }
+  ]
+}

@@ -183,6 +183,8 @@ defmodule HydraSrt.Api.Endpoint do
     field :allowed_list, :string, default: "[]"
     field :denied_list, :string, default: "[]"
     field :limit_access, :boolean, default: false
+    field :max_callers, :integer
+    field :streamid_match_mode, :string
     field :program_number, :integer
 
     # NDI operator intent (nullable; cleared for non-NDI schemas).
@@ -265,6 +267,7 @@ defmodule HydraSrt.Api.Endpoint do
       less_than_or_equal_to: 65_535
     )
     |> validate_rtmp_required_fields()
+    |> validate_srt_listener_fields()
     |> validate_ndi_fields()
     |> validate_youtube_fields()
     |> validate_number(:position, greater_than_or_equal_to: 0)
@@ -297,6 +300,7 @@ defmodule HydraSrt.Api.Endpoint do
     |> validate_required([:route_id, :schema, :type])
     |> validate_inclusion(:schema, @destination_schemas)
     |> validate_rtmp_required_fields()
+    |> validate_srt_listener_fields()
     |> validate_ndi_fields()
     |> validate_youtube_fields()
     |> put_bind_target_fields()
@@ -356,6 +360,8 @@ defmodule HydraSrt.Api.Endpoint do
         :allowed_list,
         :denied_list,
         :limit_access,
+        :max_callers,
+        :streamid_match_mode,
         :program_number,
         :bind_interface,
         :bind_address,
@@ -411,6 +417,37 @@ defmodule HydraSrt.Api.Endpoint do
       {"RTMP", "source"} -> validate_required(changeset, [:path])
       {"RTMP", "destination"} -> validate_required(changeset, [:location])
       _ -> changeset
+    end
+  end
+
+  @spec validate_srt_listener_fields(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def validate_srt_listener_fields(changeset) do
+    listener? =
+      get_field(changeset, :schema) == "SRT" and
+        get_field(changeset, :type) == "source" and
+        get_field(changeset, :mode) == "listener"
+
+    if listener? do
+      changeset
+      |> validate_number(:max_callers, greater_than_or_equal_to: 1)
+      |> validate_inclusion(:streamid_match_mode, ["exact", "resource", "prefix"])
+      |> validate_streamid_match_requires_streamid()
+    else
+      changeset
+      |> put_change(:max_callers, nil)
+      |> put_change(:streamid_match_mode, nil)
+    end
+  end
+
+  @spec validate_streamid_match_requires_streamid(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def validate_streamid_match_requires_streamid(changeset) do
+    mode = get_field(changeset, :streamid_match_mode)
+    streamid = get_field(changeset, :streamid)
+
+    if not is_nil(mode) and (not is_binary(streamid) or String.trim(streamid) == "") do
+      add_error(changeset, :streamid_match_mode, "requires a streamid")
+    else
+      changeset
     end
   end
 

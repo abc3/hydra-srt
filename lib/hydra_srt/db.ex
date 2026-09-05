@@ -1624,6 +1624,8 @@ defmodule HydraSrt.Db do
       "allowed_list" => Endpoint.decode_ip_access_list(endpoint.allowed_list),
       "denied_list" => Endpoint.decode_ip_access_list(endpoint.denied_list),
       "limit_access" => endpoint.limit_access || false,
+      "max_callers" => endpoint.max_callers,
+      "streamid_match_mode" => endpoint.streamid_match_mode,
       "program_number" => endpoint.program_number,
       "ndi_source_name" => endpoint.ndi_source_name,
       "ndi_source_address" => endpoint.ndi_source_address,

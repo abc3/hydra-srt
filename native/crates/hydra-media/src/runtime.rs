@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use gstreamer as gst;
 
+use crate::adapters::srt::SrtCallerRegistry;
 use crate::events::Transport;
 use crate::lifecycle::PipelineLifecycleEmitter;
 use crate::metrics::DestMetrics;
@@ -27,4 +28,5 @@ pub struct PipelineRuntime {
     pub processing_pending: Arc<AtomicBool>,
     pub dest_metrics: Arc<Mutex<Vec<Arc<DestMetrics>>>>,
     pub running: Arc<AtomicBool>,
+    pub srt_callers: Option<Arc<SrtCallerRegistry>>,
 }

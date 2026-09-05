@@ -1,0 +1,24 @@
+{
+  "route_id": "route-invalid-match-without-streamid",
+  "config_revision": "revision-invalid-match-without-streamid",
+  "process_instance_id": "process-invalid-match-without-streamid",
+  "source": {
+    "id": "source",
+    "kind": "srt",
+    "srt": {
+      "uri": "srt://127.0.0.1:9000?mode=listener",
+      "mode": "listener",
+      "streamid_match": "prefix"
+    }
+  },
+  "destinations": [
+    {
+      "id": "destination",
+      "kind": "udp",
+      "udp": {
+        "address": "127.0.0.1",
+        "port": 5000
+      }
+    }
+  ]
+}

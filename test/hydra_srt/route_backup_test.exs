@@ -24,6 +24,9 @@ defmodule HydraSrt.RouteBackupTest do
         "schema" => "SRT",
         "mode" => "listener",
         "localport" => 4200,
+        "streamid" => "studio-a",
+        "streamid_match_mode" => "prefix",
+        "max_callers" => 2,
         "passphrase" => "secret-passphrase"
       })
 
@@ -38,10 +41,19 @@ defmodule HydraSrt.RouteBackupTest do
     assert exported["name"] == "Contribution"
     assert exported["tags"] == ["production"]
     assert get_in(exported, ["sources", Access.at(0), "passphrase"]) == "secret-passphrase"
+    assert get_in(exported, ["sources", Access.at(0), "streamid_match_mode"]) == "prefix"
+    assert get_in(exported, ["sources", Access.at(0), "max_callers"]) == 2
     refute Map.has_key?(exported, "id")
     refute Map.has_key?(exported, "status")
     refute Map.has_key?(hd(exported["sources"]), "route_id")
     refute Map.has_key?(hd(exported["sources"]), "last_probe_at")
+
+    assert {:ok, 1} = RouteBackup.import(backup)
+    assert {:ok, [round_tripped]} = Db.get_all_routes(true)
+    round_tripped_source = hd(round_tripped["sources"])
+    assert round_tripped_source["streamid"] == "studio-a"
+    assert round_tripped_source["streamid_match_mode"] == "prefix"
+    assert round_tripped_source["max_callers"] == 2
   end
 
   test "serializes route export through the backup coordinator" do

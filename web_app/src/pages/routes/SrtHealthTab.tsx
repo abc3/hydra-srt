@@ -12,10 +12,13 @@ import {
   YAxis,
 } from 'recharts';
 import type { RouteEndpoint, SrtHealthPoint } from '../../types/routes';
+import SrtCallersCard from './SrtCallersCard';
+import { srtNumeric as numeric, formatSrtLinkRate } from './srtHealthFormatters';
 
 const { Text, Title } = Typography;
 
 type Props = {
+  routeId?: string;
   sources: RouteEndpoint[];
   destinations: RouteEndpoint[];
   activeSourceId?: string;
@@ -37,9 +40,6 @@ const formatTimestamp = (value?: string) => {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 };
 
-const numeric = (value: number | null | undefined) =>
-  typeof value === 'number' && Number.isFinite(value) ? value : null;
-
 const METRIC_HELP = {
   rtt: 'Smoothed round-trip time (SRTT), calculated as an EWMA of RTT samples. Unit: milliseconds. Available for sender and receiver.',
   senderLoss: 'Percentage derived from sender-side DATA packets considered or reported lost during the interval.',
@@ -59,17 +59,7 @@ const METRIC_HELP = {
 
 const STATISTICS_URL = 'https://github.com/Haivision/srt/blob/master/docs/API/statistics.md';
 
-/**
- * SRT reports the link-capacity estimate in Mbps, and on a LAN or loopback that runs into
- * the thousands. Rendering "1800 Mbps" next to a single-digit send rate reads as a broken
- * axis, so switch to Gbps once the number leaves the range a stream is measured in.
- */
 const GBPS_THRESHOLD_MBPS = 1000;
-
-const formatLinkRate = (valueMbps: number): string =>
-  Math.abs(valueMbps) >= GBPS_THRESHOLD_MBPS
-    ? `${(valueMbps / 1000).toFixed(2)} Gbps`
-    : `${valueMbps.toFixed(2)} Mbps`;
 
 const MetricTitle = ({
   label,
@@ -106,6 +96,7 @@ const MetricTitle = ({
 );
 
 const SrtHealthTab = ({
+  routeId,
   sources,
   destinations,
   activeSourceId,
@@ -263,7 +254,7 @@ const SrtHealthTab = ({
             domain={[0, 'auto']}
             tickFormatter={(value) => (bandwidthInGbps ? (Number(value) / 1000).toFixed(2) : String(value))}
           />
-          <ChartTooltip formatter={(value) => formatLinkRate(Number(value))} />
+          <ChartTooltip formatter={(value) => formatSrtLinkRate(Number(value))} />
           <Legend
             formatter={(value) => (
               <MetricTitle
@@ -298,8 +289,15 @@ const SrtHealthTab = ({
     </div>
   );
 
+  const hasListenerSource = srtSources.some(
+    (endpoint) => String(endpoint.mode || '').toLowerCase() === 'listener',
+  );
+
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      {routeId && hasListenerSource && (
+        <SrtCallersCard routeId={routeId} routeActive={routeActive} />
+      )}
       <Select
         aria-label="SRT endpoint"
         value={selected}
